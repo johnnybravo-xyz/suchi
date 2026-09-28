@@ -5,7 +5,7 @@ import test from 'node:test'
 // Transport-only tests run without Svelte compilation. Browser regressions
 // exercise the reactive account/system lifecycle with the real compiled module.
 globalThis.$state = value => value
-const { askArchive, login, logout, uploadDocument, exportTaxonomy, cancelMobilePairing, getDemoMode } = await import('./api.js')
+const { askArchive, changeMyEmail, login, logout, uploadDocument, exportTaxonomy, cancelMobilePairing, getDemoMode, whoami } = await import('./api.js')
 const { systems, resetSystems } = await import('./systems.svelte.js')
 delete globalThis.$state
 
@@ -101,6 +101,57 @@ test('concurrent demo uploads share one cookie-session upgrade', async () => {
     assert.equal(results.length, 2)
     assert.equal(uploads, 4)
     assert.equal(upgrades, 1)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('successful email rotation invalidates older account requests', async () => {
+  const originalFetch = globalThis.fetch
+  let finishIdentity
+  let changeRequest
+  globalThis.fetch = async (path, options = {}) => {
+    if (path === '/api/whoami') {
+      return new Promise(resolve => { finishIdentity = resolve })
+    }
+    changeRequest = { path, method: options.method, body: JSON.parse(options.body) }
+    return new Response(null, { status: 204 })
+  }
+  try {
+    const staleIdentity = whoami()
+    await changeMyEmail('changed@example.test', 'current secret')
+    assert.deepEqual(changeRequest, {
+      path: '/api/users/me/email',
+      method: 'POST',
+      body: { email: 'changed@example.test', current_password: 'current secret' },
+    })
+    finishIdentity(new Response(JSON.stringify({ email: 'old@example.test' })))
+    await assert.rejects(staleIdentity, error => error.name === 'AbortError')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('failed email change leaves unrelated account requests current', async () => {
+  const originalFetch = globalThis.fetch
+  let finishIdentity
+  globalThis.fetch = async path => {
+    if (path === '/api/whoami') {
+      return new Promise(resolve => { finishIdentity = resolve })
+    }
+    return new Response(JSON.stringify({
+      code: 'reauthentication_failed',
+      error: 'current password is incorrect',
+    }), { status: 401 })
+  }
+  try {
+    const currentIdentity = whoami()
+    await assert.rejects(
+      () => changeMyEmail('changed@example.test', 'wrong secret'),
+      error => error.status === 401 && error.code === 'reauthentication_failed',
+    )
+    finishIdentity(new Response(JSON.stringify({ email: 'current@example.test' })))
+    assert.deepEqual(await currentIdentity, { email: 'current@example.test' })
   } finally {
     globalThis.fetch = originalFetch
   }

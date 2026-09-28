@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
   import { systems, resetSystems, selectSystem, captureScope, scopeCurrent, scopedHash as filingHref } from './lib/systems.svelte.js'
-  import { untrack } from 'svelte'
+  import { tick, untrack } from 'svelte'
   import { route, go } from './lib/router.svelte.js'
   import { session, refreshSession, initTheme, setTheme, signOut } from './lib/session.svelte.js'
   import { refreshSystems, enterRoute } from './lib/system-routing.js'
@@ -105,6 +105,8 @@
   }
   let toast = $state('')
   let toastTimer
+  let accountToast = $state('')
+  let accountToastTimer
   let pollTimer
 
   const scopedNotify = $derived.by(() => {
@@ -116,6 +118,32 @@
     toast = msg
     clearTimeout(toastTimer)
     toastTimer = setTimeout(() => (toast = ''), 2400)
+  }
+
+  function accountNotify(message) {
+    accountToast = message
+    clearTimeout(accountToastTimer)
+    accountToastTimer = setTimeout(() => (accountToast = ''), 4000)
+  }
+
+  function consumeAccountNotice() {
+    const url = new URL(location.href)
+    if (!url.searchParams.has('account_notice')) return
+    const notice = url.searchParams.get('account_notice')
+    const messages = {
+      identity_bound: 'Identity provider connected',
+      email_changed: 'Sign-in email changed',
+      email_checked: 'Sign-in email is up to date',
+    }
+    url.searchParams.delete('account_notice')
+    history.replaceState(history.state, '', `${url.pathname}${url.search}${url.hash}`)
+    if (messages[notice]) accountNotify(messages[notice])
+  }
+
+  async function initializeSession() {
+    await refreshSession()
+    await tick()
+    consumeAccountNotice()
   }
 
   function loadOpenAreas() {
@@ -137,7 +165,7 @@
       if (j?.enabled) {
         try { await mintDemoSession() } catch {}
       }
-      await refreshSession()
+      await initializeSession()
       // Preserve demo deep links; redirect only the first default-route visit.
       if (j?.enabled && session.user?.kind === 'demo-anon' && (!location.hash || location.hash === '#/' || location.hash === '#/dashboard')) {
         try {
@@ -149,7 +177,7 @@
       }
     })
     .catch(async () => {
-      await refreshSession()
+      await initializeSession()
     })
 
   async function boot() {
@@ -371,6 +399,8 @@
 
   async function handleSignOut() {
     await signOut()
+    clearTimeout(accountToastTimer)
+    accountToast = ''
     clearScopedState()
   }
 
@@ -655,7 +685,7 @@
           {#if page !== 'settings'}<a class="btn" href={filingHref('#/settings')}>My account</a>{/if}
           </div>
           {#if page === 'settings'}
-            <Lazy load={lazyRoutes.account} props={{ notify: scopedNotify, profileOnly: true }} />
+            <Lazy load={lazyRoutes.account} props={{ notify: scopedNotify, accountNotify, profileOnly: true }} />
           {/if}
         {:else if page === 'dashboard'}<Lazy load={lazyRoutes.dashboard} props={{ st, statsError, inboxCategory, taxonomyLoaded, taxonomyError, recent: recentDocs, recentError, onRetryRecent: loadRecentDocuments }} />
         {:else if page === 'documents'}<Lazy load={lazyRoutes.documents} props={{ notify: scopedNotify, jdCategories, canAskArchive: chatEnabled && canUseArchiveChat, canReviewIntelligence, onAskDocuments: askSelectedDocuments, onScopeChange: publishChatScope }} />
@@ -665,7 +695,7 @@
         {:else if page === 'tasks'}<Lazy load={lazyRoutes.tasks} props={{ notify: scopedNotify, onCount: pollStats, canReviewIntelligence }} />
         {:else if page === 'automations'}<Lazy load={lazyRoutes.automations} props={{ notify: scopedNotify, readOnly: session.user?.role !== 'admin', jdCategories }} />
         {:else if page === 'upload'}<Lazy load={lazyRoutes.upload} props={{ notify: scopedNotify, jdCategories }} />
-        {:else if page === 'settings'}<Lazy load={lazyRoutes.settings} props={{ notify: scopedNotify, initialTab: route.query.get('tab'), initialSection: route.query.get('section'), initialPeople: route.query.get('people'), initialMetadata: route.query.get('metadata'), setupNeeded, setupError, onRetrySetup: refreshSetupState, onTaxonomyChanged: handleArchiveTaxonomyChanged }} />
+        {:else if page === 'settings'}<Lazy load={lazyRoutes.settings} props={{ notify: scopedNotify, accountNotify, initialTab: route.query.get('tab'), initialSection: route.query.get('section'), initialPeople: route.query.get('people'), initialMetadata: route.query.get('metadata'), setupNeeded, setupError, onRetrySetup: refreshSetupState, onTaxonomyChanged: handleArchiveTaxonomyChanged }} />
         {:else if page === 'trash'}<Lazy load={lazyRoutes.trash} props={{ notify: scopedNotify }} />
         {:else if page === 'views'}<Lazy load={lazyRoutes.views} props={{ notify: scopedNotify, canShare: canShareViews, startCreate: route.query.get('new') === '1', createQuery: route.query.get('q') || '', createDocumentIDs: route.query.get('ids') || '', jdCategories }} />
         {:else if page === 'calendar'}
@@ -703,4 +733,8 @@
 
 {/if}
 
-{#if toast}<div class="toast">{toast}</div>{/if}
+{#if accountToast}
+  <div class="toast" role="status" aria-live="polite">{accountToast}</div>
+{:else if toast}
+  <div class="toast">{toast}</div>
+{/if}

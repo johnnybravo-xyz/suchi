@@ -659,10 +659,11 @@ async function mockAPI(page, options = {}) {
     if (path === '/api/demo/mode') body = { enabled: !!options.demoMode }
     else if (path === '/api/whoami') body = {
       user_id: options.userID ?? (options.demoSession === 'anon' ? 0 : 1),
-      email: options.demoSession ? 'visitor@demo.local' : 'admin@example.test',
+      email: options.userEmail || (options.demoSession ? 'visitor@demo.local' : 'admin@example.test'),
       display_name: options.demoSession ? 'Demo visitor' : 'Admin',
       role: options.userRole || (options.demoSession ? 'member' : 'admin'),
       authn_by: options.demoSession ? 'demo' : 'local',
+      email_change_mode: options.emailChangeMode || (options.demoSession ? 'disabled' : 'password'),
       build_version: options.buildVersion,
       build_revision: options.buildRevision,
       capabilities: options.capabilities ?? (options.demoSession ? [] : ['mailboxes']),
@@ -3495,6 +3496,189 @@ test('saves the display name through supported profile fields and keeps email re
   expect(pageErrors).toEqual([])
 })
 
+test('changes a password-managed sign-in email through focused reauthentication', async ({ page }) => {
+  const options = {
+    userEmail: 'admin@example.test',
+    emailChangeMode: 'password',
+  }
+  await mockAPI(page, options)
+  const requests = []
+  let pendingChange
+  await page.route('**/api/users/me/email', route => {
+    const body = route.request().postDataJSON()
+    requests.push(body)
+    if (requests.length === 1) {
+      return route.fulfill({
+        status: 401,
+        json: { code: 'reauthentication_failed', error: 'Current password is incorrect.' },
+      })
+    }
+    options.userEmail = body.email
+    pendingChange = route
+  })
+
+  await page.goto('/#/settings')
+  const profile = page.getByRole('region', { name: 'Profile', exact: true })
+  await expect(profile.getByText('Sign-in: Password', { exact: true })).toBeVisible()
+  await profile.getByRole('button', { name: 'Change email', exact: true }).click()
+  let dialog = page.getByRole('dialog', { name: 'Change sign-in email', exact: true })
+  await expect(dialog).toContainText('does not send a confirmation or recovery email')
+  await expect(dialog).toContainText('Your account, documents, and permissions stay the same.')
+  await expect(dialog).toContainText('Every other browser session will be signed out.')
+
+  await dialog.getByLabel('New email', { exact: true }).fill('not-an-email')
+  await dialog.getByLabel('Confirm new email', { exact: true }).fill('not-an-email')
+  await dialog.getByLabel('Current password', { exact: true }).fill('invalid-email-secret')
+  await dialog.getByRole('button', { name: 'Change sign-in email', exact: true }).click()
+  await expect(dialog.getByRole('alert')).toHaveText('Enter a valid email address in both fields.')
+  await expect(dialog.getByLabel('Current password', { exact: true })).toHaveValue('')
+  expect(requests).toEqual([])
+
+  await dialog.getByLabel('New email', { exact: true }).fill('changed@example.test')
+  await dialog.getByLabel('Confirm new email', { exact: true }).fill('different@example.test')
+  await dialog.getByLabel('Current password', { exact: true }).fill('secret that must clear')
+  await dialog.getByRole('button', { name: 'Change sign-in email', exact: true }).click()
+  await expect(dialog.getByRole('alert')).toHaveText('The email addresses must match exactly.')
+  await expect(dialog.getByLabel('Current password', { exact: true })).toHaveValue('')
+  expect(requests).toEqual([])
+
+  await dialog.getByLabel('Confirm new email', { exact: true }).fill('changed@example.test')
+  await dialog.getByLabel('Current password', { exact: true }).fill('wrong password')
+  await dialog.getByRole('button', { name: 'Change sign-in email', exact: true }).click()
+  await expect(dialog.getByRole('alert')).toHaveText('Current password is incorrect.')
+  await expect(dialog.getByLabel('Current password', { exact: true })).toHaveValue('')
+  await expect(dialog.getByLabel('New email', { exact: true })).toHaveValue('changed@example.test')
+
+  await dialog.getByLabel('Current password', { exact: true }).fill('close-secret')
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await profile.getByRole('button', { name: 'Change email', exact: true }).click()
+  dialog = page.getByRole('dialog', { name: 'Change sign-in email', exact: true })
+  await expect(dialog.getByLabel('New email', { exact: true })).toHaveValue('')
+  await expect(dialog.getByLabel('Current password', { exact: true })).toHaveValue('')
+
+  await dialog.getByLabel('New email', { exact: true }).fill('changed@example.test')
+  await dialog.getByLabel('Confirm new email', { exact: true }).fill('changed@example.test')
+  await dialog.getByLabel('Current password', { exact: true }).fill('correct password')
+  await dialog.getByRole('button', { name: 'Change sign-in email', exact: true }).click()
+  await expect.poll(() => !!pendingChange).toBe(true)
+  await expect(dialog.getByLabel('New email', { exact: true })).toBeDisabled()
+  await expect(dialog.getByRole('button', { name: 'Close email change', exact: true })).toBeDisabled()
+  await pendingChange.fulfill({ status: 204 })
+
+  await expect(dialog).toHaveCount(0)
+  await expect(profile.getByLabel('Email', { exact: true })).toHaveValue('changed@example.test')
+  await expect(page.locator('.toast[role="status"]')).toHaveText('Sign-in email changed')
+  expect(requests).toEqual([
+    { email: 'changed@example.test', current_password: 'wrong password' },
+    { email: 'changed@example.test', current_password: 'correct password' },
+  ])
+})
+
+test('clears an open email-change secret when the account changes', async ({ page }) => {
+  await mockAPI(page, { emailChangeMode: 'password' })
+  let identityReads = 0
+  let pendingIdentity
+  await page.route('**/api/whoami', route => {
+    if (++identityReads === 1) return route.fallback()
+    pendingIdentity = route
+  })
+  await page.goto('/#/settings')
+  await page.getByRole('button', { name: 'Save profile', exact: true }).click()
+  await expect.poll(() => !!pendingIdentity).toBe(true)
+  await page.getByRole('button', { name: 'Change email', exact: true }).click()
+  let dialog = page.getByRole('dialog', { name: 'Change sign-in email', exact: true })
+  await dialog.getByLabel('New email', { exact: true }).fill('private@example.test')
+  await dialog.getByLabel('Confirm new email', { exact: true }).fill('private@example.test')
+  await dialog.getByLabel('Current password', { exact: true }).fill('account-one-secret')
+  await pendingIdentity.fulfill({ json: {
+    kind: 'user', user_id: 2, email: 'second@example.test', display_name: 'Second user',
+    role: 'member', capabilities: [], email_change_mode: 'password',
+  } })
+  await expect(dialog).toHaveCount(0)
+  await page.getByRole('button', { name: 'Change email', exact: true }).click()
+  dialog = page.getByRole('dialog', { name: 'Change sign-in email', exact: true })
+  await expect(dialog.getByLabel('New email', { exact: true })).toHaveValue('')
+  await expect(dialog.getByLabel('Current password', { exact: true })).toHaveValue('')
+})
+
+test('uses provider reauthentication for OIDC-managed email and consumes fixed notices', async ({ page }) => {
+  await mockAPI(page, { emailChangeMode: 'oidc' })
+  const syncRequests = []
+  await page.route('**/oidc/email-change', route => {
+    syncRequests.push({
+      method: route.request().method(),
+      origin: route.request().headers().origin,
+    })
+    return route.fulfill({
+      status: 302,
+      headers: { location: '/?account_notice=email_changed#/settings' },
+    })
+  })
+  await page.goto('/#/settings')
+  const profile = page.getByRole('region', { name: 'Profile', exact: true })
+  await expect(profile.getByText('Sign-in: Identity provider', { exact: true })).toBeVisible()
+  await expect(profile.getByText(/identity provider manages this address/i)).toBeVisible()
+  await expect(profile.getByRole('button', { name: 'Change email', exact: true })).toHaveCount(0)
+  await profile.getByRole('button', { name: 'Sync from identity provider', exact: true }).click()
+  await expect(page.locator('.toast[role="status"]')).toHaveText('Sign-in email changed')
+  await expect(page).toHaveURL(/\/#\/settings$/)
+  expect(new URL(page.url()).searchParams.has('account_notice')).toBe(false)
+  expect(syncRequests).toEqual([{ method: 'POST', origin: 'http://127.0.0.1:5173' }])
+
+  for (const [notice, message] of [
+    ['identity_bound', 'Identity provider connected'],
+    ['email_checked', 'Sign-in email is up to date'],
+  ]) {
+    await page.goto(`/?account_notice=${notice}#/settings`)
+    await expect(page.locator('.toast[role="status"]')).toHaveText(message)
+    expect(new URL(page.url()).searchParams.has('account_notice')).toBe(false)
+    expect(new URL(page.url()).hash).toBe('#/settings')
+  }
+
+  await page.goto('/?account_notice=untrusted-detail#/settings')
+  await expect(page.locator('.toast[role="status"]')).toHaveCount(0)
+  expect(new URL(page.url()).searchParams.has('account_notice')).toBe(false)
+  expect(new URL(page.url()).hash).toBe('#/settings')
+})
+
+test('keeps disabled account email read-only without a mutation path', async ({ page }) => {
+  await mockAPI(page, { emailChangeMode: 'disabled' })
+  await page.goto('/#/settings')
+  const profile = page.getByRole('region', { name: 'Profile', exact: true })
+  await expect(profile.getByText('Sign-in: Managed account', { exact: true })).toBeVisible()
+  await expect(profile.getByText('Sign-in email changes are not available for this account.')).toBeVisible()
+  await expect(profile.getByRole('button', { name: 'Change email', exact: true })).toHaveCount(0)
+  await expect(profile.getByRole('button', { name: 'Sync from identity provider', exact: true })).toHaveCount(0)
+})
+
+test('keeps the email-change dialog inside an enlarged mobile viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await mockAPI(page, {
+    emailChangeMode: 'password',
+    userEmail: 'account-with-a-long-address@example.test',
+  })
+  await page.goto('/#/settings')
+  await page.evaluate(() => { document.documentElement.style.fontSize = '24px' })
+  await page.getByRole('button', { name: 'Change email', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Change sign-in email', exact: true })
+  await expect(dialog).toBeVisible()
+  const layout = await dialog.evaluate(element => {
+    const box = element.getBoundingClientRect()
+    return {
+      documentWidth: document.documentElement.scrollWidth,
+      viewportWidth: window.innerWidth,
+      left: box.left,
+      right: box.right,
+      scrollWidth: element.scrollWidth,
+      clientWidth: element.clientWidth,
+    }
+  })
+  expect(layout.documentWidth).toBeLessThanOrEqual(layout.viewportWidth)
+  expect(layout.left).toBeGreaterThanOrEqual(0)
+  expect(layout.right).toBeLessThanOrEqual(layout.viewportWidth)
+  expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth)
+})
+
 test('refreshes the profile photo from the versioned avatar URL after upload', async ({ page }) => {
   const pageErrors = []
   page.on('pageerror', error => pageErrors.push(error.message))
@@ -3536,7 +3720,7 @@ for (const demoSession of ['anon', 'scratch']) {
     await expect(profile).toBeVisible()
     await expect(profile.getByLabel('Display name', { exact: true })).toHaveAttribute('readonly', '')
     await expect(profile.getByLabel('Email', { exact: true })).toHaveAttribute('readonly', '')
-    for (const name of ['Save profile', 'Change photo', 'Pair mobile app', 'Create token', 'Delete saved password']) {
+    for (const name of ['Save profile', 'Change photo', 'Change email', 'Sync from identity provider', 'Pair mobile app', 'Create token', 'Delete saved password']) {
       await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0)
     }
     for (const name of ['Mobile app', 'API tokens', 'Saved decryption passwords', 'Mailboxes']) {
@@ -3551,8 +3735,8 @@ for (const demoSession of ['anon', 'scratch']) {
       const requests = [
         ['GET', '/api/tokens/'], ['GET', '/api/email-accounts'],
         ['PATCH', '/api/users/me'], ['POST', '/api/users/me/avatar'],
-        ['POST', '/api/mobile/pairing'], ['POST', '/api/tokens/'],
-        ['DELETE', '/api/decryption-passwords/1'],
+        ['POST', '/api/users/me/email'], ['POST', '/api/mobile/pairing'],
+        ['POST', '/api/tokens/'], ['DELETE', '/api/decryption-passwords/1'],
       ]
       return Promise.all(requests.map(async ([method, path]) => {
         const response = await fetch(path, { method })
@@ -3560,9 +3744,9 @@ for (const demoSession of ['anon', 'scratch']) {
       }))
     })
     expect(denied).toEqual(demoSession === 'scratch'
-      ? Array(7).fill({ status: 403, code: 'token_route_forbidden' })
+      ? Array(8).fill({ status: 403, code: 'token_route_forbidden' })
       : [{ status: 401, code: 'unauthorized' }, { status: 403, code: 'forbidden' },
-        ...Array(5).fill({ status: 403, code: 'demo_upgrade_required' })])
+        ...Array(6).fill({ status: 403, code: 'demo_upgrade_required' })])
   })
 }
 

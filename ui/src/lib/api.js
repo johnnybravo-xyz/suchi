@@ -243,6 +243,14 @@ export const deleteSavedView = (id) => api.del(`/api/saved_views/${id}`)
 export const setupState = () => singleFlightGet('/api/admin/setup/state')
 
 export const patchMe = (b) => api.patch('/api/users/me', b)
+export async function changeMyEmail(email, currentPassword) {
+  const result = await api.post('/api/users/me/email', {
+    email,
+    current_password: currentPassword,
+  })
+  resetSessionRequests()
+  return result
+}
 export const uploadAvatar = (file) => {
   const fd = new FormData()
   fd.append('avatar', file)

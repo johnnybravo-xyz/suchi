@@ -1,19 +1,20 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
   import { scopedHash as filingHref } from '../lib/systems.svelte.js'
-  import { onDestroy, untrack } from 'svelte'
+  import { onDestroy, tick, untrack } from 'svelte'
   import { listTokens, createToken, deleteToken, patchMe, uploadAvatar,
            listDecryptionPasswords, renameDecryptionPassword, deleteDecryptionPassword } from '../lib/api.js'
   import { session, refreshSession } from '../lib/session.svelte.js'
   import { fmtDate } from '../lib/format.js'
   import { hasCapability } from '../lib/capabilities.js'
   import Icon from '../lib/Icon.svelte'
+  import EmailChangeDialog from '../lib/EmailChangeDialog.svelte'
   import Lazy from '../lib/Lazy.svelte'
 
   const loadMailboxes = () => import('../lib/EmailAccounts.svelte')
   const loadMobilePairing = () => import('../lib/MobilePairing.svelte')
 
-  let { notify, profileOnly = false } = $props()
+  let { notify, accountNotify, profileOnly = false } = $props()
   let tokens = $state([])
   let err = $state('')
   let newName = $state('')
@@ -28,6 +29,10 @@
   let disposed = false
   const demoVisitor = $derived(session.user?.kind === 'demo-anon' || session.user?.kind === 'demo-scratch')
   const accountToolsAvailable = $derived(!profileOnly && !demoVisitor)
+  const emailChangeMode = $derived(session.user?.email_change_mode || 'disabled')
+  const signInMethod = $derived(emailChangeMode === 'oidc'
+    ? 'Identity provider'
+    : emailChangeMode === 'password' ? 'Password' : 'Managed account')
 
   function isOwnMobileToken(token) {
     return token.source === 'mobile_pairing' && token.user_id === session.user?.user_id
@@ -38,6 +43,20 @@
   let profile = $state({ display_name: session.user?.display_name || '' })
   let profileBusy = $state(false)
   let avatarInput = $state()
+  let emailDialogOpen = $state(false)
+  let emailChangeButton = $state()
+  async function closeEmailDialog() {
+    emailDialogOpen = false
+    await tick()
+    emailChangeButton?.focus()
+  }
+  async function emailChanged() {
+    const notifyResult = accountNotify
+    emailDialogOpen = false
+    await refreshSession()
+    await tick()
+    notifyResult?.('Sign-in email changed')
+  }
   async function saveProfile() {
     if (demoVisitor) return
     const notifyResult = notify
@@ -222,7 +241,7 @@
       <h2 id="profile-heading">Profile</h2>
       <div class="profile-meta">
         <span class="pill">{session.user?.role}</span>
-        <span>Signed in with {session.user?.authn_by}</span>
+        <span>Sign-in: {signInMethod}</span>
       </div>
     </div>
     <div class="profile-layout">
@@ -244,7 +263,18 @@
         <div class="field">
           <label for="p-email">Email</label>
           <input id="p-email" class="input" type="email" value={session.user?.email || ''} readonly />
-          <span class="sub">Your sign-in email cannot be changed here.</span>
+          {#if emailChangeMode === 'password'}
+            <span class="sub">This address is your sign-in identifier.</span>
+            <button class="btn sm email-change-action" type="button" bind:this={emailChangeButton}
+                    onclick={() => (emailDialogOpen = true)}>Change email</button>
+          {:else if emailChangeMode === 'oidc'}
+            <span class="sub">Your identity provider manages this address. Reauthenticate to check for an updated email.</span>
+            <form method="post" action="/oidc/email-change" class="oidc-sync-form">
+              <button class="btn sm" type="submit">Sync from identity provider</button>
+            </form>
+          {:else}
+            <span class="sub">Sign-in email changes are not available for this account.</span>
+          {/if}
         </div>
         {#if !demoVisitor}
           <button class="btn primary sm profile-save" disabled={profileBusy} onclick={saveProfile}>Save profile</button>
@@ -252,6 +282,11 @@
       </div>
     </div>
   </section>
+
+  {#if emailDialogOpen}
+    <EmailChangeDialog currentEmail={session.user?.email || ''}
+      onClose={closeEmailDialog} onChanged={emailChanged} />
+  {/if}
 
 
   {#if accountToolsAvailable}
@@ -378,6 +413,8 @@
   .profile-fields { display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;align-items:start }
   .profile-fields .field { margin:0 }
   .profile-save { justify-self:start }
+  .email-change-action, .oidc-sync-form { justify-self:start }
+  .oidc-sync-form { margin:0 }
   .auth-syntax { display:flex;flex-direction:column;align-items:flex-end;gap:4px;min-width:0 }
   .auth-syntax span { color:var(--muted);font-size:.72rem;font-weight:600 }
   .auth-syntax code { max-width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:4px;background:var(--surface-2);font-size:.75rem;overflow-wrap:anywhere }
