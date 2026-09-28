@@ -69,7 +69,7 @@ echo "suchi up on :$PORT"
 
 echo
 echo "== bootstrap admin =="
-TOKEN=$(grep 'localauth.setup.token_minted' "$DATA_DIR/suchi.log" | grep -oP '"token":"\K[^"]+' | head -1)
+TOKEN=$(sed -n 's/.*"token":"\([^"]*\)".*/\1/p' "$DATA_DIR/suchi.log" | sed -n '1p')
 if [ -z "${TOKEN:-}" ]; then
     echo "setup token not found in log"; tail -30 "$DATA_DIR/suchi.log"; exit 1
 fi
