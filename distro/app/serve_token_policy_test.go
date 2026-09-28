@@ -76,6 +76,7 @@ func TestTokenPolicyProtectsDocumentAndAccountHandlers(t *testing.T) {
 		{name: "admin token cannot list credentials", method: "GET", path: "/api/tokens/", scope: auth.ScopeDocumentsRead, role: "admin", kind: "token", userID: 1, want: 403},
 		{name: "admin token cannot revoke member credential", method: "DELETE", path: "/api/tokens/2", scope: auth.ScopeDocumentsRead, role: "admin", kind: "token", userID: 1, want: 403},
 		{name: "token cannot delegate itself", method: "POST", path: "/api/tokens/", body: `{"name":"blocked-token","scopes":"documents:read"}`, scope: auth.ScopeDocumentsRead, role: "member", kind: "token", userID: 2, want: 403},
+		{name: "token cannot change account email", method: "POST", path: "/api/users/me/email", body: `{"email":"changed@example.test","current_password":"secret"}`, scope: auth.ScopeDocumentsWrite, role: "member", kind: "token", userID: 2, want: 403},
 		{name: "scratch cannot mint credentials", method: "POST", path: "/api/tokens/", body: `{"name":"blocked-token","scopes":"documents:read"}`, scope: auth.ScopeDocumentsRead, role: "member", kind: "demo-scratch", userID: 2, want: 403},
 		{name: "member session can mint credential", method: "POST", path: "/api/tokens/", body: `{"name":"allowed-token","scopes":"documents:read"}`, role: "member", kind: "user", userID: 2, want: 201},
 		{name: "admin session can list credentials", method: "GET", path: "/api/tokens/", role: "admin", kind: "user", userID: 1, want: 200},

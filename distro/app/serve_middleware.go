@@ -42,7 +42,7 @@ func buildHTTPHandler(mux *http.ServeMux, cfg *config.Config, authChain *auth.Ch
 			}
 			switch path {
 			case "/setup", "/bootstrap", "/login", "/api/login", "/api/token",
-				"/api/mobile/pairing", "/api/mobile/pairing/exchange":
+				"/api/mobile/pairing", "/api/mobile/pairing/exchange", "/api/users/me/email":
 				loginHandler.ServeHTTP(w, r)
 				return
 			case "/api/demo/session", "/api/demo/session/upgrade":

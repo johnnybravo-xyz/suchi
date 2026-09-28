@@ -471,6 +471,26 @@ func Run(ctx context.Context, opts Options) error {
 	apiSrv.WithDeviceOCRMinConfidence(cfg.DeviceOCRMinConfidence)
 	apiSrv.PasswordHasher = localauth.HashPassword
 	apiSrv.PasswordVerifier = localauth.VerifyPassword
+	apiSrv.PasswordWorkBusy = localauth.PasswordWorkBusy
+	apiSrv.PrepareBrowserSession = func(r *http.Request) (api.PreparedBrowserSession, error) {
+		return la.PrepareSession(r)
+	}
+	apiSrv.EmailChangeModeFor = func(p *pluginapi.Principal) string {
+		if p == nil || p.Kind != "user" || cfg.DemoMode ||
+			(cfg.DevMode && strings.EqualFold(p.Email, localauth.DevAdminEmail)) {
+			return api.EmailChangeModeDisabled
+		}
+		if cfg.OIDCIssuerURL != "" {
+			return api.EmailChangeModeOIDC
+		}
+		return api.EmailChangeModePassword
+	}
+	pinnedFSOwner, fsOwnerPinned := os.LookupEnv("INGEST_FS_OWNER_EMAIL")
+	pinnedFSOwner = strings.ToLower(strings.TrimSpace(pinnedFSOwner))
+	apiSrv.EmailChangeAllowed = func(currentEmail, targetEmail string) bool {
+		return !fsOwnerPinned || pinnedFSOwner == "" || pinnedFSOwner != currentEmail ||
+			pinnedFSOwner == targetEmail
+	}
 	apiSrv.LLMAEAD = decryptKey
 	apiSrv.ChatEnabled = llm.Enabled
 	apiSrv.ChatRuntimeInfo = llm.RuntimeInfo

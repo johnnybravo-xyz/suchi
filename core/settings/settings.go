@@ -136,6 +136,39 @@ func SetMany(ctx context.Context, database *db.DB, values map[string]any) error 
 	})
 }
 
+// ReplaceStringInTx updates a string setting only when its stored JSON value
+// exactly matches oldValue. It lets a larger security-sensitive transaction
+// move producer ownership without overwriting a concurrent or boot-managed
+// choice.
+func ReplaceStringInTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	key, oldValue, newValue string,
+	now int64,
+) (bool, error) {
+	oldJSON, err := json.Marshal(oldValue)
+	if err != nil {
+		return false, fmt.Errorf("marshal old %s: %w", key, err)
+	}
+	newJSON, err := json.Marshal(newValue)
+	if err != nil {
+		return false, fmt.Errorf("marshal new %s: %w", key, err)
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE settings
+		SET value_json = ?, updated_at = ?
+		WHERE key = ? AND value_json = ?
+	`, string(newJSON), now, key, string(oldJSON))
+	if err != nil {
+		return false, fmt.Errorf("replace %s: %w", key, err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("replace %s rows affected: %w", key, err)
+	}
+	return changed == 1, nil
+}
+
 // Delete removes a key. No-op if absent.
 func Delete(ctx context.Context, database *db.DB, key string) error {
 	return database.WriteTx(ctx, func(tx *sql.Tx) error {

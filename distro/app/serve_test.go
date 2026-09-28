@@ -129,6 +129,7 @@ func TestBuildHTTPHandlerRateLimitsCredentialAndDemoAliases(t *testing.T) {
 		{path: "/api/token"},
 		{path: "/api/mobile/pairing"},
 		{path: "/api/mobile/pairing/exchange"},
+		{path: "/api/users/me/email"},
 		{path: "/api/demo/session", demo: true},
 		{path: "/api/demo/session/upgrade", demo: true},
 	} {

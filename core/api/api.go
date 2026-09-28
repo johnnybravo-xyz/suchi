@@ -85,6 +85,14 @@ type ChatCompletionMessage struct {
 	Content string
 }
 
+// PreparedBrowserSession is generated before a security-sensitive write and
+// planted in the caller's transaction. Implementations must delete every
+// browser session for userID before inserting the replacement.
+type PreparedBrowserSession interface {
+	Cookie() *http.Cookie
+	Rotate(context.Context, *sql.Tx, int64) (int64, error)
+}
+
 // Server bundles the state every /api handler needs. Constructed once
 // at boot; safe for concurrent use.
 //
@@ -114,6 +122,15 @@ type Server struct {
 	// plugin so /api/share_links/ can check password-protected shares
 	// without a separate hashing lib.
 	PasswordVerifier func(encoded, pw string) error
+	// PasswordWorkBusy classifies bounded password-worker saturation without
+	// exposing the local-auth implementation to core/api.
+	PasswordWorkBusy func(error) bool
+	// PrepareBrowserSession generates a replacement before the API enters the
+	// single writer. Rotation itself remains atomic with the account mutation.
+	PrepareBrowserSession func(*http.Request) (PreparedBrowserSession, error)
+	// EmailChangeAllowed protects boot-pinned producer ownership. Nil means no
+	// external owner pin; false refuses the identity transition before writes.
+	EmailChangeAllowed func(currentEmail, targetEmail string) bool
 	// LLMReloader is called after /api/admin/settings/llm writes so the
 	// running classifier picks up the new config without a restart.
 	// Main.go closes over the plugin instance; api/* doesn't import
@@ -422,6 +439,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// handler now so display_name + avatar_url land on the same shape.
 	mux.HandleFunc("GET /api/whoami", s.Whoami)
 	mux.HandleFunc("PATCH /api/users/me", s.PatchSelf)
+	mux.HandleFunc("POST /api/users/me/email", s.PostSelfEmail)
 	mux.HandleFunc("POST /api/users/me/avatar", s.PostSelfAvatar)
 	mux.HandleFunc("GET /api/users/{id}/avatar", s.GetUserAvatar)
 
