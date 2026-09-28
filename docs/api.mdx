@@ -358,6 +358,11 @@ uses the original system. The list uses `Cache-Control: no-store` and contains n
 token or token hash. `DELETE /api/tokens/{id}` revokes a device; logout-revoked tokens
 are also excluded.
 
+`last_used_at` is coarse activity metadata, not a real-time audit record.
+Successful token authentication advances it at most once per hour per token; a
+timestamp write failure is best-effort and never turns valid authentication into
+a failed request.
+
 ### `PATCH /api/users/me`
 
 Update the caller's profile. Body accepts `display_name` only in the
@@ -716,6 +721,34 @@ alone do not resolve a review marker.
 
 Empty lists always serialize as `[]` (never `null`) so mobile clients
 can iterate them safely.
+
+### `GET|HEAD /api/documents/{id}/download`
+
+`/api/documents/{id}/download` and the browser-facing `/download/{id}` use the
+same authorized byte handler. The normal response prefers the processed archive
+representation when one exists, then a decrypted representation, then the
+immutable original. `?raw=1` requests the original and is session-only; API
+tokens cannot use it.
+
+The document projection's `original_blob`, `original_size`, and `mime_type`
+describe the uploaded original. They are not a digest, length, or type promise
+for the normal download: an uploaded image can have a PDF archive response.
+Consumers must use the response `Content-Type`, `Content-Length`, and retained
+bytes as the downloaded representation's metadata and compute their own digest
+when they need local integrity.
+
+A full GET returns **200**. Standard `Range: bytes=…` requests return **206**
+with `Accept-Ranges: bytes` and `Content-Range`; unsatisfiable ranges return
+**416**. Prefix, suffix, open-ended, and multipart range handling follows Go's
+`http.ServeContent`. HEAD returns the same selected-representation headers and
+status without a body. Responses use a strong content-digest ETag and
+`Cache-Control: private, no-cache`; conditional and range requests still pass
+current authentication, document ACL, Trash, raw-original, and sensitivity
+checks before any bytes are served.
+
+Scope: `documents:read`. The Companion currently downloads one complete response
+into a new protected staging file and enforces its own 64 MiB limit; range support
+does not weaken that client bound or make source metadata a payload receipt.
 
 ### `GET /api/documents/{id}/thumb`
 

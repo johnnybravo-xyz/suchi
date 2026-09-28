@@ -78,10 +78,36 @@ view. Saved searches, when available in the build, stay in device secure storage
 for the current server, user, and filing system; they are not sent to a purchase
 service. See [Search](/search) and [query syntax](/query-language).
 
+## Offline copies
+
+**Save offline** retains the normal full download representation in protected,
+backup-excluded, account-scoped storage. Companion limits a payload to 64 MiB and
+requires enough space to finish the bounded write while leaving 512 MiB free. It
+stages and flushes the payload and manifest before publication; cancellation or a
+failed update leaves the previous verified copy intact.
+
+The downloaded response's MIME type, byte count, and SHA-256 identify the saved
+payload. The server's `original_blob` identifies only the uploaded source and is
+used for remote freshness; it may describe an image whose normal download is an
+archived PDF. Companion rehashes retained bytes during recovery and uses payload
+metadata for filenames, previews, and native handoff. A corrupt or mismatched
+copy is not exposed as saved.
+
+The server supports authenticated HTTP byte ranges, but Companion saves one
+complete response rather than treating a partial range as an offline copy. See
+[document downloads](/api#gethead-apidocumentsiddownload) for the wire contract.
+
 ## Privacy and sensitive documents
 
-Companion does not include analytics, remote crash reporting, or a document
-relay. Archive requests go to the paired Suchi server. Lists avoid fetching full
+Suchi operates no ads, remote crash reporting, or document relay. On Android,
+the Google Play services ML Kit document and QR scanners separately collect the
+device/app information, identifiers, performance/configuration metrics, feature
+events/errors, and QR auto-zoom session, zoom, and predicted bounding-box data
+documented by Google. Pairing QR image processing remains on-device and Google
+says it does not store the image or result. Reconcile the final SDK against
+[Google's ML Kit disclosure](https://developers.google.com/ml-kit/android-data-disclosure)
+for store declarations. Archive requests go to the paired Suchi server. Lists
+avoid fetching full
 text unnecessarily; thumbnails are held in bounded memory. Sensitive previews
 and extracted text require an explicit reveal and are concealed again when you
 leave or background the app.
