@@ -146,6 +146,10 @@ writer, and keep the deployment pinned to an explicit version. Pull or install
 the target version, recreate or restart the single Suchi instance, then verify
 `/readyz` and run `suchi doctor`.
 
+Operators moving a beta archive to stable-v1 can use the
+[agent-executable beta upgrade runbook](https://github.com/johnnybravo-xyz/suchi/blob/main/BETA-UPGRADE.md)
+for exact state classification, rehearsal, identity binding, and rollback gates.
+
 Database migrations are one-way. To roll back after a migration, stop Suchi,
 restore the complete pre-upgrade data directory, install the previous binary or
 image, and verify readiness again. Do not run an older binary against a database

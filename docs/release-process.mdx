@@ -59,7 +59,7 @@ declarative `0001_baseline.sql` and identifies the stable epoch as
 `user_version = 1`, lineage `stable-v1`.
 
 The final stable-v1 normalized core fingerprint is
-`cb74332fa9ea8b6b2496440a3ddb5fe5ef5592287bc4cfbd26e7c25fcb9abee5`.
+`9d2a6320eae1582b0f294caa6ed518b5a73ab3dbe6597c9ca1a36cc563e03240`.
 The one admitted pre-identity schema-4 boundary is
 `5d6ac98308eb644b030092178792a46f36e6f8f5041411f020ed2dcf216f46c2`.
 Startup admits only these exact states:
@@ -133,6 +133,10 @@ For beta adoption, keep both the automatic database snapshot and a complete
 operator backup. If no live session survives to bind an occupied unbound OIDC
 email, stop and restore with the old binary/config; do not delete, merge, or
 recreate the account to bypass the conflict.
+
+The standalone [beta archive upgrade runbook](https://github.com/johnnybravo-xyz/suchi/blob/main/BETA-UPGRADE.md)
+expands this into hard-gated, agent-executable rehearsal, cutover, identity
+binding, evidence, and rollback commands.
 
 ## Release checklist
 

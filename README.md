@@ -168,6 +168,7 @@ and selected job, backup, audit, upload-limit, and CAS indicators.
 - [Supported file types](docs/formats.mdx)
 - [Deployment templates](deploy/README.md)
 - [Backup and restore](docs/backup-restore.mdx)
+- [Beta archive upgrade runbook](BETA-UPGRADE.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
 

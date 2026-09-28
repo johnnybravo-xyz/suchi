@@ -4,6 +4,12 @@ Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Correct the stable-v1 fingerprint in the release guide and add an
+  agent-executable beta archive upgrade runbook with hard gates, exact
+  compatibility identities, rehearsal, rollback, and redacted evidence steps.
+
 ## [0.1.0] - 2026-09-28
 
 ### Added
