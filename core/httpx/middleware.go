@@ -38,36 +38,60 @@ func Chain(h http.Handler, mws ...Middleware) http.Handler {
 	return h
 }
 
-// SecurityHeaders sets baseline defensive headers on every response.
+// SecurityHeaders returns middleware that sets baseline defensive headers on
+// every response. spaFormActionURL is the discovered external authorization
+// endpoint, when OIDC is enabled; only its HTTP(S) origin is admitted to the
+// SPA's form-action policy.
 //
 // The CSP is intentionally strict for the API surface + server-rendered
 // UI. The Svelte SPA under /app/ needs `style-src 'unsafe-inline'`
 // because Svelte injects styles at runtime; that relaxation is scoped
 // to /app/* only. The rest of the surface stays locked down.
-func SecurityHeaders(next http.Handler) http.Handler {
+func SecurityHeaders(spaFormActionURL string) Middleware {
 	const strict = "default-src 'self'; img-src 'self' data:; " +
 		"frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+	spaFormAction := "'self'"
+	if origin := httpOrigin(spaFormActionURL); origin != "" {
+		spaFormAction += " " + origin
+	}
 	// SPA CSP: same policy plus `style-src 'self' 'unsafe-inline'`.
 	// Every other directive stays; only the runtime-style compromise
-	// is allowed. No `script-src 'unsafe-inline'` — the JS bundle is
-	// external.
-	const spa = "default-src 'self'; img-src 'self' data:; " +
+	// and the configured OIDC authorization origin are allowed. No
+	// `script-src 'unsafe-inline'` — the JS bundle is external.
+	spa := "default-src 'self'; img-src 'self' data:; " +
 		"style-src 'self' 'unsafe-inline'; " +
-		"frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		"frame-ancestors 'none'; base-uri 'self'; form-action " + spaFormAction
 
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		h := w.Header()
-		if isSPAPath(r.URL.Path) {
-			h.Set("Content-Security-Policy", spa)
-		} else {
-			h.Set("Content-Security-Policy", strict)
-		}
-		h.Set("X-Content-Type-Options", "nosniff")
-		h.Set("Referrer-Policy", "no-referrer")
-		h.Set("X-Frame-Options", "DENY")
-		h.Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
-		next.ServeHTTP(w, r)
-	})
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			h := w.Header()
+			if isSPAPath(r.URL.Path) {
+				h.Set("Content-Security-Policy", spa)
+			} else {
+				h.Set("Content-Security-Policy", strict)
+			}
+			h.Set("X-Content-Type-Options", "nosniff")
+			h.Set("Referrer-Policy", "no-referrer")
+			h.Set("X-Frame-Options", "DENY")
+			h.Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func httpOrigin(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Opaque != "" || u.User != nil || u.Host == "" {
+		return ""
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return ""
+	}
+	return scheme + "://" + u.Host
 }
 
 // isSPAPath reports whether the request targets the Svelte shell or

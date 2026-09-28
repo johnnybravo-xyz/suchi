@@ -119,6 +119,12 @@ func New(ctx context.Context, cfg Config, d *db.DB, log *slog.Logger) (*Plugin, 
 
 func (p *Plugin) Name() string { return Name }
 
+// AuthorizationEndpoint returns the provider-discovered URL used to begin
+// browser authorization. The HTTP layer admits its origin to the SPA form CSP.
+func (p *Plugin) AuthorizationEndpoint() string {
+	return p.oauth.Endpoint.AuthURL
+}
+
 // Authenticate handles the OIDC Bearer path (agents/tools passing an
 // ID token in Authorization). The cookie path is served by the local-
 // auth plugin — this plugin just plants the cookie in LoginCallback.

@@ -396,6 +396,10 @@ These gates remain distinct:
   `application/json`. Both account-email POSTs additionally require exact
   same-origin provenance and a live browser session, with no bearer-header
   exemption. CORS alone is insufficient.
+  The SPA CSP admits only the discovered OIDC authorization endpoint's HTTP(S)
+  origin beyond `self` for form submissions so that the same-origin
+  reauthentication POST can follow its provider redirect; non-SPA responses
+  remain `form-action 'self'`.
 
 Sessions select `?system=CODE`, defaulting to original system 1; token binding is
 its default and ceiling. Unqualified numeric objects resolve their actual system.

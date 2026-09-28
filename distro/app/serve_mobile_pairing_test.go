@@ -54,7 +54,7 @@ func TestMobilePairingAssembledGuards(t *testing.T) {
 			s := &api.Server{DB: d, Log: log}
 			mux := http.NewServeMux()
 			s.Register(mux)
-			h := buildHTTPHandler(mux, &config.Config{BodyLimit: 1024}, &auth.Chain{}, nil, httpx.NewMetrics(), log)
+			h := buildHTTPHandler(mux, &config.Config{BodyLimit: 1024}, &auth.Chain{}, "", nil, httpx.NewMetrics(), log)
 			r := httptest.NewRequest(tc.method, tc.path+"?private=DO_NOT_LOG_PAIRING", strings.NewReader(`{"code":"DO_NOT_LOG_PAIRING"}`))
 			r.Header.Set("Sec-Fetch-Site", tc.site)
 			if tc.kind != "" {
@@ -77,7 +77,7 @@ func TestMobilePairingExchangeSharesLoginRateLimitAcrossSlashAliases(t *testing.
 	mux.HandleFunc("POST /api/mobile/pairing/exchange", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	h := buildHTTPHandler(mux, &config.Config{BodyLimit: 1024}, &auth.Chain{}, nil, httpx.NewMetrics(), testLogger())
+	h := buildHTTPHandler(mux, &config.Config{BodyLimit: 1024}, &auth.Chain{}, "", nil, httpx.NewMetrics(), testLogger())
 	for i := range 11 {
 		path := "/api/mobile/pairing/exchange"
 		if i%2 == 0 {
@@ -120,7 +120,7 @@ func TestMobilePairingRegistersConnectedApps(t *testing.T) {
 	s := &api.Server{DB: d, Log: testLogger(), PublicURL: "https://archive.example", TokenIssuer: local.IssueAPIToken}
 	mux := http.NewServeMux()
 	s.Register(mux)
-	handler := buildHTTPHandler(mux, &config.Config{BodyLimit: 1024}, &auth.Chain{}, nil, httpx.NewMetrics(), testLogger())
+	handler := buildHTTPHandler(mux, &config.Config{BodyLimit: 1024}, &auth.Chain{}, "", nil, httpx.NewMetrics(), testLogger())
 	request := func(method, path, body string, userID int64) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, path, strings.NewReader(body))
 		r.Header.Set("Content-Type", "application/json")

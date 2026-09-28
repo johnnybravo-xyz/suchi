@@ -54,7 +54,7 @@ func TestBlobRouteFamiliesEnforceSystemAndDocumentBoundaries(t *testing.T) {
 			if err := registerBaseRoutes(mux, cfg, d, cas, httpx.NewMetrics(), local, nil, 3, log); err != nil {
 				t.Fatal(err)
 			}
-			handler := buildHTTPHandler(mux, cfg, &auth.Chain{}, nil, httpx.NewMetrics(), log)
+			handler := buildHTTPHandler(mux, cfg, &auth.Chain{}, "", nil, httpx.NewMetrics(), log)
 			for _, endpoint := range []string{"/preview/%d", "/download/%d", "/api/documents/%d/preview", "/api/documents/%d/download"} {
 				for _, tc := range []struct {
 					name       string

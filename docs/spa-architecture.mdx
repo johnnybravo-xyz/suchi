@@ -292,6 +292,10 @@ Password mode opens the focused native `EmailChangeDialog.svelte`; OIDC mode
 uses a native same-origin POST form to `/oidc/email-change`; disabled/demo mode
 is read-only and exposes no mutation request path.
 
+The `/app` CSP admits only `self` plus the provider-discovered authorization
+endpoint's HTTP(S) origin for form submissions, because that POST redirects to
+the provider. Non-SPA responses keep `form-action 'self'`.
+
 The password dialog owns new-email, exact confirmation, and current-password
 validation. It traps focus, focuses the first field, closes with Escape, exposes
 inline errors with `role=alert`, and disables fields/close while the request is

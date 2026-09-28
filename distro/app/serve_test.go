@@ -58,7 +58,7 @@ func TestBuildHTTPHandlerPreservesRoutingAndLimiterBoundaries(t *testing.T) {
 	mux.HandleFunc("GET /api/items/", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	handler := buildHTTPHandler(mux, &config.Config{BodyLimit: 1024}, &auth.Chain{}, nil, httpx.NewMetrics(), testLogger())
+	handler := buildHTTPHandler(mux, &config.Config{BodyLimit: 1024}, &auth.Chain{}, "", nil, httpx.NewMetrics(), testLogger())
 
 	for i := 0; i < 11; i++ {
 		req := httptest.NewRequest("POST", "/api/login", nil)
@@ -96,7 +96,7 @@ func TestBuildHTTPHandlerRejectsCrossSiteAnonymousLogin(t *testing.T) {
 	}
 	mux.HandleFunc("POST /login", credentialHandler)
 	mux.HandleFunc("POST /api/login", credentialHandler)
-	handler := buildHTTPHandler(mux, &config.Config{BodyLimit: 1024}, &auth.Chain{}, nil, httpx.NewMetrics(), testLogger())
+	handler := buildHTTPHandler(mux, &config.Config{BodyLimit: 1024}, &auth.Chain{}, "", nil, httpx.NewMetrics(), testLogger())
 	for _, path := range []string{"/login", "/api/login", "/api/login/", "/api/login%2f"} {
 		called = 0
 		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"email":"attacker@example.test","password":"secret"}`))
@@ -120,7 +120,7 @@ func TestBuildHTTPHandlerSeparatesClientsBehindTrustedProxy(t *testing.T) {
 	handler := buildHTTPHandler(mux, &config.Config{
 		BodyLimit:         1024,
 		TrustedProxyCIDRs: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")},
-	}, &auth.Chain{}, nil, httpx.NewMetrics(), testLogger())
+	}, &auth.Chain{}, "", nil, httpx.NewMetrics(), testLogger())
 
 	for i := 0; i < 11; i++ {
 		req := httptest.NewRequest("POST", "/api/login", nil)
@@ -176,7 +176,7 @@ func TestBuildHTTPHandlerRateLimitsCredentialAndDemoAliases(t *testing.T) {
 			if tc.demo {
 				demoLimiter = httpx.NewRateLimit(5, 10)
 			}
-			handler := buildHTTPHandler(mux, &config.Config{}, &auth.Chain{}, demoLimiter, httpx.NewMetrics(), testLogger())
+			handler := buildHTTPHandler(mux, &config.Config{}, &auth.Chain{}, "", demoLimiter, httpx.NewMetrics(), testLogger())
 			for i := range 12 {
 				path := tc.path
 				switch i % 3 {
@@ -226,7 +226,7 @@ func TestBuildHTTPHandlerRateLimitsShareRoutes(t *testing.T) {
 			mux.HandleFunc(tc.pattern, func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusNoContent)
 			})
-			handler := buildHTTPHandler(mux, &config.Config{}, &auth.Chain{}, nil, httpx.NewMetrics(), testLogger())
+			handler := buildHTTPHandler(mux, &config.Config{}, &auth.Chain{}, "", nil, httpx.NewMetrics(), testLogger())
 			for i := range 11 {
 				req := httptest.NewRequest(tc.method, tc.path, nil)
 				req.RemoteAddr = "192.0.2.1:1234"
@@ -268,7 +268,7 @@ func TestBuildHTTPHandlerObservesRateLimitRejections(t *testing.T) {
 			if tc.demo {
 				demoLimiter = httpx.NewRateLimit(5, 10)
 			}
-			handler := buildHTTPHandler(mux, &config.Config{}, &auth.Chain{}, demoLimiter, metrics, logx.Setup(&logs, "info"))
+			handler := buildHTTPHandler(mux, &config.Config{}, &auth.Chain{}, "", demoLimiter, metrics, logx.Setup(&logs, "info"))
 			var rec *httptest.ResponseRecorder
 			for range 11 {
 				req := httptest.NewRequest(tc.method, tc.path, nil)

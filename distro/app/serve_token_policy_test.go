@@ -61,7 +61,7 @@ func TestTokenPolicyProtectsDocumentAndAccountHandlers(t *testing.T) {
 	mux.HandleFunc("POST /oidc/email-change", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	handler := buildHTTPHandler(mux, &config.Config{BodyLimit: 1024}, &auth.Chain{}, nil, httpx.NewMetrics(), log)
+	handler := buildHTTPHandler(mux, &config.Config{BodyLimit: 1024}, &auth.Chain{}, "", nil, httpx.NewMetrics(), log)
 	for _, tc := range []struct {
 		name, method, path, body, scope, role, kind string
 		userID                                      int64
@@ -163,7 +163,7 @@ func TestTokenPolicyRoutingBoundaries(t *testing.T) {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	}
 	mux.Handle("GET /metrics", requireOperationalAdmin(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })))
-	handler := buildHTTPHandler(mux, &config.Config{BodyLimit: 1024}, &auth.Chain{}, nil, httpx.NewMetrics(), testLogger())
+	handler := buildHTTPHandler(mux, &config.Config{BodyLimit: 1024}, &auth.Chain{}, "", nil, httpx.NewMetrics(), testLogger())
 	for _, tc := range []struct {
 		name, method, path, scope, role, kind string
 		want                                  int

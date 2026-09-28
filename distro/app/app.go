@@ -686,9 +686,14 @@ func Run(ctx context.Context, opts Options) error {
 		ObjectKind: "server",
 	})
 
+	oidcAuthorizationURL := ""
+	if oa != nil {
+		oidcAuthorizationURL = oa.AuthorizationEndpoint()
+	}
+
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           buildHTTPHandler(mux, cfg, authChain, demoRL, m, log),
+		Handler:           buildHTTPHandler(mux, cfg, authChain, oidcAuthorizationURL, demoRL, m, log),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}

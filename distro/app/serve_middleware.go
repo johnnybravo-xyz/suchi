@@ -13,7 +13,7 @@ import (
 )
 
 func buildHTTPHandler(mux *http.ServeMux, cfg *config.Config, authChain *auth.Chain,
-	demoLimiter *httpx.RateLimit, metrics *httpx.Metrics, log *slog.Logger) http.Handler {
+	oidcAuthorizationURL string, demoLimiter *httpx.RateLimit, metrics *httpx.Metrics, log *slog.Logger) http.Handler {
 	router := httpx.NormalizeAPITrailingSlash(mux)
 	middleware := []httpx.Middleware{
 		httpx.BodyLimit(cfg.BodyLimit),
@@ -61,6 +61,6 @@ func buildHTTPHandler(mux *http.ServeMux, cfg *config.Config, authChain *auth.Ch
 		}
 		handler.ServeHTTP(w, r)
 	})
-	return httpx.Chain(limited, httpx.RequestID, httpx.SecurityHeaders,
+	return httpx.Chain(limited, httpx.RequestID, httpx.SecurityHeaders(oidcAuthorizationURL),
 		httpx.AccessLog(log), metrics.HTTPInstrument)
 }
