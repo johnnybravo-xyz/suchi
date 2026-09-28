@@ -6,7 +6,7 @@ description: "A sourced comparison with Paperless-ngx, Papra, and Docspell."
 The self-hosted document-management space has mature alternatives. This page
 focuses on operational shape and documented features, not a universal ranking.
 
-**Snapshot date:** 2026-08-22. Read each project's current documentation before
+**Snapshot date:** 2026-09-28. Read each project's current documentation before
 choosing; all four projects are active.
 
 <Warning>
@@ -16,12 +16,12 @@ choosing; all four projects are active.
 
 ## At a glance
 
-| Project           | Default operational shape                                                                           | License  |
-| ----------------- | --------------------------------------------------------------------------------------------------- | -------- |
-| **suchi**         | One Go process, SQLite, filesystem CAS; document converters are optional                            | AGPL-3.0 |
-| **Paperless-ngx** | Web, consumer, task worker, and scheduler processes; SQLite plus a required Redis-compatible broker | GPL-3.0  |
-| **Papra**         | Packaged Node application with SQLite and filesystem storage by default                             | AGPL-3.0 |
-| **Docspell**      | Separate REST and joex processes; embedded H2 by default; full-text search is optional              | AGPL-3.0 |
+| Project           | Default operational shape                                                                                              | License  |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------- | -------- |
+| **suchi**         | One Go server process, SQLite, filesystem CAS; converters and the Android/iOS Companion app are optional              | AGPL-3.0 |
+| **Paperless-ngx** | Web, consumer, task worker, and scheduler processes; SQLite plus a required Redis-compatible broker                    | GPL-3.0  |
+| **Papra**         | Packaged Node application with SQLite and filesystem storage by default                                                | AGPL-3.0 |
+| **Docspell**      | Separate REST and joex processes; embedded H2 by default; full-text search is optional                                 | AGPL-3.0 |
 
 Sources: [Paperless-ngx configuration](https://docs.paperless-ngx.com/configuration/),
 [Papra configuration](https://docs.papra.app/self-hosting/configuration/), and
@@ -67,15 +67,20 @@ and [Papra auto-tagging guide](https://docs.papra.app/guides/auto-tagging/).
 
 ### API and access
 
-| Feature                         |        suchi         | Paperless-ngx |         Papra          |        Docspell        |
-| ------------------------------- | :------------------: | :-----------: | :--------------------: | :--------------------: |
-| Documented REST API             |          ✅          |      ✅       |           ✅           |           ✅           |
-| Public share links              | ✅ (expiry/password) |  ✅ (expiry)  |  ✅ (expiry/password)  | ✅ (optional password) |
-| Multi-user ownership            |          ✅          |      ✅       |   ✅ (organizations)   |    ✅ (collectives)    |
-| Fine-grained object permissions |          ✅          |      ✅       | ◐ (organization roles) |           ➖           |
-| MCP server                      |          ✅          |      ➖       |           ➖           |           ➖           |
+| Feature                         |                 suchi                 |       Paperless-ngx        |          Papra           |             Docspell             |
+| ------------------------------- | :-----------------------------------: | :------------------------: | :----------------------: | :------------------------------: |
+| Documented REST API             |                  ✅                   |             ✅             |            ✅            |                ✅                |
+| Public share links              |         ✅ (expiry/password)          |        ✅ (expiry)         |  ✅ (expiry/password)   |      ✅ (optional password)      |
+| Multi-user ownership            |                  ✅                   |             ✅             |    ✅ (organizations)    |       ✅ (collectives)          |
+| Fine-grained object permissions |                  ✅                   |             ✅             |  ◐ (organization roles) |                ➖                |
+| Mobile access                   | ✅ (first-party Android/iOS Companion) | ◐ (web + community clients) |  ✅ (responsive web)    | ◐ (web + Android upload client) |
+| MCP server                      |                  ✅                   |             ➖             |            ➖            |                ➖                |
 
-Sources: [Paperless-ngx API](https://docs.paperless-ngx.com/api/),
+Sources: [Suchi Companion](/companion),
+[Paperless-ngx usage](https://docs.paperless-ngx.com/usage/),
+[Papra features](https://docs.papra.app/),
+[Docspell Android client](https://docspell.org/docs/tools/android/),
+[Paperless-ngx API](https://docs.paperless-ngx.com/api/),
 [Papra API reference](https://docs.papra.app/resources/api-endpoints/),
 [Papra v26.5.0 changelog](https://docs.papra.app/changelog/), and
 [Docspell API](https://docspell.org/docs/api/intro/). Docspell explicitly lists
@@ -99,33 +104,37 @@ operational cost.
 
 ### Paperless-ngx
 
-Choose Paperless-ngx when ecosystem maturity, mobile clients, extensive
-documentation, PDF editing, and a broad workflow surface matter more than
-minimizing process count. SQLite is available by default; PostgreSQL is
+Choose Paperless-ngx when ecosystem maturity, community mobile clients,
+extensive documentation, PDF editing, and a broad workflow surface matter more
+than minimizing process count. SQLite is available by default; PostgreSQL is
 recommended for larger or multi-user installations. A Redis-compatible broker
 is required.
 
 ### Papra
 
-Choose Papra for a focused modern UI, organizations, SQLite-first deployment,
-folder and email-relay ingestion, configurable extraction backends, built-in
-LLM auto-tagging, and expiring or password-protected share links. Papra's
-feature landing page lagged its v26.5.0 changelog at this snapshot, so the
-shipped changelog takes precedence here.
+Choose Papra for a focused responsive web UI, organizations, SQLite-first
+deployment, folder and email-relay ingestion, configurable extraction backends,
+built-in LLM auto-tagging, and expiring or password-protected share links.
+Papra's feature landing page lagged its v26.5.0 changelog at this snapshot, so
+the shipped changelog takes precedence here.
 
 ### Docspell
 
 Choose Docspell for multi-file items, strong query capabilities, scalable REST
-and joex processes, IMAP integration, and optional Solr or PostgreSQL full-text
-search. Its embedded H2 setup avoids an external database, but fine-grained
-permissions and document versioning are documented limitations.
+and joex processes, IMAP integration, an Android upload client, and optional
+Solr or PostgreSQL full-text search. Its embedded H2 setup avoids an external
+database, but fine-grained permissions and document versioning are documented
+limitations.
 
 ### suchi
 
-Choose suchi when one process, a filesystem CAS, low measured idle memory,
-Johnny.Decimal presets, multi-party correspondents, approval tasks, an audit
-feed, and MCP tools fit the problem. Do not choose it for ecosystem maturity or
-proven compatibility with existing Paperless mobile clients; v0.1 is an early release.
+Choose suchi when one server process, a filesystem CAS, low measured idle
+memory, Johnny.Decimal presets, multi-party correspondents, approval tasks, an
+audit feed, MCP tools, and a first-party Android/iOS app fit the problem.
+Companion pairs by QR code and provides capture, foreground uploads, Inbox
+filing, browsing, search, privacy-gated previews, offline saves, sharing, and
+Trash recovery. Do not choose suchi for ecosystem maturity or proven
+compatibility with Paperless mobile clients; v0.1 is an early release.
 
 ## Portability
 
@@ -144,6 +153,8 @@ proven compatibility with existing Paperless mobile clients; v0.1 is an early re
 
 ## Update history
 
+- **2026-09-28:** Added the Android/iOS Suchi Companion and clarified
+  the mobile access available from each project.
 - **2026-08-22:** Re-ran the release benchmark and rechecked the linked feature
   documentation against the current product surfaces.
 - **2026-08-18:** Rechecked official documentation; corrected database,

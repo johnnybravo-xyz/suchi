@@ -58,7 +58,8 @@ critical archives, and follow the documented stable-v1 compatibility policy.
   review-first mode sends inferred changes to Approvals instead.
 - Groups, object ACLs, OIDC, share links, audit events, backups, and restore
   tooling.
-- Svelte SPA, a documented scoped HTTP API, and MCP over stdio or HTTP.
+- Svelte SPA, Android/iOS Suchi Companion, a documented scoped HTTP
+  API, and MCP over stdio or HTTP.
 
 The [feature comparison](docs/comparison.mdx) and
 [architecture](docs/architecture.mdx) describe the detailed scope and
