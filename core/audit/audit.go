@@ -12,7 +12,9 @@ package audit
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"log/slog"
 	"sync"
@@ -39,23 +41,60 @@ type Event struct {
 	Before     any   // marshaled to JSON; use nil for creates
 	After      any   // marshaled to JSON; use nil for deletes
 	RequestID  string
+	Retained   bool // identity/security record excluded from ordinary pruning
 }
 
-// Record holds an audit write outcome awaiting post-commit reporting.
-// Call Emit only after the transaction commits; discard it on rollback.
+// EmailChangedEvent builds the retained record shared by local-password and
+// OIDC email transitions.
+func EmailChangedEvent(
+	actor *pluginapi.Principal,
+	userID int64,
+	oldEmail, newEmail, source, requestID string,
+	revokedSessions int64,
+) Event {
+	return Event{
+		Actor: actor, Action: "user.email_changed", ObjectKind: "user", ObjectID: userID,
+		Before:    map[string]any{"email": oldEmail},
+		After:     map[string]any{"email": newEmail, "source": source, "revoked_sessions": revokedSessions},
+		RequestID: requestID,
+		Retained:  true,
+	}
+}
+
+// OIDCBoundEvent builds a retained binding record without placing the
+// provider's opaque subject in audit JSON. The subject fingerprint hashes a
+// NUL-delimited issuer/subject tuple so component boundaries are unambiguous.
+func OIDCBoundEvent(
+	actor *pluginapi.Principal,
+	userID int64,
+	issuer, subject, email, role string,
+	newUser bool,
+	requestID string,
+	revokedSessions int64,
+) Event {
+	sum := sha256.Sum256([]byte(issuer + "\x00" + subject))
+	return Event{
+		Actor: actor, Action: "user.oidc_bound", ObjectKind: "user", ObjectID: userID,
+		After: map[string]any{
+			"issuer": issuer, "subject_sha256": hex.EncodeToString(sum[:]),
+			"email": email, "role": role, "new_user": newUser,
+			"revoked_sessions": revokedSessions,
+		},
+		RequestID: requestID,
+		Retained:  true,
+	}
+}
+
+// Record holds a successfully persisted audit event awaiting post-commit sink
+// delivery. Call Emit only after the transaction commits; discard on rollback.
 type Record struct {
 	event     Event
 	timestamp int64
-	writeErr  error
 }
 
-// Emit reports failed persistence or delivers a committed event to sinks.
-// It does not acquire the database writer.
+// Emit delivers a committed database event to sinks. It does not acquire the
+// database writer, and sink failures cannot undo the committed row.
 func (r Record) Emit(ctx context.Context, log *slog.Logger) {
-	if r.writeErr != nil {
-		log.Error("audit.write.failed_intx", "err", r.writeErr.Error(), "action", r.event.Action)
-		return
-	}
 	fanoutToSinks(ctx, log, r.event, r.timestamp)
 }
 
@@ -189,16 +228,18 @@ func LogInTx(ctx context.Context, tx *sql.Tx, log *slog.Logger, e Event) {
 	fanoutToSinks(ctx, log, e, record.timestamp)
 }
 
-// RecordInTx attempts to persist an event without logging or invoking sinks.
-// Persistence is best-effort, as in LogInTx. Emit the returned record only after
-// commit to report a failed write or deliver a persisted event; discard on rollback.
-func RecordInTx(ctx context.Context, tx *sql.Tx, e Event) Record {
+// RecordInTx persists a required event without logging or invoking sinks.
+// The caller must propagate an error so its transaction rolls back. Emit the
+// returned record only after commit; discard it on rollback.
+func RecordInTx(ctx context.Context, tx *sql.Tx, e Event) (Record, error) {
 	record, before, after, err := prepareRecord(e)
 	if err != nil {
-		return Record{event: e, writeErr: err}
+		return Record{}, err
 	}
-	record.writeErr = record.write(ctx, tx, before, after)
-	return record
+	if err := record.write(ctx, tx, before, after); err != nil {
+		return Record{}, err
+	}
+	return record, nil
 }
 
 func prepareRecord(e Event) (Record, string, string, error) {
@@ -224,17 +265,21 @@ func (r Record) write(ctx context.Context, tx *sql.Tx, before, after string) err
 			kind, id = ActorToken, sql.NullInt64{Int64: e.Actor.TokenID, Valid: true}
 		}
 	}
+	retained := 0
+	if e.Retained {
+		retained = 1
+	}
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO audit_events
-			(ts, actor_kind, actor_id, action, object_kind, object_id, system_id, before_json, after_json, request_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			(ts, actor_kind, actor_id, action, object_kind, object_id, system_id, before_json, after_json, request_id, retained)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		r.timestamp,
 		kind, id,
 		e.Action, e.ObjectKind, nullInt64(e.ObjectID),
 		nullInt64(e.SystemID),
 		nullString(before), nullString(after),
-		nullString(e.RequestID),
+		nullString(e.RequestID), retained,
 	)
 	return err
 }

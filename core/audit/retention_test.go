@@ -67,6 +67,33 @@ func TestPrune_WindowDropsOldKeepsNew(t *testing.T) {
 	}
 }
 
+func TestPrune_RetainedRowsSurvive(t *testing.T) {
+	d := setupDB(t)
+	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	old := time.Now().Add(-30 * 24 * time.Hour).Unix()
+	if _, err := d.Write.ExecContext(t.Context(), `
+		INSERT INTO audit_events(ts,actor_kind,action,object_kind,retained) VALUES
+			(?,'system','user.email_changed','user',1),
+			(?,'system','document.update','document',0)
+	`, old, old); err != nil {
+		t.Fatal(err)
+	}
+	n, err := Prune(t.Context(), d, log, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("dropped %d rows, want only the ordinary event", n)
+	}
+	var retained int
+	if err := d.Read.QueryRow(`SELECT count(*) FROM audit_events WHERE action='user.email_changed' AND retained=1`).Scan(&retained); err != nil {
+		t.Fatal(err)
+	}
+	if retained != 1 {
+		t.Fatal("retained identity event was pruned")
+	}
+}
+
 func TestPrune_NoOpNoAuditRow(t *testing.T) {
 	d := setupDB(t)
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))

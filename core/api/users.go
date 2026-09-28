@@ -389,19 +389,25 @@ func (s *Server) PatchUser(w http.ResponseWriter, r *http.Request) {
 			revokedCounts[cap] = n
 		}
 		for cap := range added {
-			record := audit.RecordInTx(r.Context(), tx, audit.Event{
+			record, err := audit.RecordInTx(r.Context(), tx, audit.Event{
 				Actor: actor, Action: "user.capability_granted",
 				ObjectKind: "user", ObjectID: uid,
 				After: map[string]any{"capability": string(cap)},
 			})
+			if err != nil {
+				return err
+			}
 			auditRecords = append(auditRecords, record)
 		}
 		for cap := range removed {
-			record := audit.RecordInTx(r.Context(), tx, audit.Event{
+			record, err := audit.RecordInTx(r.Context(), tx, audit.Event{
 				Actor: actor, Action: "user.capability_revoked",
 				ObjectKind: "user", ObjectID: uid,
 				Before: map[string]any{"capability": string(cap)},
 			})
+			if err != nil {
+				return err
+			}
 			auditRecords = append(auditRecords, record)
 		}
 		if body.Disabled != nil && *body.Disabled {

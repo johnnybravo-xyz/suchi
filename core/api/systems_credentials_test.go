@@ -451,9 +451,6 @@ func TestSystemsDisableOAuthFollowsCommit(t *testing.T) {
 				t.Fatal("flow rejected")
 			}
 			wantStatus, wantDisabled, wantEnabled := http.StatusInternalServerError, 0, 1
-			if failure == "audit" {
-				wantStatus, wantDisabled, wantEnabled = http.StatusOK, 1, 0
-			}
 			w := systemsBoundaryRequest(mux, "PATCH", "/api/admin/users/5",
 				`{"disabled":true,"capabilities":[]}`, adminPrincipal(1))
 			if w.Code != wantStatus {
@@ -471,16 +468,6 @@ func TestSystemsDisableOAuthFollowsCommit(t *testing.T) {
 					disabled, enabled, wantDisabled, wantEnabled)
 			}
 			wantOAuthStatus, wantOAuthBody := http.StatusAccepted, `"status":"pending"`
-			if failure == "audit" {
-				// Audit persistence is best-effort: the disable committed and
-				// its pending flow must stay gone after restoring access.
-				w = systemsBoundaryRequest(mux, "PATCH", "/api/admin/users/5",
-					`{"disabled":false,"capabilities":["mailboxes"]}`, adminPrincipal(1))
-				if w.Code != http.StatusOK {
-					t.Fatalf("restore access: %d %s", w.Code, w.Body.String())
-				}
-				wantOAuthStatus, wantOAuthBody = http.StatusNotFound, `"code":"flow_gone"`
-			}
 			w = systemsBoundaryRequest(mux, "POST", "/api/email-accounts/oauth/complete?system=S01",
 				`{"flow_handle":"pending-disable"}`, memberPrincipal(5))
 			if w.Code != wantOAuthStatus || !strings.Contains(w.Body.String(), wantOAuthBody) {

@@ -26,10 +26,11 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/db"
 )
 
-// Prune deletes audit_events rows older than `days` and returns the
-// affected row count. days <= 0 is a no-op (retention disabled). Safe
-// to call concurrently with Log — WriteTx serializes both against the
-// single writer conn.
+// Prune deletes non-retained audit_events rows older than `days` and returns
+// the affected row count. Retained identity/security rows remain until an
+// operator deliberately removes them. days <= 0 is a no-op (retention
+// disabled). Safe to call concurrently with Log — WriteTx serializes both
+// against the single writer conn.
 //
 // Not exposed via HTTP; call from the backup ticker so operators
 // don't run it out-of-band. `suchi doctor` surfaces the row-count so
@@ -42,7 +43,7 @@ func Prune(ctx context.Context, d *db.DB, log *slog.Logger, days int) (int64, er
 	var affected int64
 	err := d.WriteTx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx,
-			`DELETE FROM audit_events WHERE ts < ?`, cutoff)
+			`DELETE FROM audit_events WHERE retained = 0 AND ts < ?`, cutoff)
 		if err != nil {
 			return err
 		}

@@ -7,11 +7,15 @@ package audit
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -133,10 +137,57 @@ func TestFanout_MultipleSinksAllReceive(t *testing.T) {
 	}
 }
 
+func TestRetainedEventPersistsFlag(t *testing.T) {
+	d := setupDB(t)
+	Log(t.Context(), d, slog.New(slog.NewTextHandler(os.Stderr, nil)), Event{
+		Action: "user.email_changed", ObjectKind: "user", ObjectID: 42, Retained: true,
+	})
+	var retained int
+	if err := d.Read.QueryRow(`SELECT retained FROM audit_events WHERE action='user.email_changed'`).Scan(&retained); err != nil {
+		t.Fatal(err)
+	}
+	if retained != 1 {
+		t.Fatalf("retained=%d, want 1", retained)
+	}
+}
+
+func TestRetainedIdentityEventBuildersOmitSecrets(t *testing.T) {
+	emailEvent := EmailChangedEvent(nil, 42, "old@example.com", "new@example.com", "local", "req-1", 3)
+	if emailEvent.Action != "user.email_changed" || emailEvent.ObjectID != 42 || !emailEvent.Retained {
+		t.Fatalf("unexpected email event: %#v", emailEvent)
+	}
+	emailAfter := emailEvent.After.(map[string]any)
+	if emailAfter["source"] != "local" || emailAfter["revoked_sessions"] != int64(3) {
+		t.Fatalf("unexpected email metadata: %#v", emailAfter)
+	}
+
+	const issuer = "https://id.example.test"
+	const subject = "private-opaque-subject"
+	boundEvent := OIDCBoundEvent(nil, 42, issuer, subject, "new@example.com", "admin", false, "req-2", 2)
+	if boundEvent.Action != "user.oidc_bound" || boundEvent.ObjectID != 42 || !boundEvent.Retained {
+		t.Fatalf("unexpected binding event: %#v", boundEvent)
+	}
+	boundAfter := boundEvent.After.(map[string]any)
+	sum := sha256.Sum256([]byte(issuer + "\x00" + subject))
+	if got, want := boundAfter["subject_sha256"], hex.EncodeToString(sum[:]); got != want {
+		t.Fatalf("subject fingerprint=%q, want %q", got, want)
+	}
+	encoded, err := json.Marshal(boundAfter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), subject) {
+		t.Fatal("raw OIDC subject escaped into audit metadata")
+	}
+}
+
 func TestRecordInTxDefersSinksUntilCommit(t *testing.T) {
-	for _, outcome := range []string{"commit", "rollback", "audit_failure"} {
+	for _, outcome := range []string{"commit", "rollback", "audit_failure", "prepare_failure"} {
 		t.Run(outcome, func(t *testing.T) {
 			d := setupDB(t)
+			if _, err := d.Write.Exec(`CREATE TABLE caller_state(value TEXT NOT NULL)`); err != nil {
+				t.Fatal(err)
+			}
 			if outcome == "audit_failure" {
 				if _, err := d.Write.Exec(`CREATE TRIGGER fail_audit BEFORE INSERT ON audit_events
 					BEGIN SELECT RAISE(ABORT, 'forced audit failure'); END`); err != nil {
@@ -167,37 +218,56 @@ func TestRecordInTxDefersSinksUntilCommit(t *testing.T) {
 			rejected := errors.New("reject state change")
 			var record Record
 			err := d.WriteTx(ctx, func(tx *sql.Tx) error {
-				record = RecordInTx(ctx, tx, Event{Action: "state.transition"})
+				if _, err := tx.ExecContext(ctx, `INSERT INTO caller_state(value) VALUES('changed')`); err != nil {
+					return err
+				}
+				event := Event{Action: "state.transition"}
+				if outcome == "prepare_failure" {
+					event.After = make(chan int)
+				}
+				var err error
+				record, err = RecordInTx(ctx, tx, event)
+				if err != nil {
+					return err
+				}
 				if outcome == "rollback" {
 					return rejected
 				}
 				return nil
 			})
-			if outcome == "rollback" {
+			switch outcome {
+			case "commit":
+				if err != nil {
+					t.Fatal(err)
+				}
+			case "rollback":
 				if !errors.Is(err, rejected) {
 					t.Fatalf("rollback: %v", err)
 				}
-			} else if err != nil {
-				t.Fatal(err)
+			default:
+				if err == nil {
+					t.Fatal("required audit failure committed caller state")
+				}
 			}
 			if len(sink.events) != 0 {
 				t.Fatal("recording emitted an event before the commit decision")
 			}
 			want := 0
-			if outcome != "rollback" {
-				record.Emit(ctx, log)
-			}
 			if outcome == "commit" {
+				record.Emit(ctx, log)
 				want = 1
 			}
-			var stored int
+			var stored, callerState int
 			if err := d.Read.QueryRowContext(ctx,
 				`SELECT count(*) FROM audit_events WHERE action='state.transition'`).Scan(&stored); err != nil {
 				t.Fatal(err)
 			}
-			if stored != want || len(sink.events) != want || observedErr != nil {
-				t.Fatalf("stored=%d delivered=%d want=%d observer=%v",
-					stored, len(sink.events), want, observedErr)
+			if err := d.Read.QueryRowContext(ctx, `SELECT count(*) FROM caller_state`).Scan(&callerState); err != nil {
+				t.Fatal(err)
+			}
+			if stored != want || callerState != want || len(sink.events) != want || observedErr != nil {
+				t.Fatalf("stored=%d caller_state=%d delivered=%d want=%d observer=%v",
+					stored, callerState, len(sink.events), want, observedErr)
 			}
 		})
 	}
