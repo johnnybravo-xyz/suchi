@@ -279,6 +279,54 @@ func TestCompanionV1RoutesReachAssembledHandlers(t *testing.T) {
 	request(http.MethodGet, "/api/whoami", nil, "", http.StatusUnauthorized)
 }
 
+func TestDevelopmentIdentityEmailChangeIsDisabledAndOriginProtected(t *testing.T) {
+	running := startApp(t, options(t))
+	var self struct {
+		EmailChangeMode string `json:"email_change_mode"`
+	}
+	if err := json.Unmarshal(running.request(t, http.MethodGet, "/api/whoami", "", http.StatusOK), &self); err != nil {
+		t.Fatal(err)
+	}
+	if self.EmailChangeMode != "disabled" {
+		t.Fatalf("email_change_mode=%q", self.EmailChangeMode)
+	}
+
+	for _, tc := range []struct {
+		name, fetchSite, origin string
+		want                    int
+	}{
+		{name: "missing provenance", want: http.StatusForbidden},
+		{name: "mismatched origin", origin: "https://attacker.example", want: http.StatusForbidden},
+		{name: "same-origin fetch", fetchSite: "same-origin", want: http.StatusConflict},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodPost, running.url+"/api/users/me/email",
+				strings.NewReader(`{"email":"changed@example.test","current_password":"devdevdev"}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Sec-Fetch-Site", tc.fetchSite)
+			req.Header.Set("Origin", tc.origin)
+			resp, err := running.client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.StatusCode != tc.want {
+				t.Fatalf("status=%d want=%d body=%s", resp.StatusCode, tc.want, body)
+			}
+			if tc.want == http.StatusConflict && !strings.Contains(string(body), `"code":"email_change_disabled"`) {
+				t.Fatalf("body=%s", body)
+			}
+		})
+	}
+}
+
 func TestExternalAssemblyMigrationsActionsAndCommunityIsolation(t *testing.T) {
 	opts := options(t)
 	opts.MigrationSets = []db.MigrationSet{{Component: "example", Migrations: []db.Migration{{Version: 1, SQL: `CREATE TABLE example_receipts(doc_id INTEGER PRIMARY KEY REFERENCES documents(id),system_id INTEGER NOT NULL REFERENCES jd_systems(id));`}}}}

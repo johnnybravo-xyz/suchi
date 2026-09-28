@@ -14,12 +14,41 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/johnnybravo-xyz/suchi/core/api"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/config"
 	"github.com/johnnybravo-xyz/suchi/core/httpx"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
+	localauth "github.com/johnnybravo-xyz/suchi/plugins/local-auth"
 )
+
+func TestAccountEmailChangeMode(t *testing.T) {
+	user := pluginapi.Principal{Kind: "user", Email: "member@example.test"}
+	for _, tc := range []struct {
+		name      string
+		cfg       config.Config
+		principal *pluginapi.Principal
+		want      string
+	}{
+		{name: "missing principal", principal: nil, want: api.EmailChangeModeDisabled},
+		{name: "API token", principal: &pluginapi.Principal{Kind: "token"}, want: api.EmailChangeModeDisabled},
+		{name: "demo scratch", principal: &pluginapi.Principal{Kind: "demo-scratch"}, want: api.EmailChangeModeDisabled},
+		{name: "demo deployment", cfg: config.Config{DemoMode: true}, principal: &user, want: api.EmailChangeModeDisabled},
+		{name: "fixed development identity", cfg: config.Config{DevMode: true}, principal: &pluginapi.Principal{
+			Kind: "user", Email: strings.ToUpper(localauth.DevAdminEmail),
+		}, want: api.EmailChangeModeDisabled},
+		{name: "other development user", cfg: config.Config{DevMode: true}, principal: &user, want: api.EmailChangeModePassword},
+		{name: "OIDC user", cfg: config.Config{OIDCIssuerURL: "https://id.example.test"}, principal: &user, want: api.EmailChangeModeOIDC},
+		{name: "local user", principal: &user, want: api.EmailChangeModePassword},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := accountEmailChangeMode(&tc.cfg, tc.principal); got != tc.want {
+				t.Fatalf("mode=%q want=%q", got, tc.want)
+			}
+		})
+	}
+}
 
 func TestBuildHTTPHandlerPreservesRoutingAndLimiterBoundaries(t *testing.T) {
 	mux := http.NewServeMux()

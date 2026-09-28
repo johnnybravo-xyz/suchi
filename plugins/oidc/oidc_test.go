@@ -112,6 +112,7 @@ func newTestOIDC(t *testing.T) (*Plugin, *localauth.Plugin, func(map[string]any)
 		PrepareSession: func(r *http.Request) (PreparedSession, error) {
 			return local.PrepareSession(r)
 		},
+		EmailSyncAllowed:   func(*pluginapi.Principal) bool { return true },
 		EmailChangeAllowed: func(_, _ string) bool { return true },
 	}, database, log)
 	if err != nil {
@@ -613,6 +614,17 @@ func TestOIDCEmailChangeStartRequiresStrictOriginAndLiveSession(t *testing.T) {
 			}
 		})
 	}
+
+	_, principal = issueOIDCTestSession(t, local, 1)
+	p.cfg.EmailSyncAllowed = func(*pluginapi.Principal) bool { return false }
+	request := httptest.NewRequest(http.MethodPost, "/oidc/email-change", nil)
+	request.Header.Set("Sec-Fetch-Site", "same-origin")
+	request = request.WithContext(auth.WithPrincipal(request.Context(), principal))
+	response := httptest.NewRecorder()
+	p.EmailChangeHandler(response, request)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("disabled mode status=%d body=%s", response.Code, response.Body.String())
+	}
 }
 
 func TestOIDCEmailSyncChangesEmailAtomicallyAndRotatesBrowserSessions(t *testing.T) {
@@ -851,6 +863,19 @@ func TestOIDCEmailSyncRejectsConflictsPinnedOwnerAndStaleSession(t *testing.T) {
 			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 		}
 	})
+
+	t.Run("mode disabled during provider round trip", func(t *testing.T) {
+		p, local, sign := newTestOIDC(t)
+		_, principal := issueOIDCTestSession(t, local, 1)
+		flow := startOIDCEmailSync(t, p, principal)
+		p.cfg.EmailSyncAllowed = func(*pluginapi.Principal) bool { return false }
+		response := completeOIDCTestClaims(t, p, flow, sign, map[string]any{
+			"email": "changed@example.test",
+		})
+		if response.Code != http.StatusConflict {
+			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+		}
+	})
 }
 
 func TestOIDCEmailSyncRollsBackWhenRequiredAuditFails(t *testing.T) {
@@ -919,11 +944,11 @@ func TestOIDCAuthorizationTransactionRejectsTamperingExpiryStateAndNonce(t *test
 		p.LoginHandler(start, httptest.NewRequest(http.MethodGet, "/oidc/login", nil))
 		flow := readOIDCTestFlow(t, start)
 		tampered := *flow.cookie
-		if strings.HasSuffix(tampered.Value, "A") {
-			tampered.Value = tampered.Value[:len(tampered.Value)-1] + "B"
-		} else {
-			tampered.Value = tampered.Value[:len(tampered.Value)-1] + "A"
+		replacement := byte('A')
+		if tampered.Value[0] == replacement {
+			replacement = 'B'
 		}
+		tampered.Value = string(replacement) + tampered.Value[1:]
 		flow.cookie = &tampered
 		raw := sign(map[string]any{"nonce": flow.authorizationURL.Query().Get("nonce")})
 		assertRejected(t, completeOIDCTestFlow(t, p, flow, raw))

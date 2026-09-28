@@ -58,6 +58,8 @@ type Config struct {
 	IssueSession func(ctx context.Context, userID int64, r *http.Request) (*http.Cookie, error)
 	// PrepareSession supplies atomic all-session rotation for identity changes.
 	PrepareSession func(*http.Request) (PreparedSession, error)
+	// EmailSyncAllowed applies the application's per-principal account mode.
+	EmailSyncAllowed func(*pluginapi.Principal) bool
 	// EmailChangeAllowed refuses changes that would strand boot-pinned producers.
 	EmailChangeAllowed func(currentEmail, targetEmail string) bool
 	// FSWatchReloader applies a committed DB-managed owner change.
@@ -86,8 +88,8 @@ func New(ctx context.Context, cfg Config, d *db.DB, log *slog.Logger) (*Plugin, 
 	if cfg.AdminEmail == "" {
 		return nil, errors.New("admin email required when OIDC is enabled")
 	}
-	if cfg.IssueSession == nil || cfg.PrepareSession == nil {
-		return nil, errors.New("IssueSession and PrepareSession hooks required")
+	if cfg.IssueSession == nil || cfg.PrepareSession == nil || cfg.EmailSyncAllowed == nil {
+		return nil, errors.New("IssueSession, PrepareSession, and EmailSyncAllowed hooks required")
 	}
 	transactionKey, err := newTransactionKey()
 	if err != nil {

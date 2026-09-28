@@ -76,6 +76,17 @@ type Services struct {
 	Log       *slog.Logger
 }
 
+func accountEmailChangeMode(cfg *config.Config, p *pluginapi.Principal) string {
+	if cfg == nil || p == nil || p.Kind != "user" || cfg.DemoMode ||
+		(cfg.DevMode && strings.EqualFold(p.Email, localauth.DevAdminEmail)) {
+		return api.EmailChangeModeDisabled
+	}
+	if cfg.OIDCIssuerURL != "" {
+		return api.EmailChangeModeOIDC
+	}
+	return api.EmailChangeModePassword
+}
+
 // Run assembles and serves Suchi until ctx is cancelled or startup/serving fails.
 // With no extension options it runs the community application.
 func Run(ctx context.Context, opts Options) error {
@@ -167,6 +178,9 @@ func Run(ctx context.Context, opts Options) error {
 			pinnedFSOwner == targetEmail
 	}
 	var reloadFSWatch func(context.Context) error
+	emailChangeModeFor := func(p *pluginapi.Principal) string {
+		return accountEmailChangeMode(cfg, p)
+	}
 	la, err := localauth.NewWithOptions(ctx, d, log, cookieSecure, cfg.DemoMode, localauth.Options{
 		DisableSetup: cfg.OIDCIssuerURL != "",
 	})
@@ -254,6 +268,9 @@ func Run(ctx context.Context, opts Options) error {
 				return la.PrepareSession(r)
 			},
 			EmailChangeAllowed: emailChangeAllowed,
+			EmailSyncAllowed: func(p *pluginapi.Principal) bool {
+				return emailChangeModeFor(p) == api.EmailChangeModeOIDC
+			},
 			FSWatchReloader: func(rctx context.Context) error {
 				if reloadFSWatch == nil {
 					return errors.New("fs-watch reloader is not ready")
@@ -495,16 +512,7 @@ func Run(ctx context.Context, opts Options) error {
 	apiSrv.PrepareBrowserSession = func(r *http.Request) (api.PreparedBrowserSession, error) {
 		return la.PrepareSession(r)
 	}
-	apiSrv.EmailChangeModeFor = func(p *pluginapi.Principal) string {
-		if p == nil || p.Kind != "user" || cfg.DemoMode ||
-			(cfg.DevMode && strings.EqualFold(p.Email, localauth.DevAdminEmail)) {
-			return api.EmailChangeModeDisabled
-		}
-		if cfg.OIDCIssuerURL != "" {
-			return api.EmailChangeModeOIDC
-		}
-		return api.EmailChangeModePassword
-	}
+	apiSrv.EmailChangeModeFor = emailChangeModeFor
 	apiSrv.EmailChangeAllowed = emailChangeAllowed
 	apiSrv.LLMAEAD = decryptKey
 	apiSrv.ChatEnabled = llm.Enabled

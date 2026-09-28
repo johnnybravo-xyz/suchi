@@ -40,6 +40,7 @@ const (
 var (
 	errInvalidTransaction = errors.New("oidc: invalid authorization transaction")
 	errSyncSession        = errors.New("oidc: synchronization session is not active")
+	errSyncModeDisabled   = errors.New("oidc: email synchronization is disabled")
 	errFSOwnerPinned      = errors.New("oidc: watched-folder owner is pinned")
 )
 
@@ -93,18 +94,29 @@ func (p *Plugin) EmailChangeHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "a current browser session is required", http.StatusUnauthorized)
 		return
 	}
-	var active int
+	var currentEmail, currentRole, currentDisplay string
 	if err := p.db.Read.QueryRowContext(r.Context(), `
-		SELECT 1
+		SELECT u.email, u.role, u.display_name
 		FROM sessions s JOIN users u ON u.id = s.user_id
 		WHERE s.id = ? AND s.user_id = ? AND s.expires_at > ? AND u.disabled = 0
-	`, principal.SessionID, principal.UserID, now).Scan(&active); err != nil {
+	`, principal.SessionID, principal.UserID, now).Scan(
+		&currentEmail, &currentRole, &currentDisplay,
+	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "a current browser session is required", http.StatusUnauthorized)
 			return
 		}
 		p.log.Error("oidc.email_change.session_read_failed", "err", err.Error())
 		http.Error(w, "email synchronization unavailable", http.StatusInternalServerError)
+		return
+	}
+	canonical := &pluginapi.Principal{
+		Kind: "user", UserID: principal.UserID, Email: currentEmail,
+		Role: currentRole, Display: currentDisplay, AuthNBy: principal.AuthNBy,
+		SessionID: principal.SessionID, AuthExpiresAt: principal.AuthExpiresAt,
+	}
+	if !p.cfg.EmailSyncAllowed(canonical) {
+		http.Error(w, "email synchronization is disabled", http.StatusConflict)
 		return
 	}
 	if err := p.startAuthorization(w, r, purposeEmailSync,
@@ -283,6 +295,8 @@ func (p *Plugin) completeEmailSync(
 			http.Error(w, "browser session is no longer active", http.StatusUnauthorized)
 		case errors.Is(err, errFSOwnerPinned):
 			http.Error(w, "watched-folder owner is pinned by server configuration", http.StatusConflict)
+		case errors.Is(err, errSyncModeDisabled):
+			http.Error(w, "email synchronization is disabled", http.StatusConflict)
 		case errors.Is(err, errIdentityConflict):
 			http.Error(w, "identity conflicts with an existing account", http.StatusConflict)
 		default:
@@ -336,6 +350,9 @@ func (p *Plugin) synchronizeIdentity(
 			Kind: "user", UserID: transaction.UserID, Email: currentEmail,
 			Role: role, Display: display, AuthNBy: Name,
 			SessionID: transaction.SessionID, AuthExpiresAt: sessionExpiry,
+		}
+		if !p.cfg.EmailSyncAllowed(actor) {
+			return errSyncModeDisabled
 		}
 		now := time.Now().Unix()
 
