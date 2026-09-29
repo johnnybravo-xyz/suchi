@@ -1,12 +1,10 @@
 name: checks
 
-# Pushes and pull requests run the same complete validation graph maintainers can
-# dispatch manually. Release publication remains a separate manual workflow.
+# Repository validation is intentionally opt-in. A maintainer can run this
+# workflow from the Actions tab against the branch or tag they want to check.
+# The called workflows have no automatic triggers of their own.
 
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 
 permissions:
