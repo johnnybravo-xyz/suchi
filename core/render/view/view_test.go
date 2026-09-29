@@ -83,19 +83,35 @@ func TestRenderAndMovePreserveBlobContents(t *testing.T) {
 	}
 	readRendered(movedPath, "searchable receipt")
 
-	for _, stale := range []bool{false, true} {
-		if err := os.Remove(filepath.Join(renderDir, movedPath)); err != nil {
-			t.Fatal(err)
-		}
-		if stale {
-			if err := os.Symlink(filepath.Join(t.TempDir(), "old-data", "blobs", "sha256", archive.SHA256[:2], archive.SHA256[2:4], archive.SHA256[4:6], archive.SHA256), filepath.Join(renderDir, movedPath)); err != nil {
+	staleLinks := []struct {
+		name   string
+		target string
+	}{
+		{name: "missing"},
+		{
+			name:   "restored current layout",
+			target: filepath.Join(t.TempDir(), "old-data", "blobs", "sha256", archive.SHA256[:2], archive.SHA256[2:4], archive.SHA256[4:6], archive.SHA256),
+		},
+		{
+			name:   "published beta layout",
+			target: filepath.Join(t.TempDir(), "old-data", "blobs", "sha256", archive.SHA256[:2], archive.SHA256[2:4], archive.SHA256),
+		},
+	}
+	for _, stale := range staleLinks {
+		t.Run(stale.name, func(t *testing.T) {
+			if err := os.Remove(filepath.Join(renderDir, movedPath)); err != nil {
 				t.Fatal(err)
 			}
-		}
-		if err := renderer.Move(ctx, 1); err != nil {
-			t.Fatal(err)
-		}
-		readRendered(movedPath, "searchable receipt")
+			if stale.target != "" {
+				if err := os.Symlink(stale.target, filepath.Join(renderDir, movedPath)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := renderer.Move(ctx, 1); err != nil {
+				t.Fatal(err)
+			}
+			readRendered(movedPath, "searchable receipt")
+		})
 	}
 	if err := renderer.Move(ctx, 1); err != nil {
 		t.Fatal(err)

@@ -3,6 +3,11 @@
 Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
+### Fixed
+
+- Repair rendered links created by beta.1 and beta.2 when a stable-v1 refile
+  verifies that the linked blob belongs to the document.
+
 
 ## [0.1.0] - 2026-09-28
 

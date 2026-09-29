@@ -8,8 +8,11 @@ import (
 )
 
 // MatchesCASLink accepts canonical CAS links, including links into an old data
-// root after a whole-directory restore. The caller must independently establish
-// that hash belongs to the document/path; a filename alone does not prove ownership.
+// root after a whole-directory restore. It also recognizes the absolute
+// two-shard targets emitted by the published beta.1 and beta.2 renderer before
+// that renderer used CAS.Path. The caller must independently establish that the
+// hash belongs to the document/path; a matching filename alone does not prove
+// ownership.
 func MatchesCASLink(link, hash string) bool {
 	if len(hash) != 64 {
 		return false
@@ -22,6 +25,10 @@ func MatchesCASLink(link, hash string) bool {
 	if !filepath.IsAbs(link) || filepath.Clean(link) != link {
 		return false
 	}
-	suffix := filepath.Join("blobs", "sha256", hash[:2], hash[2:4], hash[4:6], hash)
-	return strings.HasSuffix(link, string(filepath.Separator)+suffix)
+	current := filepath.Join("blobs", "sha256", hash[:2], hash[2:4], hash[4:6], hash)
+	if strings.HasSuffix(link, string(filepath.Separator)+current) {
+		return true
+	}
+	publishedBeta := filepath.Join("blobs", "sha256", hash[:2], hash[2:4], hash)
+	return strings.HasSuffix(link, string(filepath.Separator)+publishedBeta)
 }

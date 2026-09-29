@@ -269,8 +269,8 @@ files or deadlocking recovery.
 
 Pre-upgrade journal hashes may be unknown. Recovery reports and preserves a link
 to an unreferenced historical archive when ownership cannot be established.
-Restored absolute links with a known hash and complete CAS shard layout may
-be repaired after a data-directory move. Render-only refile changes projections
+Restored absolute links with a known hash and the beta.1/beta.2 two-shard or
+current three-shard CAS layout may be repaired. Render-only refile changes projections
 without OCR/classifier/filing reruns. [Backup and restore](/backup-restore) requires
 all of `DATA_DIR`, including credential keys, with writers stopped or an atomic
 whole-directory snapshot; a database-only copy is incomplete.

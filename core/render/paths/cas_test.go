@@ -12,12 +12,15 @@ func TestMatchesCASLink(t *testing.T) {
 	hash := "abcdef" + strings.Repeat("0123456789", 5) + "01234567"
 	root := t.TempDir()
 	canonical := filepath.Join(root, "blobs", "sha256", "ab", "cd", "ef", hash)
+	legacyBeta := filepath.Join(root, "blobs", "sha256", "ab", "cd", hash)
 	for _, tc := range []struct {
 		name, link, hash string
 		want             bool
 	}{
 		{"canonical", canonical, hash, true},
 		{"restored", filepath.Join(root, "old-data", "blobs", "sha256", "ab", "cd", "ef", hash), hash, true},
+		{"published beta layout", legacyBeta, hash, true},
+		{"published beta wrong shard", filepath.Join(root, "blobs", "sha256", "00", "cd", hash), hash, false},
 		{"filename only", filepath.Join(root, hash), hash, false},
 		{"relative", filepath.Join("blobs", "sha256", "ab", "cd", "ef", hash), hash, false},
 		{"unclean", root + string(filepath.Separator) + "unused" + string(filepath.Separator) + ".." + string(filepath.Separator) + filepath.Join("blobs", "sha256", "ab", "cd", "ef", hash), hash, false},
