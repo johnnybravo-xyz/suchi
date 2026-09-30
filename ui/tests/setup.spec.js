@@ -951,6 +951,7 @@ async function mockAPI(page, options = {}) {
       : { results: [{ id: 1, name: 'Archive search', scopes: 'documents:read', created_at: 1780100000 }] }
     else if (path === '/api/tasks/') {
       const include = new URL(request.url()).searchParams.get('include')
+      options.taskIncludes?.push(include)
       body = include === 'approvals' ? {
         counts: { approvals_open: options.approvalTasks?.length || 2 },
         results: [],
@@ -974,7 +975,7 @@ async function mockAPI(page, options = {}) {
             vars: { field: 'correspondent', proposed_value: 'HDFC Bank', current_value: '', confidence: 0.63, source: 'archive', sources: [{ document_id: 14, title: 'Bank statement' }], reason: 'review_first', policy_version: 'review-first-v1', source_current: true, review_conflict: false },
           },
         ],
-      } : { counts: {}, results: [] }
+      } : { counts: { dead: options.deadJobs?.length || 0 }, results: options.deadJobs || [] }
     }
     else if (documentDetail) {
       const documentID = Number(documentDetail[1])
@@ -4064,6 +4065,29 @@ test('groups metadata reviews by document', async ({ page }) => {
   if ((page.viewportSize()?.width || 0) > 1050) {
     expect(Math.round((await page.locator('.approval-grid[data-approval-kind="workflow"]').boundingBox()).width)).toBeLessThanOrEqual(820)
   }
+})
+
+test('shows dead-job recovery only to administrators', async ({ page }) => {
+  const deadJobs = [{
+    id: 41, kind: 'post-ingest', doc_id: 17, state: 'dead', attempts: 4,
+    last_error: 'document is unavailable', updated_at: 1780100000,
+  }]
+  const adminIncludes = []
+  await mockAPI(page, { deadJobs, taskIncludes: adminIncludes })
+  await page.goto('/#/tasks')
+  await expect(page.getByRole('heading', { name: 'Dead jobs — needs attention' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Retry', exact: true })).toBeVisible()
+  expect(adminIncludes).toContain('jobs')
+
+  await page.unrouteAll({ behavior: 'wait' })
+  const memberIncludes = []
+  await mockAPI(page, { userRole: 'member', deadJobs, taskIncludes: memberIncludes })
+  await page.reload()
+  await expect(page.getByRole('link', { name: 'HDFC receipt.pdf', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Dead jobs — needs attention' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Retry', exact: true })).toHaveCount(0)
+  expect(memberIncludes).toContain('approvals')
+  expect(memberIncludes).not.toContain('jobs')
 })
 
 test('keeps stale metadata visible, unknown actions read-only, and queued decisions distinct from application', async ({ page }) => {

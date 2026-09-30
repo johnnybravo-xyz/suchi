@@ -7,7 +7,7 @@
   import { DATE_ROLES, formatIntelligenceValue, canReviewDate, reviewFailure } from '../lib/intelligence.js'
   import Icon from '../lib/Icon.svelte'
 
-  let { notify, onCount, canReviewIntelligence = false } = $props()
+  let { notify, onCount, canReviewIntelligence = false, canManageJobs = false } = $props()
   let tasks = $state([])
   let jobs = $state([])
   let loading = $state(true)
@@ -26,7 +26,9 @@
     try {
       const [wf, jb, facts] = await Promise.all([
         listTasks({ include: 'approvals', state: 'pending', limit: 200 }),
-        listTasks({ include: 'jobs', state: 'dead', limit: 50 }),
+        canManageJobs
+          ? listTasks({ include: 'jobs', state: 'dead', limit: 50 })
+          : Promise.resolve({ results: [] }),
         canReviewIntelligence
           ? listIntelligence({ status: 'pending', page_size: 200 })
           : Promise.resolve({ results: [] }),
@@ -495,7 +497,7 @@
     </div>
   {/if}
 
-  {#if jobs.length}
+  {#if canManageJobs && jobs.length}
     <h3 style="font-size:.9rem;color:var(--muted);margin:0 0 8px">Dead jobs — needs attention</h3>
     <div class="index">
       {#each jobs as j (j.id)}

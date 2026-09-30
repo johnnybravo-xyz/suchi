@@ -7,6 +7,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 - Repair rendered links created by beta.1 and beta.2 when a stable-v1 refile
   verifies that the linked blob belongs to the document.
+- Keep operational dead-job details and the Retry/Dismiss recovery controls out
+  of member Approvals; administrators retain the audited recovery controls.
 
 
 ## [0.1.0] - 2026-09-28
