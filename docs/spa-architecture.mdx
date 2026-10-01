@@ -258,6 +258,19 @@ forms and their required-load/retry gates. Mailbox editing delegates to
 `EmailAccounts.svelte`; both automation entry points link to the existing
 `Automations.svelte` editor.
 
+`ConfigurationSection.svelte` owns the ChatGPT subscription connection form.
+It displays only a device code and verification URL, polls through the named
+`chatGPTLoginAction` API, and cancels timers on disposal or provider changes.
+The named `getChatGPTModels` operation loads the account catalog into a dropdown
+on connection, provider selection and saved-state reload. Dropdown changes use
+`saveChatGPTModel` to persist a separate preference, with saving/error/retry states;
+reload restores it without activating inference. Loading, empty and
+retry states gate connection testing. Generation checks reject late catalog or
+test results after provider/model changes or disposal. Tokens remain server-side.
+Connecting does not enable the model: the existing
+egress acknowledgement, connection test and save flow still apply. Verify the
+browser flow with `bun run e2e --grep 'ChatGPT subscription'`.
+
 Classification uses one shared **Classification options** block in both shells.
 Its checked-by-default **Automatically apply high-confidence suggestions**
 checkbox saves independently through **Save application mode**, using a standalone

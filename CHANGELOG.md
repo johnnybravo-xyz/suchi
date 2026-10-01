@@ -3,7 +3,20 @@
 Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
+### Added
+
+- Connect a ChatGPT Codex subscription in Classification settings using device
+  login, encrypted credentials, automatic refresh and streaming Responses for
+  classification and archive research, plus an account-backed model dropdown.
+  Document egress requires consent; connection testing explains that requirement.
+
 ### Fixed
+
+- Save ChatGPT dropdown selections automatically and restore them after refresh,
+  while keeping model activation and document egress consent explicit.
+
+- Read finalized text from ChatGPT subscription stream events when the completion
+  envelope omits its output, so connection testing and classification succeed.
 
 - Repair rendered links created by beta.1 and beta.2 when a stable-v1 refile
   verifies that the linked blob belongs to the document.
