@@ -4067,6 +4067,47 @@ test('groups metadata reviews by document', async ({ page }) => {
   }
 })
 
+test('keeps filing reviews compact and explains sources on demand', async ({ page }) => {
+  await mockAPI(page, {
+    approvalTasks: [{
+      id: 11, run_id: 5, approval_id: 1, approval_name: 'document-change',
+      doc_id: 233, doc_title: 'Mobile App Document Scan Queue Screen',
+      doc_jd_category_id: 49, doc_jd_category_code: 49, doc_jd_category_name: 'Inbox',
+      doc_has_thumbnail: false, state_key: 'review', assignee: 'user:1',
+      prompt: 'Review suggested category', choices: ['apply', 'reject'],
+      status: 'open', created_at: 1780100000,
+      vars: {
+        field: 'jd_category', current_value: 'Inbox', proposed_value: 'Receipts',
+        confidence: 0.76, source: 'archive', reason: 'review_first',
+        policy_version: 'review-first-v1', source_current: true, review_conflict: false,
+        sources: [
+          { document_id: 14, title: 'Swiggy Tax Invoice' },
+          { document_id: 15, title: 'H&M Online Shopping Tax Invoice' },
+        ],
+      },
+    }],
+  })
+
+  await page.goto('/#/tasks')
+  const review = page.locator('.decision-row')
+  await expect(review.getByText('File under “Receipts”?', { exact: true })).toBeVisible()
+  await expect(review.locator('.metadata-transition')).toHaveText(/Inbox\s*→\s*Receipts/)
+  await expect(review.getByText('Current', { exact: true })).toHaveCount(0)
+  await expect(review.getByText('Proposed', { exact: true })).toHaveCount(0)
+  await expect(review.getByText('Producer detail', { exact: true })).toHaveCount(0)
+
+  await expect(review.getByText('Why this was suggested', { exact: true })).toBeVisible()
+  await expect(review.getByText('Archive match', { exact: true })).toBeVisible()
+  const rationale = review.getByText('Similar documents (2)', { exact: true })
+  await expect(rationale).toBeVisible()
+  await expect(review.getByRole('link', { name: 'Swiggy Tax Invoice' })).not.toBeVisible()
+  await rationale.click()
+  await expect(review.getByRole('link', { name: 'Swiggy Tax Invoice' })).toBeVisible()
+  await expect(review.getByRole('link', { name: 'H&M Online Shopping Tax Invoice' })).toBeVisible()
+  await expect(review.getByRole('button', { name: 'File document', exact: true })).toBeVisible()
+  await expect(review.getByRole('button', { name: 'Dismiss', exact: true })).toBeVisible()
+})
+
 test('shows dead-job recovery only to administrators', async ({ page }) => {
   const deadJobs = [{
     id: 41, kind: 'post-ingest', doc_id: 17, state: 'dead', attempts: 4,

@@ -134,6 +134,19 @@
     return typeof vars?.proposed_value === 'string' ? vars.proposed_value : 'Unavailable'
   }
 
+  function sourceLabel(source) {
+    return {
+      archive: 'Archive match',
+      llm: 'Model suggestion',
+      'language-detector': 'Language detector',
+    }[source] || source
+  }
+
+  function supportingContextLabel(vars) {
+    const count = Array.isArray(vars?.sources) ? vars.sources.length : 0
+    return count ? `Similar documents (${count})` : 'Supporting context'
+  }
+
   function decisionPrompt(t) {
     if (t.approval_name !== 'document-change' || !t.vars) {
       return t.prompt || t.title || `Task #${t.id}`
@@ -443,24 +456,29 @@
                 </div>
               {/if}
               {#if t.approval_name === 'document-change' && t.vars}
-                <dl class="metadata-values">
-                  <div><dt>Current</dt><dd>{typeof t.vars.current_value === 'string' ? (t.vars.current_value || 'Not set') : 'Unavailable'}</dd></div>
-                  <div><dt>Proposed</dt><dd>{suggestionValue(t.vars)}</dd></div>
-                </dl>
-                {#if t.vars.evidence_text}<blockquote class="intelligence-evidence">“{t.vars.evidence_text}”</blockquote>{/if}
-                {#if t.vars.sources?.length}
-                  <ul class="review-sources">
-                    {#each t.vars.sources as source}
-                      <li><a href={filingHref(`#/doc/${source.document_id}`)}>{source.title || 'Open source document'}</a></li>
-                    {/each}
-                  </ul>
+                <div class="metadata-transition"
+                     aria-label={`Current ${typeof t.vars.current_value === 'string' ? (t.vars.current_value || 'Not set') : 'Unavailable'}; proposed ${suggestionValue(t.vars)}`}>
+                  <span>{typeof t.vars.current_value === 'string' ? (t.vars.current_value || 'Not set') : 'Unavailable'}</span>
+                  <span class="transition-arrow" aria-hidden="true">→</span>
+                  <strong>{suggestionValue(t.vars)}</strong>
+                </div>
+                {#if t.vars.source}
+                  <div class="suggestion-source">
+                    <span>Why this was suggested</span>
+                    <strong>{sourceLabel(t.vars.source)}</strong>
+                  </div>
                 {/if}
-                {#if typeof t.vars.confidence === 'number'}
-                  <details class="task-details">
-                    <summary>Producer detail</summary>
-                    <p>Score: {t.vars.confidence.toFixed(2)}</p>
-                    {#if t.vars.source === 'archive'}<p>Suggested from authorized archive sources.</p>
-                    {:else if t.vars.source === 'llm'}<p>Suggested by the configured model.</p>{/if}
+                {#if t.vars.evidence_text || t.vars.sources?.length}
+                  <details class="review-rationale">
+                    <summary>{supportingContextLabel(t.vars)}</summary>
+                    {#if t.vars.evidence_text}<blockquote class="intelligence-evidence">“{t.vars.evidence_text}”</blockquote>{/if}
+                    {#if t.vars.sources?.length}
+                      <ul class="review-sources">
+                        {#each t.vars.sources as source}
+                          <li><a href={filingHref(`#/doc/${source.document_id}`)}>{source.title || 'Open source document'}</a></li>
+                        {/each}
+                      </ul>
+                    {/if}
                   </details>
                 {/if}
               {/if}
@@ -585,11 +603,15 @@
   .review-toolbar { display:flex;align-items:center;justify-content:space-between;gap:12px;margin:10px 0 }
   .review-toolbar p { min-width:0;font-size:.8rem;color:var(--muted) }
   .review-toolbar button { flex:none }
-  .metadata-values { display:grid;gap:8px;margin:12px 0 }
-  .metadata-values > div { display:grid;grid-template-columns:65px minmax(0,1fr);gap:10px }
-  .metadata-values dt { color:var(--muted);font-size:.76rem }
-  .metadata-values dd { margin:0;font-size:.84rem;overflow-wrap:anywhere }
-  .intelligence-evidence { margin:6px 0;white-space:pre-wrap;overflow-wrap:anywhere }
+  .metadata-transition { display:flex;align-items:baseline;gap:10px;margin:12px 0;font-size:.84rem;overflow-wrap:anywhere }
+  .metadata-transition > span:first-child { color:var(--muted);min-width:0 }
+  .metadata-transition strong { min-width:0 }
+  .transition-arrow { color:var(--faint);flex:none }
+  .suggestion-source { display:flex;align-items:baseline;gap:10px;margin:8px 0;font-size:.78rem }
+  .suggestion-source span { color:var(--muted) }
+  .review-rationale { margin:8px 0;color:var(--muted);font-size:.78rem }
+  .review-rationale summary { cursor:pointer;width:max-content;max-width:100% }
+  .intelligence-evidence { margin:8px 0 6px;white-space:pre-wrap;overflow-wrap:anywhere }
   .review-sources { margin:8px 0;padding-left:18px;font-size:.78rem;overflow-wrap:anywhere }
   .review-error { color:var(--danger);font-size:.8rem;line-height:1.45;overflow-wrap:anywhere }
   @media (max-width: 1050px) {
