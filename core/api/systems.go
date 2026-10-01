@@ -138,8 +138,11 @@ func (s *Server) currentWriterPrincipal(ctx context.Context, tx *sql.Tx, p *plug
 		return nil, err
 	}
 	if p.TokenID != 0 {
-		var bound int64
-		if err := tx.QueryRowContext(ctx, "SELECT system_id FROM api_tokens WHERE id = ? AND user_id = ? AND revoked_at IS NULL", p.TokenID, p.UserID).Scan(&bound); err != nil {
+		var (
+			bound  int64
+			scopes string
+		)
+		if err := tx.QueryRowContext(ctx, "SELECT system_id, scopes FROM api_tokens WHERE id = ? AND user_id = ? AND revoked_at IS NULL", p.TokenID, p.UserID).Scan(&bound, &scopes); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return nil, errSystemUnavailable
 			}
@@ -148,6 +151,11 @@ func (s *Server) currentWriterPrincipal(ctx context.Context, tx *sql.Tx, p *plug
 		if bound != tokenSystemID(p) {
 			return nil, errSystemUnavailable
 		}
+		current.TokenSystemID = bound
+		current.Scopes = strings.Split(scopes, ",")
+	}
+	if !auth.HasScope(&current, auth.ScopeDocumentsWrite) {
+		return nil, errSystemUnavailable
 	}
 	allowed, err := s.canEnterSystem(ctx, tx, &current, systemID)
 	if err != nil {

@@ -456,36 +456,6 @@ func (s *Server) ResolveIntelligence(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		if body.Decision == "accepted" {
-			// An inferred fact can become accepted only through an active
-			// interactive review session, never possession of an API bearer.
-			if current.Kind != "user" || current.TokenID != 0 || current.SessionID == "" {
-				return errSystemUnavailable
-			}
-			now := time.Now().Unix()
-			if current.AuthExpiresAt != 0 && current.AuthExpiresAt <= now {
-				return errSystemUnavailable
-			}
-			var active int
-			if err := tx.QueryRowContext(r.Context(),
-				`SELECT 1 FROM sessions WHERE id=? AND user_id=? AND expires_at>?`,
-				current.SessionID, current.UserID, now).Scan(&active); err != nil {
-				if errors.Is(err, sql.ErrNoRows) {
-					return errSystemUnavailable
-				}
-				return err
-			}
-		}
-		if current.TokenID != 0 {
-			var scopes string
-			if err := tx.QueryRowContext(r.Context(), `SELECT scopes FROM api_tokens WHERE id=?`, current.TokenID).Scan(&scopes); err != nil {
-				return err
-			}
-			current.Scopes = strings.Split(scopes, ",")
-			if !auth.HasScope(current, auth.ScopeDocumentsWrite) {
-				return errSystemUnavailable
-			}
-		}
 		if current.Role != "admin" {
 			caps, err := s.userCapabilitiesInTx(r.Context(), tx, current.UserID)
 			if err != nil {

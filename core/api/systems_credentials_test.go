@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/crypto"
 	"github.com/johnnybravo-xyz/suchi/core/emailaccounts"
 	"github.com/johnnybravo-xyz/suchi/core/ingest/emailwatch/oauth"
@@ -162,6 +163,18 @@ func TestSystemsReplacementTokenCannotAuthorizeAnAlreadyAuthenticatedRevokedRequ
 	currentPrincipal, err := local.Authenticate(r)
 	if err != nil || currentPrincipal == nil {
 		t.Fatalf("authenticate replacement: %v", err)
+	}
+	if _, err := s.DB.Write.Exec(`UPDATE api_tokens SET scopes=? WHERE id=?`,
+		auth.ScopeDocumentsRead, currentPrincipal.TokenID); err != nil {
+		t.Fatal(err)
+	}
+	w = systemsBoundaryRequest(mux, "PATCH", "/api/documents/202", `{"title":"De-scoped request"}`, currentPrincipal)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("de-scoped request retained stale authority: %d %s", w.Code, w.Body.String())
+	}
+	if _, err := s.DB.Write.Exec(`UPDATE api_tokens SET scopes=? WHERE id=?`,
+		auth.ScopeDocumentsRead+","+auth.ScopeDocumentsWrite, currentPrincipal.TokenID); err != nil {
+		t.Fatal(err)
 	}
 	w = systemsBoundaryRequest(mux, "PATCH", "/api/documents/202", `{"title":"Authorized replacement"}`, currentPrincipal)
 	if w.Code != http.StatusOK {

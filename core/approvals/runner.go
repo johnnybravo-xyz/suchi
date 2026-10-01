@@ -511,12 +511,18 @@ func currentActor(ctx context.Context, tx *sql.Tx, actor *pluginapi.Principal, s
 	}
 	current := *actor
 	if err := tx.QueryRowContext(ctx, `SELECT role FROM users WHERE id = ? AND disabled = 0`, actor.UserID).Scan(&current.Role); err != nil {
-		return nil, ErrForbidden
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrForbidden
+		}
+		return nil, err
 	}
 	if actor.SessionID != "" {
 		var one int
 		if err := tx.QueryRowContext(ctx, `SELECT 1 FROM sessions WHERE id=? AND user_id=? AND expires_at>?`, actor.SessionID, actor.UserID, time.Now().Unix()).Scan(&one); err != nil {
-			return nil, ErrForbidden
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil, ErrForbidden
+			}
+			return nil, err
 		}
 	} else if actor.AuthNBy == "local-auth" && actor.Kind == "user" {
 		return nil, ErrForbidden
@@ -536,7 +542,13 @@ func currentActor(ctx context.Context, tx *sql.Tx, actor *pluginapi.Principal, s
 		if actor.TokenID != 0 {
 			var stored int64
 			var scopes string
-			if err := tx.QueryRowContext(ctx, `SELECT system_id, scopes FROM api_tokens WHERE id = ? AND user_id = ? AND revoked_at IS NULL`, actor.TokenID, actor.UserID).Scan(&stored, &scopes); err != nil || stored != bound {
+			if err := tx.QueryRowContext(ctx, `SELECT system_id, scopes FROM api_tokens WHERE id = ? AND user_id = ? AND revoked_at IS NULL`, actor.TokenID, actor.UserID).Scan(&stored, &scopes); err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return nil, ErrForbidden
+				}
+				return nil, err
+			}
+			if stored != bound {
 				return nil, ErrForbidden
 			}
 			current.Scopes = strings.Split(scopes, ",")

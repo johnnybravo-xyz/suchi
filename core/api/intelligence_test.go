@@ -656,43 +656,47 @@ func TestIntelligenceSensitiveEvidenceStaysBehindSourceReveal(t *testing.T) {
 	}
 }
 
-func TestDateAcceptanceRequiresCurrentInteractiveSession(t *testing.T) {
-	for _, credential := range []string{"bearer", "missing", "expired", "revoked", "other user"} {
-		t.Run(credential, func(t *testing.T) {
+func TestScopedTokenResolvesFreshIntelligence(t *testing.T) {
+	for _, decision := range []string{"accepted", "rejected"} {
+		t.Run(decision, func(t *testing.T) {
 			s := newIntelligenceTestServer(t)
 			seedChatDoc(t, s, 64, 1, "Policy", "Renews 2026-09-01", "internal", false)
 			id := seedDateIntelligence(t, s, 64, "pending", "2026-09-01")
-			p := interactiveIntelligenceReviewer(t, s, adminPrincipal(1))
-			switch credential {
-			case "bearer":
-				p.Kind = "token"
-				p.Scopes = []string{auth.ScopeDocumentsWrite}
-			case "missing":
-				p.SessionID = ""
-			case "expired":
-				if _, err := s.DB.Write.Exec(`UPDATE sessions SET expires_at=0 WHERE id=?`, p.SessionID); err != nil {
-					t.Fatal(err)
-				}
-			case "revoked":
-				if _, err := s.DB.Write.Exec(`DELETE FROM sessions WHERE id=?`, p.SessionID); err != nil {
-					t.Fatal(err)
-				}
-			case "other user":
-				if _, err := s.DB.Write.Exec(`UPDATE sessions SET user_id=2 WHERE id=?`, p.SessionID); err != nil {
-					t.Fatal(err)
-				}
-			}
-			rec := doIntelligenceRequest(t, s, http.MethodPost, "/api/intelligence/resolve",
-				`{"candidate_ids":[`+itoa(id)+`],"decision":"accepted"}`, p)
-			if rec.Code != http.StatusForbidden {
-				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-			}
-			var status string
-			if err := s.DB.Read.QueryRow(`SELECT status FROM document_intelligence WHERE id=?`, id).Scan(&status); err != nil {
+			if _, err := s.DB.Write.Exec(`
+				INSERT INTO api_tokens(id,system_id,user_id,name,token_hash,scopes,created_at)
+				VALUES(41,1,1,'review','hash','documents:read,documents:write',0)`); err != nil {
 				t.Fatal(err)
 			}
-			if status != "pending" {
-				t.Fatalf("noninteractive fact status=%q", status)
+			p := adminPrincipal(1)
+			p.Kind, p.TokenID, p.TokenSystemID = "token", 41, 1
+			p.Scopes = []string{auth.ScopeDocumentsRead, auth.ScopeDocumentsWrite}
+			rec := doIntelligenceRequest(t, s, http.MethodPost, "/api/intelligence/resolve",
+				`{"candidate_ids":[`+itoa(id)+`],"decision":"`+decision+`"}`, p)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			var response intelligenceMutationResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if response.Applied != 1 || len(response.Results) != 1 || !response.Results[0].OK {
+				t.Fatalf("response=%+v", response)
+			}
+			var status string
+			var reviewedBy int64
+			if err := s.DB.Read.QueryRow(`SELECT status,reviewed_by FROM document_intelligence WHERE id=?`, id).Scan(&status, &reviewedBy); err != nil {
+				t.Fatal(err)
+			}
+			if status != decision || reviewedBy != 1 {
+				t.Fatalf("status=%q reviewed_by=%d", status, reviewedBy)
+			}
+			var actorKind string
+			var actorID int64
+			if err := s.DB.Read.QueryRow(`SELECT actor_kind,actor_id FROM audit_events WHERE action='document_intelligence.resolve'`).Scan(&actorKind, &actorID); err != nil {
+				t.Fatal(err)
+			}
+			if actorKind != "token" || actorID != 41 {
+				t.Fatalf("audit actor=%s:%d", actorKind, actorID)
 			}
 		})
 	}

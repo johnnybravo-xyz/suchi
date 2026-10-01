@@ -195,6 +195,11 @@ Managing the mobile wire contract:
   number or a token lifetime. Keep advertising `suchi-companion-v1` while its
   mobile-v1 requests and responses remain usable. Compatible server releases do
   not need a new profile or a mobile release.
+- The v1 fixture set includes the generic mixed approval-task response and a
+  pending-date page used by Companion. The server does not add mobile-only
+  approval filters or counts: Companion selects supported `document-change`
+  title, category and tag rows plus pending dates locally, and ignores every
+  other workflow row.
 - When a change would break that promise (for example, removing a required
   endpoint/field or changing a response or scope requirement), define a new
   profile and its canonical fixtures under `core/api/testdata/mobile/`, document

@@ -579,21 +579,11 @@ func TestDocumentChangeSupporterACLRevocationBlocksQueuedEffect(t *testing.T) {
 	}
 }
 
-func TestDocumentChangeRequiresInteractiveReviewAndRechecksSession(t *testing.T) {
+func TestDocumentChangeRechecksSessionBeforeQueuedEffect(t *testing.T) {
 	e := newEngine(t)
 	seedDocumentForChange(t, e.DB())
 	ctx := context.Background()
-	if _, err := e.DB().Write.Exec(`INSERT INTO api_tokens(id,system_id,user_id,name,token_hash,scopes,created_at) VALUES(1,1,1,'review','hash','documents:write',0)`); err != nil {
-		t.Fatal(err)
-	}
 	runID, taskID := proposeTitleReview(t, e)
-	actor := &pluginapi.Principal{Kind: "token", TokenID: 1, TokenSystemID: 1, UserID: 1, Scopes: []string{"documents:write"}}
-	if err := e.Resolve(ctx, taskID, "apply", actor); !errors.Is(err, approvals.ErrForbidden) {
-		t.Fatalf("token is not interactive review: %v", err)
-	}
-	if err := e.Resolve(ctx, taskID, "apply", adminPrincipal()); !errors.Is(err, approvals.ErrForbidden) {
-		t.Fatalf("sessionless identity is not interactive review: %v", err)
-	}
 	if err := e.Resolve(ctx, taskID, "apply", interactiveReviewer(t, e)); err != nil {
 		t.Fatal(err)
 	}
@@ -605,6 +595,115 @@ func TestDocumentChangeRequiresInteractiveReviewAndRechecksSession(t *testing.T)
 	}
 	if err := e.Advance(ctx, runID, ""); !errors.Is(err, approvals.ErrForbidden) {
 		t.Fatalf("session revocation guard: %v", err)
+	}
+}
+
+func TestScopedTokenAppliesEveryDocumentChangeField(t *testing.T) {
+	tests := []struct {
+		name   string
+		change approvals.DocumentChange
+		setup  string
+		query  string
+		want   string
+	}{
+		{
+			name:   "title",
+			change: approvals.DocumentChange{Field: "title", Value: "Reviewed title", Confidence: .9, Source: "llm"},
+			query:  `SELECT title FROM documents WHERE id=10`,
+			want:   "Reviewed title",
+		},
+		{
+			name:   "language",
+			change: approvals.DocumentChange{Field: "language", Value: "en", Confidence: .9, Source: "llm"},
+			query:  `SELECT languages FROM documents WHERE id=10`,
+			want:   ",en,",
+		},
+		{
+			name:   "jd_category",
+			change: approvals.DocumentChange{Field: "jd_category", ValueID: 11, Confidence: .9, Source: "llm"},
+			setup:  `INSERT INTO jd_categories(system_id,id,area_start,code,name,system) VALUES(1,11,10,11,'Reviewed category',0)`,
+			query:  `SELECT CAST(jd_category_id AS TEXT) FROM documents WHERE id=10`,
+			want:   "11",
+		},
+		{
+			name:   "correspondent",
+			change: approvals.DocumentChange{Field: "correspondent", Value: "Reviewed correspondent", Confidence: .9, Source: "llm"},
+			query:  `SELECT c.name FROM document_correspondents dc JOIN correspondents c ON c.id=dc.correspondent_id WHERE dc.document_id=10`,
+			want:   "Reviewed correspondent",
+		},
+		{
+			name:   "document_type",
+			change: approvals.DocumentChange{Field: "document_type", Value: "Reviewed type", Confidence: .9, Source: "llm"},
+			query:  `SELECT dt.name FROM documents d JOIN document_types dt ON dt.id=d.document_type_id WHERE d.id=10`,
+			want:   "Reviewed type",
+		},
+		{
+			name:   "tag",
+			change: approvals.DocumentChange{Field: "tag", Value: "Reviewed tag", Confidence: .9, Source: "llm"},
+			query:  `SELECT t.name FROM document_tags d JOIN tags t ON t.id=d.tag_id WHERE d.document_id=10`,
+			want:   "Reviewed tag",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			e := newEngine(t)
+			seedDocumentForChange(t, e.DB())
+			if test.setup != "" {
+				if _, err := e.DB().Write.Exec(test.setup); err != nil {
+					t.Fatal(err)
+				}
+			}
+			runID, taskID := proposeDocumentReview(t, e, test.change)
+			if err := e.Resolve(t.Context(), taskID, "apply", scopedTokenReviewer(t, e)); err != nil {
+				t.Fatal(err)
+			}
+			if err := e.Advance(t.Context(), runID, "apply"); err != nil {
+				t.Fatal(err)
+			}
+			if err := e.Advance(t.Context(), runID, ""); err != nil {
+				t.Fatal(err)
+			}
+			var got string
+			if err := e.DB().Read.QueryRow(test.query).Scan(&got); err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want {
+				t.Fatalf("result=%q, want %q", got, test.want)
+			}
+			var actorKind string
+			var actorID int64
+			if err := e.DB().Read.QueryRow(`SELECT actor_kind,actor_id FROM audit_events WHERE action='document.suggestion_apply' AND object_id=10`).Scan(&actorKind, &actorID); err != nil {
+				t.Fatal(err)
+			}
+			if actorKind != "token" || actorID != 1 {
+				t.Fatalf("audit actor=%s:%d", actorKind, actorID)
+			}
+		})
+	}
+}
+
+func TestDocumentChangeRechecksTokenBeforeQueuedEffect(t *testing.T) {
+	e := newEngine(t)
+	seedDocumentForChange(t, e.DB())
+	runID, taskID := proposeTitleReview(t, e)
+	if err := e.Resolve(t.Context(), taskID, "apply", scopedTokenReviewer(t, e)); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Advance(t.Context(), runID, "apply"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.DB().Write.Exec(`UPDATE api_tokens SET revoked_at=1 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Advance(t.Context(), runID, ""); !errors.Is(err, approvals.ErrForbidden) {
+		t.Fatalf("revoked token effect: %v", err)
+	}
+	var title string
+	if err := e.DB().Read.QueryRow(`SELECT title FROM documents WHERE id=10`).Scan(&title); err != nil {
+		t.Fatal(err)
+	}
+	if title != "scan.pdf" {
+		t.Fatalf("revoked token changed title: %q", title)
 	}
 }
 
@@ -854,6 +953,17 @@ func TestDocumentChangeCreatesNamedMetadataOnlyAfterReview(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("render jobs=%d, want durable metadata view update", count)
+	}
+}
+
+func scopedTokenReviewer(t *testing.T, e *approvals.Engine) *pluginapi.Principal {
+	t.Helper()
+	if _, err := e.DB().Write.Exec(`INSERT INTO api_tokens(id,system_id,user_id,name,token_hash,scopes,created_at) VALUES(1,1,1,'review','hash','documents:write',0)`); err != nil {
+		t.Fatal(err)
+	}
+	return &pluginapi.Principal{
+		Kind: "token", TokenID: 1, TokenSystemID: 1, UserID: 1,
+		Scopes: []string{"documents:write"},
 	}
 }
 

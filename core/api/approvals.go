@@ -525,7 +525,10 @@ func (s *Server) documentChangeReviewVars(ctx context.Context, docID int64, vars
 	if err != nil {
 		return nil, err
 	}
-	if !allowed || p == nil || p.SessionID == "" || p.Kind != "user" || p.TokenID != 0 {
+	canResolve := p != nil &&
+		((p.Kind == "user" && p.TokenID == 0 && p.SessionID != "") ||
+			(p.TokenID != 0 && auth.HasScope(p, auth.ScopeDocumentsWrite)))
+	if !allowed || !canResolve {
 		out["review_conflict"] = true
 	}
 	var owner *pluginapi.Principal

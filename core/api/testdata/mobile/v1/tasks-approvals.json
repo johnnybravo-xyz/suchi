@@ -1,0 +1,157 @@
+{
+  "counts": {
+    "pending": 0,
+    "running": 0,
+    "done": 12,
+    "dead": 0,
+    "approvals_open": 6
+  },
+  "results": [],
+  "approval_tasks": [
+    {
+      "id": 301,
+      "run_id": 201,
+      "approval_id": 11,
+      "doc_id": 93,
+      "doc_title": "March electricity bill",
+      "state_key": "review",
+      "assignee": "user:7",
+      "prompt": "Review suggested title",
+      "approval_name": "document-change",
+      "choices": ["apply", "reject"],
+      "status": "open",
+      "created_at": 1785779600,
+      "vars": {
+        "field": "title",
+        "reason": "low_confidence",
+        "policy_version": "review-first-v1",
+        "confidence": 0.73,
+        "source": "llm",
+        "threshold": 0.8,
+        "source_current": true,
+        "review_conflict": false,
+        "current_value": "scan.pdf",
+        "proposed_value": "Electricity bill, March 2026",
+        "sources": [
+          {"document_id": 88, "title": "February electricity bill"}
+        ]
+      }
+    },
+    {
+      "id": 302,
+      "run_id": 202,
+      "approval_id": 11,
+      "doc_id": 94,
+      "doc_title": "Lease",
+      "state_key": "review",
+      "assignee": "user:7",
+      "prompt": "Review suggested tag",
+      "approval_name": "document-change",
+      "choices": ["apply", "reject"],
+      "status": "claimed",
+      "created_at": 1785779500,
+      "vars": {
+        "field": "tag",
+        "reason": "review_first",
+        "policy_version": "review-first-v1",
+        "confidence": 0.91,
+        "source": "archive",
+        "threshold": 0.8,
+        "source_current": true,
+        "review_conflict": false,
+        "current_value": "",
+        "proposed_value": "Renewals",
+        "sources": []
+      }
+    },
+    {
+      "id": 305,
+      "run_id": 205,
+      "approval_id": 11,
+      "doc_id": 96,
+      "doc_title": "Current account statement",
+      "state_key": "review",
+      "assignee": "user:7",
+      "prompt": "Review suggested category",
+      "approval_name": "document-change",
+      "choices": ["apply", "reject"],
+      "status": "open",
+      "created_at": 1785779450,
+      "vars": {
+        "field": "jd_category",
+        "reason": "review_first",
+        "policy_version": "review-first-v1",
+        "confidence": 0.76,
+        "source": "archive",
+        "threshold": 0.8,
+        "source_current": true,
+        "review_conflict": false,
+        "current_value": "",
+        "proposed_value": "12 Banking",
+        "sources": [
+          {"document_id": 89, "title": "Previous account statement"}
+        ]
+      }
+    },
+    {
+      "id": 303,
+      "run_id": 203,
+      "approval_id": 12,
+      "state_key": "review",
+      "assignee": "role:admin",
+      "prompt": "Review rescan proposal",
+      "approval_name": "rescan-proposal",
+      "choices": ["rescan_all", "try_20", "dismiss"],
+      "status": "open",
+      "created_at": 1785779400,
+      "vars": {
+        "pipeline": "post-classify",
+        "matching_documents": 520
+      }
+    },
+    {
+      "id": 306,
+      "run_id": 206,
+      "approval_id": 11,
+      "doc_id": 97,
+      "doc_title": "Service agreement",
+      "state_key": "review",
+      "assignee": "user:7",
+      "prompt": "Review suggested document type",
+      "approval_name": "document-change",
+      "choices": ["apply", "reject"],
+      "status": "open",
+      "created_at": 1785779350,
+      "vars": {
+        "field": "document_type",
+        "reason": "review_first",
+        "policy_version": "review-first-v1",
+        "confidence": 0.84,
+        "source": "archive",
+        "threshold": 0.8,
+        "source_current": true,
+        "review_conflict": false,
+        "current_value": "",
+        "proposed_value": "Agreement",
+        "sources": []
+      }
+    },
+    {
+      "id": 304,
+      "run_id": 204,
+      "approval_id": 13,
+      "doc_id": 95,
+      "doc_title": "Supplier invoice",
+      "state_key": "manager_review",
+      "assignee": "user:7",
+      "prompt": "Approve invoice",
+      "approval_name": "invoice-approval",
+      "choices": ["approve", "reject"],
+      "status": "open",
+      "created_at": 1785779300,
+      "vars": {
+        "invoice_total": "125.00"
+      }
+    }
+  ]
+}

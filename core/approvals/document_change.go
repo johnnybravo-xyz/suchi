@@ -102,10 +102,10 @@ func ProposeDocumentChangeInTx(ctx context.Context, tx *sql.Tx, docID int64, cha
 	// swallow a fresh proposal. Retain resolved tasks as immutable history.
 	for {
 		var existing Run
-		err = tx.QueryRowContext(ctx, `SELECT id,current_state,revision FROM approval_runs WHERE def_id=? AND doc_id=? AND state='running'
+		err = tx.QueryRowContext(ctx, `SELECT id,system_id,current_state,revision FROM approval_runs WHERE def_id=? AND doc_id=? AND state='running'
  AND json_extract(vars_json,'$.field')=? AND json_extract(vars_json,'$.value_id')=?
  AND json_extract(vars_json,'$.value')=? AND json_extract(vars_json,'$.baseline') IS json_extract(?,'$.baseline')
- AND json_extract(vars_json,'$.supporters') IS json_extract(?,'$.supporters') LIMIT 1`, d.ID, docID, change.Field, change.ValueID, change.Value, string(encoded), string(encoded)).Scan(&existing.ID, &existing.CurrentState, &existing.revision)
+ AND json_extract(vars_json,'$.supporters') IS json_extract(?,'$.supporters') LIMIT 1`, d.ID, docID, change.Field, change.ValueID, change.Value, string(encoded), string(encoded)).Scan(&existing.ID, &existing.SystemID, &existing.CurrentState, &existing.revision)
 		if errors.Is(err, sql.ErrNoRows) {
 			break
 		}
@@ -164,8 +164,8 @@ func ApplyAutomaticDocumentChangeInTx(ctx context.Context, tx *sql.Tx, log *slog
 }
 
 // Only a resolved apply decision can have exhausted its authorization. Initial
-// entry and open reviews still deduplicate, as do decisions whose bound session
-// remains usable. This never substitutes a newer session for the recorded one.
+// entry and open reviews still deduplicate, as do decisions whose recorded
+// principal remains usable. A newer credential never revives an old decision.
 func documentChangeAuthorizationUnusable(ctx context.Context, tx *sql.Tx, run Run) (bool, error) {
 	revision := run.revision
 	switch run.CurrentState {
@@ -191,20 +191,15 @@ func documentChangeAuthorizationUnusable(ctx context.Context, tx *sql.Tx, run Ru
 	if err := json.Unmarshal([]byte(principalJSON), &proof); err != nil {
 		return true, nil
 	}
-	if proof.SessionID == "" || proof.Principal.Kind != "user" || proof.Principal.TokenID != 0 {
-		return true, nil
+	actor := proof.Principal
+	actor.SessionID, actor.AuthExpiresAt = proof.SessionID, proof.AuthExpiresAt
+	if _, err := currentActor(ctx, tx, &actor, run.SystemID); err != nil {
+		if errors.Is(err, ErrForbidden) {
+			return true, nil
+		}
+		return false, err
 	}
-	now := time.Now().Unix()
-	if proof.AuthExpiresAt != 0 && proof.AuthExpiresAt <= now {
-		return true, nil
-	}
-	var active int
-	err = tx.QueryRowContext(ctx, `SELECT 1 FROM sessions WHERE id=? AND user_id=? AND expires_at>?`,
-		proof.SessionID, proof.Principal.UserID, now).Scan(&active)
-	if errors.Is(err, sql.ErrNoRows) {
-		return true, nil
-	}
-	return false, err
+	return false, nil
 }
 
 func validateDocumentChange(c DocumentChange) error {
@@ -263,11 +258,6 @@ func checkDocumentChange(ctx context.Context, tx *sql.Tx, docID int64, c Documen
 	// bypass. Keep that ceiling for archive matches and model naming context.
 	owner.Role = "member"
 	if reviewer != nil {
-		// Only an authenticated interactive browser session can turn this review
-		// into a write. Scoped API/OIDC bearer possession is not human review.
-		if reviewer.SessionID == "" || reviewer.Kind != "user" || reviewer.TokenID != 0 {
-			return "", ErrForbidden
-		}
 		if err := canReviewDocument(ctx, tx, reviewer, current.SystemID, docID, authz.PermChange); err != nil {
 			return "", err
 		}

@@ -24,8 +24,8 @@ remains subject to an explicit request or token system boundary.
 Turn off **Automatically apply high-confidence suggestions** to require review
 of inferred dates, model metadata and local archive matches. Explicit
 user-authored rules remain independent. Suchi checks source freshness, evidence,
-field generations, access and the current session before recording or applying a
-decision.
+field generations, access and the current reviewer credential before recording
+or applying a decision.
 
 ## Model
 
@@ -113,10 +113,17 @@ curl -X POST \
 ```
 
 `$TOKEN` needs `documents:write` and change access to document 17.
+A live browser/OIDC session or an API token with `documents:write` may resolve
+routine reviews. The writer transaction reloads the user, token binding and
+token scopes before accepting the decision.
 
 The assignee resolves the resulting task from the Approvals screen or API. A
 resolution enqueues the next advancement; the HTTP request does not run the
 whole state machine inline.
+
+`GET /api/tasks/?include=approvals` remains a generic mixed workflow feed.
+Clients may render only the approval definitions and fields they understand;
+unknown rows stay available to other clients and the web application.
 
 ## Timeouts and recovery
 
@@ -158,23 +165,26 @@ to use review-first mode: valid inferred changes need review even at confidence 
 Below-threshold or otherwise review-required changes still appear here. The
 card leads with current/proposed values and a reason; producer, score and
 authorized source details expand on demand.
+Companion presents title, filing-category and tag suggestions from this same
+feed; other document-change fields remain available in the web review surface.
 
 The retained proposal binds the target's immutable source and field generation,
 plus any supporting documents. Human writes and explicit clears invalidate older
 proposals even when the final value is unchanged. Source, membership, document
-ACL, destination and interactive session are checked at resolution and again at
+ACL, destination and reviewer authority are checked at resolution and again at
 the queued write. Creating new shared metadata also requires its current
 administrative authority. Hidden supporting documents are never exposed by review.
 
 **Apply** records a decision and queues the effect; it does not promise the field
-already changed. A later revocation, source edit or expired session can block that
-effect. After authorization expiry, a newly requested identical inference can
-create a fresh review without reusing the old session. Duplicate live proposals
-and repeated resolution requests do not create duplicate applications.
+already changed. A later credential revocation, scope removal, source edit or
+authority change can block that effect. After authorization expiry, a newly
+requested identical inference can create a fresh review without reusing the old
+decision. Duplicate live proposals and repeated resolution requests do not create
+duplicate applications.
 
 **Dismiss** closes the suggestion without applying it. Unknown actions are
-read-only. API tokens may resolve supported generic workflows, but cannot apply
-these built-in inference suggestions as if they were interactive human review.
+read-only. Scoped API tokens may resolve these built-in suggestions, but the same
+source, field, ACL, destination, vocabulary and policy checks still gate the write.
 
 If the source or target changes before review, Suchi records a `superseded`
 transition, expires the task and cancels the run. Human metadata edits do this

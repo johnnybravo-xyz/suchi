@@ -27,8 +27,14 @@ func TestMobileContractFixturesMatchWireTypes(t *testing.T) {
 		"error.json":           func() any { return &errBody{} },
 		"handshake.json":       func() any { return &handshakeResponse{} },
 		"jd-categories.json":   func() any { return &Envelope[JDCategory]{} },
-		"search-page.json":     func() any { return &Envelope[SearchHit]{} },
+		"intelligence-pending-dates.json": func() any {
+			return &Envelope[IntelligenceRow]{}
+		},
+		"search-page.json": func() any { return &Envelope[SearchHit]{} },
 		"tasks-processing.json": func() any {
+			return &TasksResponse{}
+		},
+		"tasks-approvals.json": func() any {
 			return &TasksResponse{}
 		},
 		"upload-created.json":  func() any { return &UploadResponse{} },

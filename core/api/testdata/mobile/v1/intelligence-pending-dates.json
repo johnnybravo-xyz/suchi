@@ -1,0 +1,31 @@
+{
+  "count": 1,
+  "results": [
+    {
+      "id": 401,
+      "document_id": 93,
+      "document_title": "March electricity bill",
+      "document_sensitivity": "internal",
+      "document_has_thumbnail": false,
+      "type": "date",
+      "role": "renewal",
+      "value": {
+        "date": "2027-03-01",
+        "precision": "month"
+      },
+      "sort_value": "2027-03-01",
+      "raw_text": "renews in March 2027",
+      "evidence_text": "This agreement renews in March 2027.",
+      "evidence_start": 24,
+      "confidence": 0.86,
+      "status": "pending",
+      "extractor": "llm-classifier",
+      "extraction_version": 2,
+      "created_at": 1785779600,
+      "updated_at": 1785779600,
+      "reason": "important_fact",
+      "policy_version": "review-first-v1",
+      "source_current": true
+    }
+  ]
+}

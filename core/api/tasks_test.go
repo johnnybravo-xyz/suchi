@@ -534,6 +534,17 @@ func TestDocumentChangeReviewProjectionUsesOwnerSourceAccess(t *testing.T) {
 	if sources := projected["sources"].([]map[string]any); len(sources) != 1 || sources[0]["document_id"] != int64(102) {
 		t.Fatalf("authorized supporter projection = %+v", sources)
 	}
+
+	token := adminPrincipal(1)
+	token.Kind, token.TokenID, token.TokenSystemID = "token", 1, 1
+	token.Scopes = []string{auth.ScopeDocumentsRead, auth.ScopeDocumentsWrite}
+	projected, err = s.documentChangeReviewVars(auth.WithPrincipal(t.Context(), token), 101, vars)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projected["review_conflict"] != false {
+		t.Fatalf("scoped token remained conflicted: %+v", projected)
+	}
 }
 
 func TestApprovalTasksForUser_ExcludesResolved(t *testing.T) {
