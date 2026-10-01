@@ -159,7 +159,7 @@ func TestScratchBrowserEntriesKeepAPIRestrictions(t *testing.T) {
 func TestTokenPolicyRoutingBoundaries(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/documents/{id}/decrypt", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
-	for _, pattern := range []string{"GET /api/handshake", "GET /api/documents/", "GET /api/documents/{id}/download", "PATCH /api/documents/{id}", "GET /api/events/", "GET /api/future-secret", "GET /debug/pprof/", "POST /api/tokens/", "POST /api/chat", "POST /api/approvals/definitions"} {
+	for _, pattern := range []string{"GET /api/handshake", "GET /api/documents/", "GET /api/documents/{id}/download", "PATCH /api/documents/{id}", "GET /api/events/", "GET /api/future-secret", "GET /debug/pprof/", "POST /api/tokens/", "POST /api/chat", "POST /api/approvals/definitions", "POST /api/admin/settings/llm/chatgpt/{action}", "GET /api/admin/settings/llm/chatgpt/models"} {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	}
 	mux.Handle("GET /metrics", requireOperationalAdmin(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })))
@@ -184,6 +184,8 @@ func TestTokenPolicyRoutingBoundaries(t *testing.T) {
 		{"profiling session only", "GET", "/debug/pprof/", auth.ScopeDocumentsRead, "admin", "token", 403},
 		{"metrics admin token compatibility", "GET", "/metrics", auth.ScopeEventsRead, "admin", "token", 204},
 		{"metrics remains admin only", "GET", "/metrics", auth.ScopeEventsRead, "member", "token", 403},
+		{"ChatGPT catalog session only", "GET", "/api/admin/settings/llm/chatgpt/models", auth.ScopeDocumentsRead, "admin", "token", 403},
+		{"ChatGPT login session only", "POST", "/api/admin/settings/llm/chatgpt/start", auth.ScopeDocumentsWrite, "admin", "token", 403},
 		{"token management session only", "POST", "/api/tokens/", auth.ScopeDocumentsRead, "member", "token", 403},
 		{"chat reads documents", "POST", "/api/chat", auth.ScopeDocumentsRead, "member", "token", 204},
 		{"chat denies events token", "POST", "/api/chat", auth.ScopeEventsRead, "member", "token", 403},

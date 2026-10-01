@@ -26,6 +26,7 @@ setup and choose:
 
 - **Local model** for Ollama or another endpoint on the trusted network
 - **Hosted endpoint** for a provider on the public internet
+- **ChatGPT subscription** for a ChatGPT account with Codex access
 
 Configure endpoint, model, optional API key, confidence threshold, and enabled
 state. The same screen controls local archive matching and its automatic/review
@@ -38,6 +39,40 @@ API keys are sealed before entering SQLite. Leaving the key field blank keeps
 the stored value; **Clear the stored API key** removes the web-managed value.
 A key pinned in the config file or environment remains active until the
 operator changes that source and restarts Suchi.
+
+## ChatGPT Codex subscription
+
+Choose **ChatGPT subscription**, then **Connect ChatGPT**. Open the device-login
+link and enter the displayed code; approval happens on OpenAI's site. Device
+login may need to be enabled in your ChatGPT security settings. After connecting,
+Suchi fetches the account's model catalog and fills a dropdown, initially selecting
+the first returned model when the saved selection is unavailable. Your dropdown
+choice saves automatically and survives a page refresh. Changing this preference
+does not change the active model until you test and enable it. Choose a model,
+acknowledge document egress, and use **Test connection** before enabling the model. Login alone does not enable inference.
+
+This is an instance-wide AI credential: classification and authorized archive
+research consume the connected account's subscription allowance. It does not
+change Suchi's local/OIDC user sign-in. Suchi uses the Codex device-login and
+streaming Responses endpoints, matching the subscription protocol rather than
+API-key chat completions. No Codex executable is required. Use **Refresh models** to retry a failed catalog request or refresh the options.
+Catalog membership does not guarantee inference entitlement. Model access and
+limits depend on the account; a successful connection test verifies that request.
+
+Access and refresh tokens are encrypted in SQLite using `.decrypt-key`, never
+returned to the browser, and refreshed on demand under a single lock. Pending
+codes expire after 15 minutes, are bound to the initiating administrator, and
+are lost on restart. **Disconnect ChatGPT** deletes Suchi's saved credential and
+stops the active subscription model. Manage upstream account permissions in
+ChatGPT as well. Back up the data directory including its encryption key.
+
+The fixed endpoint is `https://chatgpt.com/backend-api/codex`. Setting it through
+`LLM_ENDPOINT_URL` still requires web login and `LLM_EGRESS_ACK=true`;
+`LLM_API_KEY` is not used for subscription requests. Subscription inference sends
+no tools and does not store Responses remotely. It uses prompt-based JSON output
+followed by the same application validation as other providers. The backend does
+not accept the chat-completions token-limit setting; requests are bounded by
+Suchi's timeout and response-size limit, and incomplete streams are rejected.
 
 ## Local Ollama
 

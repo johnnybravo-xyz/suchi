@@ -38,6 +38,8 @@ func (s *Server) registerArchiveConfiguration(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/admin/settings/llm", s.PatchLLMSettings)
 	mux.HandleFunc("POST /api/admin/settings/llm", s.SaveLLMSettings)
 	mux.HandleFunc("POST /api/admin/settings/llm/test", s.TestLLMSettings)
+	mux.HandleFunc("POST /api/admin/settings/llm/chatgpt/{action}", s.ChatGPTLoginAction)
+	mux.HandleFunc("GET /api/admin/settings/llm/chatgpt/models", s.ChatGPTModels)
 	mux.HandleFunc("GET /api/admin/settings/preferences", s.GetPreferences)
 	mux.HandleFunc("POST /api/admin/settings/preferences", s.SavePreferences)
 	mux.HandleFunc("GET /api/admin/settings/ingest", s.GetIngestSettings)
@@ -374,12 +376,17 @@ func (s *Server) validateLLMSettings(ctx context.Context, w http.ResponseWriter,
 func (s *Server) loadLLMSettingsStatus(ctx context.Context) (LLMSettingsStatus, error) {
 	archive := settings.ResolveArchiveClassifierConfig(ctx, s.DB)
 	researchContextMode := settings.ResolveResearchContextMode(ctx, s.DB)
+	var chatGPTModel string
+	if err := settings.Get(ctx, s.DB, settings.KeyChatGPTModel, &chatGPTModel); err != nil && !errors.Is(err, settings.ErrNotFound) {
+		return LLMSettingsStatus{}, err
+	}
 	autoApply, err := settings.ResolveAutoApply(ctx, s.DB.Read)
 	if err != nil {
 		return LLMSettingsStatus{}, err
 	}
 	if s.LLMStatusReader != nil {
 		status, err := s.LLMStatusReader(ctx)
+		status.ChatGPTModel = chatGPTModel
 		status.AutoApply = autoApply
 		status.ArchiveEnabled = archive.Enabled
 		status.ArchiveAuto = archive.AutoThreshold
@@ -395,6 +402,7 @@ func (s *Server) loadLLMSettingsStatus(ctx context.Context) (LLMSettingsStatus, 
 	return LLMSettingsStatus{
 		Enabled:             enabled,
 		Active:              false,
+		ChatGPTModel:        chatGPTModel,
 		EndpointURL:         cfg.EndpointURL,
 		Model:               cfg.Model,
 		EgressAck:           cfg.EgressAck,
@@ -420,8 +428,8 @@ func (s *Server) GetLLMSettings(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, status)
 }
 
-// PatchLLMSettings independently saves one classification policy or research
-// preset without touching model activation, credentials, or existing reviews.
+// PatchLLMSettings independently saves a policy, research preset, or ChatGPT
+// model preference without touching activation, credentials, or existing reviews.
 func (s *Server) PatchLLMSettings(w http.ResponseWriter, r *http.Request) {
 	if s.requireAdmin(w, r) == nil {
 		return
@@ -429,14 +437,34 @@ func (s *Server) PatchLLMSettings(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		AutoApply           json.RawMessage `json:"auto_apply"`
 		ResearchContextMode json.RawMessage `json:"research_context_mode"`
+		ChatGPTModel        json.RawMessage `json:"chatgpt_model"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
-	if (body.AutoApply == nil) == (body.ResearchContextMode == nil) {
+	fields := 0
+	for _, value := range []json.RawMessage{body.AutoApply, body.ResearchContextMode, body.ChatGPTModel} {
+		if value != nil {
+			fields++
+		}
+	}
+	if fields != 1 {
 		s.writeError(w, http.StatusBadRequest, "bad_settings_patch",
-			"provide exactly one of auto_apply or research_context_mode")
+			"provide exactly one of auto_apply, research_context_mode or chatgpt_model")
+		return
+	}
+	if body.ChatGPTModel != nil {
+		var model string
+		if err := json.Unmarshal(body.ChatGPTModel, &model); err != nil || !modelSafe.MatchString(model) {
+			s.writeError(w, http.StatusBadRequest, "bad_chatgpt_model", "chatgpt_model must be a valid model identifier")
+			return
+		}
+		if err := settings.Set(r.Context(), s.DB, settings.KeyChatGPTModel, model); err != nil {
+			s.serverErr(w, "settings.llm.chatgpt_model", err)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, map[string]string{"chatgpt_model": model})
 		return
 	}
 	if body.AutoApply != nil {
@@ -914,4 +942,34 @@ func isUniqueViolation(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "UNIQUE constraint failed") ||
 		strings.Contains(msg, "(2067)")
+}
+
+// ChatGPTLoginAction is session-only; credentials never cross this boundary.
+func (s *Server) ChatGPTModels(w http.ResponseWriter, r *http.Request) {
+	s.chatGPTAction(w, r, "models")
+}
+
+func (s *Server) ChatGPTLoginAction(w http.ResponseWriter, r *http.Request) {
+	s.chatGPTAction(w, r, r.PathValue("action"))
+}
+
+func (s *Server) chatGPTAction(w http.ResponseWriter, r *http.Request, action string) {
+	actor := s.requireAdmin(w, r)
+	if actor == nil {
+		return
+	}
+	if action != "start" && action != "poll" && action != "cancel" && action != "disconnect" && !(r.Method == http.MethodGet && action == "models") {
+		s.writeError(w, 400, "bad_action", "Unknown login action")
+		return
+	}
+	if s.ChatGPTLogin == nil {
+		s.writeError(w, 503, "login_unavailable", "ChatGPT login is unavailable")
+		return
+	}
+	result, err := s.ChatGPTLogin(r.Context(), actor.UserID, action)
+	if err != nil {
+		s.writeError(w, 502, "chatgpt_login_failed", err.Error())
+		return
+	}
+	s.writeJSON(w, 200, result)
 }

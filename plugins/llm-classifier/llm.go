@@ -109,10 +109,11 @@ func (*completionTruncatedError) CompletionTruncated() bool { return true }
 
 // Config carries per-instance knobs. Zero-value = disabled.
 type Config struct {
-	EndpointURL string // e.g. https://api.openai.com/v1 or http://localhost:11434/v1
-	Model       string // e.g. gpt-4o-mini or llama3
-	APIKey      string // optional for local endpoints
-	EgressAck   bool   // must be true when EndpointURL is not local
+	EndpointURL       string                                           // e.g. https://api.openai.com/v1 or http://localhost:11434/v1
+	Model             string                                           // e.g. gpt-4o-mini or llama3
+	APIKey            string                                           // optional for local endpoints
+	ChatGPTCredential func(context.Context) (ChatGPTCredential, error) // fixed subscription endpoint only
+	EgressAck         bool                                             // must be true when EndpointURL is not local
 
 	// ConfidenceThreshold is the automatic score floor when application mode
 	// allows it. Metadata and each date are scored independently. Default 0.7.
@@ -435,6 +436,9 @@ func (p *Plugin) doCompletion(ctx context.Context, rt *runtime, body []byte) ([]
 	cfg := rt.cfg
 	if !rt.local {
 		p.log.Info("llm-classifier.egress", "host", rt.host, "model", cfg.Model)
+	}
+	if strings.TrimRight(cfg.EndpointURL, "/") == ChatGPTEndpoint {
+		return p.chatGPTCompletion(ctx, rt, body)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		strings.TrimRight(cfg.EndpointURL, "/")+"/chat/completions",

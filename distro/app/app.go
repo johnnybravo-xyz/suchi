@@ -328,9 +328,11 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	// Register a disabled shell even when no endpoint is configured. Its stable
 	// handler lets the setup API activate the classifier without a restart.
+	chatGPT := llmclassifier.NewChatGPTLogin(d, decryptKey)
 	llm := llmclassifier.NewDisabled(log)
-	if !resolvedLLM.Disabled {
+	if !resolvedLLM.Disabled && !(strings.TrimRight(resolvedLLM.EndpointURL, "/") == llmclassifier.ChatGPTEndpoint && !chatGPT.Connected(ctx)) {
 		configured, err := llmclassifier.New(llmclassifier.Config{
+			ChatGPTCredential:   chatGPT.Credential,
 			EndpointURL:         resolvedLLM.EndpointURL,
 			Model:               resolvedLLM.Model,
 			APIKey:              resolvedLLM.APIKey,
@@ -525,6 +527,13 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	apiSrv.EmailChangeModeFor = emailChangeModeFor
 	apiSrv.LLMAEAD = decryptKey
+	apiSrv.ChatGPTLogin = func(rctx context.Context, owner int64, action string) (map[string]any, error) {
+		result, err := chatGPT.Action(rctx, owner, action)
+		if err == nil && action == "disconnect" && strings.TrimRight(llm.Config().EndpointURL, "/") == llmclassifier.ChatGPTEndpoint {
+			llm.Disable()
+		}
+		return result, err
+	}
 	apiSrv.ChatEnabled = llm.Enabled
 	apiSrv.ChatRuntimeInfo = llm.RuntimeInfo
 	apiSrv.ChatCompletion = func(rctx context.Context, system string, messages []api.ChatCompletionMessage, maxTokens int) (string, error) {
@@ -582,6 +591,10 @@ func Run(ctx context.Context, opts Options) error {
 			runtimeCfg.APIKey == fresh.APIKey &&
 			runtimeCfg.EgressAck == fresh.EgressAck &&
 			runtimeCfg.ConfidenceThreshold == fresh.ConfidenceThreshold
+		connected := chatGPT.Connected(rctx)
+		if strings.TrimRight(fresh.EndpointURL, "/") == llmclassifier.ChatGPTEndpoint && !connected {
+			active = false
+		}
 		return api.LLMSettingsStatus{
 			Enabled:             enabled,
 			Active:              active,
@@ -589,6 +602,7 @@ func Run(ctx context.Context, opts Options) error {
 			Model:               fresh.Model,
 			EgressAck:           fresh.EgressAck,
 			HasAPIKey:           fresh.APIKey != "",
+			ChatGPTConnected:    connected,
 			ConfidenceThreshold: fresh.ConfidenceThreshold,
 		}, nil
 	}
@@ -602,6 +616,7 @@ func Run(ctx context.Context, opts Options) error {
 			apiKey = fresh.APIKey
 		}
 		probe, err := llmclassifier.New(llmclassifier.Config{
+			ChatGPTCredential:   chatGPT.Credential,
 			EndpointURL:         candidate.EndpointURL,
 			Model:               candidate.Model,
 			APIKey:              apiKey,
@@ -633,11 +648,12 @@ func Run(ctx context.Context, opts Options) error {
 		if err != nil {
 			return err
 		}
-		if fresh.Disabled || fresh.EndpointURL == "" {
+		if fresh.Disabled || fresh.EndpointURL == "" || (strings.TrimRight(fresh.EndpointURL, "/") == llmclassifier.ChatGPTEndpoint && !chatGPT.Connected(rctx)) {
 			llm.Disable()
 			return nil
 		}
 		if err := llm.SetConfig(llmclassifier.Config{
+			ChatGPTCredential:   chatGPT.Credential,
 			EndpointURL:         fresh.EndpointURL,
 			Model:               fresh.Model,
 			APIKey:              fresh.APIKey,

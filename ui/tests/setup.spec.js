@@ -577,6 +577,8 @@ async function mockAPI(page, options = {}) {
     endpoint_url: options.llmEndpoint || 'http://host.suchi.local:11434/v1',
     model: options.llmModel || 'qwen2.5:7b',
     has_api_key: options.llmHasAPIKey ?? false,
+    chatgpt_connected: options.chatGPTConnected ?? false,
+    chatgpt_model: options.chatGPTModel || '',
     egress_ack: options.llmEgressAck ?? false,
     confidence_threshold: 0.7,
     archive_enabled: true,
@@ -729,9 +731,9 @@ async function mockAPI(page, options = {}) {
     else if (path === '/api/admin/settings/llm') {
       if (request.method() === 'PATCH') {
         const payload = request.postDataJSON()
-        const unexpected = unexpectedFields(payload, ['research_context_mode', 'auto_apply'])
+        const unexpected = unexpectedFields(payload, ['research_context_mode', 'auto_apply', 'chatgpt_model'])
         const valid = typeof payload.auto_apply === 'boolean' ||
-          ['focused', 'balanced', 'detailed'].includes(payload.research_context_mode)
+          ['focused', 'balanced', 'detailed'].includes(payload.research_context_mode) || typeof payload.chatgpt_model === 'string'
         if (unexpected.length || Object.keys(payload).length !== 1 || !valid) {
           await route.fulfill({
             status: 400,
@@ -743,6 +745,10 @@ async function mockAPI(page, options = {}) {
           options.applicationModeRequests?.push(payload)
           autoApply = payload.auto_apply
           body = { auto_apply: autoApply }
+        } else if (typeof payload.chatgpt_model === 'string') {
+          options.chatGPTModelRequests?.push(payload)
+          llmSettings.chatgpt_model = payload.chatgpt_model
+          body = { chatgpt_model: payload.chatgpt_model }
         } else {
           options.researchContextRequests?.push(payload)
           researchContextMode = payload.research_context_mode
@@ -6037,4 +6043,132 @@ test('filing systems renames a display name without changing its code or documen
   await expect(page).toHaveURL(/system=S01$/)
   await page.evaluate(() => { location.hash = '#/doc/147?system=S01' })
   await expect(page.getByLabel('Filing address', { exact: true })).toHaveValue('S01.13.147')
+})
+
+test('ChatGPT subscription connects with device code and requires egress and model test', async ({ page }) => {
+  const llmTestRequests = []
+  await mockAPI(page, { filingTreeChosen: true, llmTestRequests })
+  const actions = []
+  await page.route('**/api/admin/settings/llm/chatgpt/*', route => {
+    const action = new URL(route.request().url()).pathname.split('/').at(-1)
+    if (action === 'models') return route.fulfill({ json: { models: [{ id: 'subscription-model', name: 'Subscription model' }, { id: 'other-model', name: 'Other model' }] } })
+    actions.push(action)
+    return route.fulfill({ json: action === 'start'
+      ? { user_code: 'ABCD-1234', verification_url: 'https://auth.openai.com/codex/device', interval: 1 }
+      : { connected: action !== 'disconnect' } })
+  })
+  await page.goto('/#/settings?tab=archive&section=llm')
+  await page.getByRole('button', { name: 'ChatGPT subscription', exact: true }).click()
+  await expect(page.getByLabel('Endpoint URL')).toHaveCount(0)
+  await expect(page.getByLabel('API key (blank for local)')).toHaveCount(0)
+  await expect(page.getByRole('combobox', { name: 'Model', exact: true })).toBeDisabled()
+  const testConnection = page.getByRole('button', { name: 'Test connection', exact: true })
+  const saveModel = page.getByRole('button', { name: 'Enable model and save options', exact: true })
+  await expect(testConnection).toBeDisabled()
+  await page.getByRole('button', { name: 'Connect ChatGPT', exact: true }).click()
+  await expect(page.getByText('ABCD-1234', { exact: true })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'ChatGPT device login' })).toHaveAttribute('href', 'https://auth.openai.com/codex/device')
+  await expect(page.getByText('ChatGPT connected', { exact: true })).toBeVisible()
+  await expect(page.getByRole('combobox', { name: 'Model', exact: true })).toHaveValue('subscription-model')
+  await expect(page.getByRole('combobox', { name: 'Model', exact: true }).locator('option')).toHaveCount(2)
+  await expect(testConnection).toBeDisabled()
+  await page.getByLabel('This endpoint is not local. I acknowledge document text will leave this machine.').check()
+  await expect(testConnection).toBeEnabled()
+  await expect(saveModel).toBeDisabled()
+  await testConnection.click()
+  await expect(saveModel).toBeEnabled()
+  expect(llmTestRequests[0]).toMatchObject({ endpoint_url: 'https://chatgpt.com/backend-api/codex', model: 'subscription-model', api_key: '', egress_ack: true })
+  await page.getByRole('combobox', { name: 'Model', exact: true }).selectOption('other-model')
+  await expect(saveModel).toBeDisabled()
+  await page.getByRole('button', { name: 'Disconnect ChatGPT', exact: true }).click()
+  await expect(page.getByText('ChatGPT not connected', { exact: true })).toBeVisible()
+  await expect(testConnection).toBeDisabled()
+  await expect(saveModel).toBeDisabled()
+  expect(actions).toEqual(['start', 'poll', 'disconnect'])
+})
+
+test('ChatGPT subscription reloads saved models and retries catalog failures', async ({ page }) => {
+  await mockAPI(page, { filingTreeChosen: true })
+  await page.route('**/api/admin/settings/llm', route => route.fulfill({ json: {
+    enabled: true, active: true, endpoint_url: 'https://chatgpt.com/backend-api/codex',
+    model: 'saved-model', egress_ack: true, chatgpt_connected: true,
+  } }))
+  let reads = 0
+  await page.route('**/api/admin/settings/llm/chatgpt/models', route => {
+    if (++reads === 1) return route.fulfill({ status: 503, json: { error: 'Catalog temporarily unavailable' } })
+    return route.fulfill({ json: { models: [{ id: 'first-model', name: 'First model' }, { id: 'saved-model', name: 'Saved model' }] } })
+  })
+  await page.goto('/#/settings?tab=archive&section=llm')
+  const model = page.getByRole('combobox', { name: 'Model', exact: true })
+  await expect(page.getByRole('alert')).toContainText('Catalog temporarily unavailable')
+  await expect(model).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Test connection', exact: true })).toBeDisabled()
+  await page.getByRole('button', { name: 'Refresh models', exact: true }).click()
+  await expect(model).toHaveValue('saved-model')
+  await model.selectOption('first-model')
+  await page.getByRole('button', { name: 'Refresh models', exact: true }).click()
+  await expect(model).toHaveValue('first-model')
+  await expect(page.getByRole('button', { name: 'Test connection', exact: true })).toBeEnabled()
+})
+
+test('ChatGPT subscription discards a catalog that arrives after switching providers', async ({ page }) => {
+  await mockAPI(page, { filingTreeChosen: true })
+  await page.route('**/api/admin/settings/llm', route => route.fulfill({ json: {
+    endpoint_url: 'https://chatgpt.com/backend-api/codex', model: 'saved-model', chatgpt_connected: true,
+  } }))
+  let held
+  await page.route('**/api/admin/settings/llm/chatgpt/models', route => { held = route })
+  await page.goto('/#/settings?tab=archive&section=llm')
+  await expect.poll(() => !!held).toBe(true)
+  await page.getByRole('button', { name: 'Local model', exact: true }).click()
+  await page.getByRole('textbox', { name: 'Model', exact: true }).fill('local-model')
+  await held.fulfill({ json: { models: [{ id: 'late-model', name: 'Late model' }] } })
+  await expect(page.getByRole('textbox', { name: 'Model', exact: true })).toHaveValue('local-model')
+  await expect(page.getByRole('combobox', { name: 'Model', exact: true })).toHaveCount(0)
+})
+
+
+test('ChatGPT subscription saves model selection across page reload without activating it', async ({ page }) => {
+  const modelRequests = []
+  const settingsRequests = []
+  const testRequests = []
+  await mockAPI(page, {
+    filingTreeChosen: true, chatGPTConnected: true,
+    llmEndpoint: 'https://chatgpt.com/backend-api/codex', llmModel: 'first-model',
+    chatGPTModelRequests: modelRequests, llmSettingsRequests: settingsRequests, llmTestRequests: testRequests,
+  })
+  await page.route('**/api/admin/settings/llm/chatgpt/models', route => route.fulfill({ json: {
+    models: [{ id: 'first-model', name: 'First model' }, { id: 'chosen-model', name: 'Chosen model' }],
+  } }))
+  await page.goto('/#/settings?tab=archive&section=llm')
+  const model = page.getByRole('combobox', { name: 'Model', exact: true })
+  await expect(model).toHaveValue('first-model')
+  await model.selectOption('chosen-model')
+  await expect(page.getByText('Model selection saved. Test and enable it to use this model.', { exact: true })).toBeVisible()
+  expect(modelRequests).toEqual([{ chatgpt_model: 'chosen-model' }])
+  expect(settingsRequests).toEqual([])
+  expect(testRequests).toEqual([])
+  await page.reload()
+  await expect(model).toHaveValue('chosen-model')
+  await expect(page.getByText('No model', { exact: true })).toBeVisible()
+  await expect(page.getByLabel('This endpoint is not local. I acknowledge document text will leave this machine.')).not.toBeChecked()
+})
+
+
+test('ChatGPT subscription save errors do not block another provider', async ({ page }) => {
+  await mockAPI(page, { filingTreeChosen: true, chatGPTConnected: true,
+    llmEndpoint: 'https://chatgpt.com/backend-api/codex', llmModel: 'first-model' })
+  await page.route('**/api/admin/settings/llm', route => {
+    if (route.request().method() === 'PATCH') return route.fulfill({ status: 503, json: { error: 'Selection save unavailable' } })
+    return route.fallback()
+  })
+  await page.route('**/api/admin/settings/llm/chatgpt/models', route => route.fulfill({ json: {
+    models: [{ id: 'first-model', name: 'First model' }, { id: 'other-model', name: 'Other model' }],
+  } }))
+  await page.goto('/#/settings?tab=archive&section=llm')
+  await page.getByRole('combobox', { name: 'Model', exact: true }).selectOption('other-model')
+  await expect(page.getByRole('alert')).toContainText('Selection save unavailable')
+  await page.getByRole('button', { name: 'Local model', exact: true }).click()
+  await page.getByRole('textbox', { name: 'Model', exact: true }).fill('local-model')
+  await expect(page.getByRole('button', { name: 'Test connection', exact: true })).toBeEnabled()
 })
