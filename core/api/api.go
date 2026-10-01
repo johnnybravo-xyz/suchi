@@ -41,6 +41,8 @@ type LLMSettingsStatus struct {
 	EndpointURL         string  `json:"endpoint_url"`
 	Model               string  `json:"model"`
 	EgressAck           bool    `json:"egress_ack"`
+	ChatGPTModel        string  `json:"chatgpt_model"`
+	ChatGPTConnected    bool    `json:"chatgpt_connected"`
 	HasAPIKey           bool    `json:"has_api_key"`
 	ConfidenceThreshold float64 `json:"confidence_threshold"`
 	AutoApply           bool    `json:"auto_apply"`
@@ -137,6 +139,7 @@ type Server struct {
 	// exposing the API key. LLMTester verifies a candidate configuration
 	// against synthetic text and does not persist it.
 	LLMStatusReader func(ctx context.Context) (LLMSettingsStatus, error)
+	ChatGPTLogin    func(context.Context, int64, string) (map[string]any, error)
 	LLMTester       func(ctx context.Context, cfg LLMTestConfig) (LLMTestResult, error)
 	// ChatEnabled follows the active runtime model. ChatCompletion is the
 	// narrow completion seam; core/api never imports the plugin.

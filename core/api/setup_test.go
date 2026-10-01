@@ -725,3 +725,100 @@ func TestIsUniqueViolation(t *testing.T) {
 type stringErr struct{ s string }
 
 func (e *stringErr) Error() string { return e.s }
+
+func TestChatGPTLoginRequiresAdministrator(t *testing.T) {
+	calls := 0
+	s := &Server{ChatGPTLogin: func(_ context.Context, owner int64, action string) (map[string]any, error) {
+		calls++
+		if owner != 7 || action != "start" {
+			t.Fatalf("wrong actor/action: %d %s", owner, action)
+		}
+		return map[string]any{"user_code": "ABCD"}, nil
+	}}
+	for _, tc := range []struct {
+		role   string
+		status int
+	}{{"", 401}, {"member", 403}, {"admin", 200}} {
+		r := httptest.NewRequest("POST", "/api/admin/settings/llm/chatgpt/start", nil)
+		r.SetPathValue("action", "start")
+		if tc.role != "" {
+			r = r.WithContext(auth.WithPrincipal(r.Context(), &pluginapi.Principal{Kind: "user", UserID: 7, Role: tc.role}))
+		}
+		w := httptest.NewRecorder()
+		s.ChatGPTLoginAction(w, r)
+		if w.Code != tc.status {
+			t.Fatalf("%s: %d %s", tc.role, w.Code, w.Body.String())
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("calls=%d", calls)
+	}
+}
+
+func TestChatGPTModelsRequiresAdministrator(t *testing.T) {
+	calls := 0
+	s := &Server{ChatGPTLogin: func(_ context.Context, owner int64, action string) (map[string]any, error) {
+		calls++
+		if owner != 7 || action != "models" {
+			t.Fatalf("wrong actor/action: %d %s", owner, action)
+		}
+		return map[string]any{"models": []any{map[string]string{"id": "test", "name": "Test"}}}, nil
+	}}
+	for _, tc := range []struct {
+		role   string
+		status int
+	}{{"", 401}, {"member", 403}, {"admin", 200}} {
+		r := httptest.NewRequest("GET", "/api/admin/settings/llm/chatgpt/models", nil)
+		if tc.role != "" {
+			r = r.WithContext(auth.WithPrincipal(r.Context(), &pluginapi.Principal{Kind: "user", UserID: 7, Role: tc.role}))
+		}
+		w := httptest.NewRecorder()
+		s.ChatGPTModels(w, r)
+		if w.Code != tc.status {
+			t.Fatalf("%s: %d %s", tc.role, w.Code, w.Body.String())
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("calls=%d", calls)
+	}
+}
+
+func TestChatGPTModelSelectionPersistsWithoutActivatingModel(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	if err := settings.SetMany(ctx, d, map[string]any{
+		settings.KeyLLMEndpointURL: "https://chatgpt.com/backend-api/codex",
+		settings.KeyLLMModel:       "active-model", settings.KeyLLMDisabled: true, settings.KeyLLMEgressAck: false,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), LLMReloader: func(context.Context) error { t.Fatal("selection reloaded the provider"); return nil }}
+	patch := func(body string, actor *pluginapi.Principal) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPatch, "/api/admin/settings/llm", strings.NewReader(body))
+		if actor != nil {
+			r = r.WithContext(auth.WithPrincipal(ctx, actor))
+		}
+		w := httptest.NewRecorder()
+		s.PatchLLMSettings(w, r)
+		return w
+	}
+	for _, body := range []string{`{"chatgpt_model":null}`, `{"chatgpt_model":""}`, `{"chatgpt_model":"bad model"}`, `{"chatgpt_model":"chosen-model","auto_apply":true}`} {
+		if w := patch(body, adminPrincipal(1)); w.Code != 400 {
+			t.Fatalf("accepted invalid patch %s: %d", body, w.Code)
+		}
+	}
+	if w := patch(`{"chatgpt_model":"chosen-model"}`, &pluginapi.Principal{Kind: "user", Role: "member"}); w.Code != 403 {
+		t.Fatalf("member saved selection: %d", w.Code)
+	}
+	if w := patch(`{"chatgpt_model":"chosen-model"}`, adminPrincipal(1)); w.Code != 200 {
+		t.Fatalf("save: %d %s", w.Code, w.Body.String())
+	}
+	fresh := &Server{DB: d}
+	status, err := fresh.loadLLMSettingsStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.ChatGPTModel != "chosen-model" || status.Model != "active-model" || status.Enabled || status.EgressAck {
+		t.Fatalf("selection changed activation/config: %+v", status)
+	}
+}

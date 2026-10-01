@@ -26,6 +26,7 @@ import (
 const (
 	KeyLLMEndpointURL          = "llm.endpoint_url"
 	KeyLLMModel                = "llm.model"
+	KeyChatGPTModel            = "llm.chatgpt_model"
 	KeyLLMAPIKeySealed         = "llm.api_key_sealed"
 	KeyLLMEgressAck            = "llm.egress_ack"
 	KeyLLMDisabled             = "llm.disabled"

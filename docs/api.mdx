@@ -2175,7 +2175,10 @@ matching and automations keep running when it is disabled.
 ### `GET /api/admin/settings/llm`
 
 Returns masked persisted and runtime state. `has_api_key` is the only key
-signal; plaintext key material is never returned.
+signal; plaintext key material is never returned. `chatgpt_connected` reports
+whether Suchi holds a subscription login, without exposing tokens or verifying
+current upstream model entitlement. `chatgpt_model` is the separately saved
+dropdown preference; `model` remains the configured inference model.
 
 ```json
 {
@@ -2185,6 +2188,8 @@ signal; plaintext key material is never returned.
   "model": "qwen2.5:7b",
   "egress_ack": false,
   "has_api_key": false,
+  "chatgpt_connected": false,
+  "chatgpt_model": "",
   "confidence_threshold": 0.7,
   "auto_apply": true,
   "archive_enabled": true,
@@ -2229,7 +2234,7 @@ key rotation, disable, and re-enable all apply immediately.
 
 ### `PATCH /api/admin/settings/llm`
 
-Updates exactly one standalone global setting. Choose either application mode:
+Updates exactly one standalone global setting. Choose application mode:
 
 ```json
 { "auto_apply": false }
@@ -2241,15 +2246,22 @@ or the Archive research source-text preset:
 { "research_context_mode": "detailed" }
 ```
 
-The body must contain exactly one of these fields, not both or other fields.
+or the saved ChatGPT dropdown selection:
+
+```json
+{ "chatgpt_model": "gpt-5.6-luna" }
+```
+
+The body must contain exactly one of these fields.
 `auto_apply` must be boolean; `research_context_mode` must be `focused`,
-`balanced`, or `detailed`. The response returns only the saved field and value.
+`balanced`, or `detailed`. `chatgpt_model` must be a nonempty model identifier
+(up to 128 characters). The response returns only the saved field and value.
 
 Application mode is read again under the writer before automatic effects; the
-research preset applies to the next question. Neither standalone save rewrites
-the endpoint, model, API key, egress acknowledgement or thresholds; enables or
-tests a model; reloads the provider; accepts pending suggestions; or starts a
-backfill. See [Archive research: Research context presets](/archive-chat#research-context-presets)
+research preset applies to the next question. These standalone saves do not rewrite
+the endpoint, model, API key, egress acknowledgement or thresholds. They do not
+enable or test a model, reload the provider, accept pending suggestions, or start
+a backfill. See [Archive research: Research context presets](/archive-chat#research-context-presets)
 for passage assembly and exact payload bounds.
 
 ### `POST /api/admin/settings/llm/test`
@@ -2277,6 +2289,32 @@ result that passes production validation.
 
 The result is the validated synthetic classification only. Raw provider output
 and archive content are never returned.
+
+### `GET /api/admin/settings/llm/chatgpt/models`
+
+Administrator browser sessions only. Fetches the connected account's Codex
+catalog, refreshing the server-side credential if needed, and returns
+`{models: [{id, name}]}` in upstream preference order. Empty catalogs return an
+empty list; unavailable/invalid catalogs return an error rather than guessed
+model IDs. Credentials and other upstream metadata are not returned. Catalog
+membership does not establish entitlement; the connection test verifies inference.
+
+### `POST /api/admin/settings/llm/chatgpt/{action}`
+
+Administrator browser sessions only; API tokens cannot use these routes.
+Actions are `start`, `poll`, `cancel`, and `disconnect`; request bodies may be
+empty. `start` returns `{user_code, verification_url, interval}` and replaces
+that administrator's pending login. Poll no faster than `interval` seconds;
+`poll` returns `{pending: true}` or `{connected: true}` after storing encrypted
+credentials. Pending logins expire in 15 minutes or on restart. Another
+administrator cannot poll the initiating administrator's grant.
+
+`cancel` returns `{canceled: true}` and drops the pending grant. `disconnect`
+returns `{connected: false}`, deletes the instance-wide credential and stops
+an active subscription model. Connecting does not enable inference. Configure
+the fixed `https://chatgpt.com/backend-api/codex` endpoint and selected model,
+acknowledge egress, then test/save through the existing settings routes. API
+keys are ignored for this endpoint. See [LLM classifier](/llm-classifier).
 
 ## Runtime archive settings
 

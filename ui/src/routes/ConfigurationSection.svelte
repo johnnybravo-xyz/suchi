@@ -1,9 +1,9 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
   import { scopedHash as filingHref, systems } from '../lib/systems.svelte.js'
-  import { untrack } from 'svelte'
+  import { untrack, onDestroy } from 'svelte'
   import { adminListUsers,
-           getLLMSettings, saveLLMSettings, testLLMSettings,
+           getLLMSettings, saveLLMSettings, testLLMSettings, chatGPTLoginAction, getChatGPTModels, saveChatGPTModel,
            saveResearchContextMode, saveClassificationAutoApply,
            getPreferences, savePreferences, getIngestSettings, saveIngestSettings } from '../lib/api.js'
   import { isLocalEndpoint } from '../lib/net.js'
@@ -56,9 +56,96 @@
   let autoApply = $state(false)
   let llmStatus = $state(null)
   let llmTesting = $state(false)
+  const chatGPTEndpoint = 'https://chatgpt.com/backend-api/codex'
   let llmMode = $state('local')
+  let loginCode = $state(null)
+  let loginBusy = $state(false)
+  let loginError = $state('')
+  let chatGPTModels = $state([])
+  let modelsLoading = $state(false)
+  let modelsError = $state('')
+  let modelSaving = $state(false)
+  let modelSaveError = $state('')
+  let modelsGeneration = 0
+  let loginTimer
+  let disposed = false
+  let loginGeneration = 0
+  onDestroy(() => { disposed = true; loginGeneration++; modelsGeneration++; clearTimeout(loginTimer) })
+
+  async function loadChatGPTModels() {
+    const generation = ++modelsGeneration
+    modelsLoading = true; modelsError = ''
+    invalidateLLMTest()
+    try {
+      const result = await getChatGPTModels()
+      if (disposed || generation !== modelsGeneration || llmMode !== 'chatgpt' || !llmStatus?.chatgpt_connected) return
+      chatGPTModels = result.models || []
+      if (!chatGPTModels.some(model => model.id === llm.model)) llm.model = chatGPTModels[0]?.id || ''
+    } catch (ex) {
+      if (!disposed && generation === modelsGeneration) { modelsError = ex.message || 'Could not load ChatGPT models.'; chatGPTModels = [] }
+    } finally { if (!disposed && generation === modelsGeneration) modelsLoading = false }
+  }
+
+  async function persistChatGPTModel() {
+    const model = llm.model
+    if (!model || modelSaving) return
+    invalidateLLMTest()
+    modelSaving = true; modelSaveError = ''
+    try {
+      const result = await saveChatGPTModel(model)
+      if (disposed) return
+      llmStatus = { ...llmStatus, chatgpt_model: result.chatgpt_model }
+      notify?.('Model selection saved. Test and enable it to use this model.')
+    } catch (ex) {
+      if (!disposed) modelSaveError = ex.message || 'Could not save model selection.'
+    } finally { if (!disposed) modelSaving = false }
+  }
+
+  async function startChatGPTLogin() {
+    clearTimeout(loginTimer)
+    const generation = ++loginGeneration
+    loginBusy = true; loginError = ''; loginCode = null
+    try {
+      const code = await chatGPTLoginAction('start')
+      if (disposed || generation !== loginGeneration) return
+      loginCode = code
+      loginTimer = setTimeout(() => pollChatGPTLogin(generation), code.interval * 1000)
+    } catch (ex) { if (!disposed && generation === loginGeneration) loginError = ex.message }
+    finally { if (!disposed && generation === loginGeneration) loginBusy = false }
+  }
+  async function pollChatGPTLogin(generation) {
+    if (disposed || generation !== loginGeneration) return
+    try {
+      const result = await chatGPTLoginAction('poll')
+      if (disposed || generation !== loginGeneration) return
+      if (result.pending) {
+        loginTimer = setTimeout(() => pollChatGPTLogin(generation), (loginCode?.interval || 5) * 1000)
+      } else {
+        loginCode = null
+        llmStatus = { ...llmStatus, chatgpt_connected: true }
+        invalidateLLMTest()
+        if (llmMode === 'chatgpt') void loadChatGPTModels()
+        notify?.('ChatGPT connected. Test the model before enabling it.')
+      }
+    } catch (ex) { if (!disposed && generation === loginGeneration) { loginError = ex.message; loginCode = null } }
+  }
+  async function endChatGPTLogin(action) {
+    loginGeneration++; clearTimeout(loginTimer); loginCode = null
+    loginBusy = true; loginError = ''
+    try {
+      await chatGPTLoginAction(action)
+      if (disposed) return
+      if (action === 'disconnect') {
+        modelsGeneration++; modelsLoading = false; chatGPTModels = []; modelsError = ''; llm.model = ''
+        llmStatus = { ...llmStatus, chatgpt_connected: false, active: llmStatus?.endpoint_url === chatGPTEndpoint ? false : llmStatus?.active }
+        invalidateLLMTest()
+      }
+    } catch (ex) { if (!disposed) loginError = ex.message }
+    finally { if (!disposed) loginBusy = false }
+  }
   let llmTestResult = $state(null)
   let llmTestError = $state('')
+  let llmTestGeneration = 0
   let prefs = $state({ backup_interval_hours: 24, ocr_languages: 'eng' })
   let ingest = $state({ fs_watch_dir: '', fs_watch_owner_email: '', fs_watch_system: '' })
 
@@ -92,7 +179,12 @@
       ? st.research_context_mode : 'balanced'
     llm.api_key = ''
     llm.clear_api_key = false
-    llmMode = st?.endpoint_url && !isLocalEndpoint(st.endpoint_url) ? 'hosted' : 'local'
+    llmMode = st?.endpoint_url === chatGPTEndpoint || (!st?.endpoint_url && st?.chatgpt_connected) ? 'chatgpt' : st?.endpoint_url && !isLocalEndpoint(st.endpoint_url) ? 'hosted' : 'local'
+    if (llmMode === 'chatgpt') {
+      llm.endpoint_url = chatGPTEndpoint
+      llm.model = st?.chatgpt_model || st?.model || ''
+      if (st?.chatgpt_connected) void loadChatGPTModels()
+    }
   }
   async function loadPreferences() {
     const current = await getPreferences()
@@ -181,18 +273,31 @@
   }
 
   function invalidateLLMTest() {
+    llmTestGeneration++
     llmTestResult = null
     llmTestError = ''
   }
 
   function setLLMMode(mode) {
+    if (llmMode === mode) return
+    if (loginCode) void endChatGPTLogin('cancel')
+    modelsGeneration++; modelsLoading = false; chatGPTModels = []; modelsError = ''
     llmMode = mode
+    modelSaveError = ''
+    llm.api_key = ''
     invalidateLLMTest()
+    if (mode === 'chatgpt') {
+      llm.endpoint_url = chatGPTEndpoint
+      llm.model = llmStatus?.chatgpt_model || (llmStatus?.endpoint_url === chatGPTEndpoint ? llmStatus.model : '')
+      llm.egress_ack = false
+      if (llmStatus?.chatgpt_connected) void loadChatGPTModels()
+      return
+    }
     if (mode === 'local' && (!llm.endpoint_url || !isLocalEndpoint(llm.endpoint_url))) {
       llm.endpoint_url = 'http://host.suchi.local:11434/v1'
       if (!llm.model) llm.model = 'qwen2.5:7b'
       llm.egress_ack = false
-    } else if (mode === 'hosted' && isLocalEndpoint(llm.endpoint_url)) {
+    } else if (mode === 'hosted' && (isLocalEndpoint(llm.endpoint_url) || llm.endpoint_url === chatGPTEndpoint)) {
       llm.endpoint_url = ''
       llm.egress_ack = false
     }
@@ -250,12 +355,14 @@
 
   async function testClassifier() {
     err = ''; llmTesting = true; llmTestResult = null; llmTestError = ''
+    const generation = ++llmTestGeneration
     try {
       const result = await testLLMSettings(llmPayload(true))
+      if (disposed || generation !== llmTestGeneration) return
       llmTestResult = result?.result || null
       notify?.(result?.message || 'Model connection and response format checked')
     } catch (ex) {
-      llmTestError = ex.message || 'The classifier did not return a valid response.'
+      if (!disposed && generation === llmTestGeneration) llmTestError = ex.message || 'The classifier did not return a valid response.'
     } finally { llmTesting = false }
   }
 
@@ -322,21 +429,52 @@
         {:else}
           <span class="pill">No model</span>
         {/if}
-        {#if llmStatus?.has_api_key}<span class="chip">API key configured</span>{/if}
+        {#if llmMode !== 'chatgpt' && llmStatus?.has_api_key}<span class="chip">API key configured</span>{/if}
       </div>
       <span class="seg" style="margin-bottom:14px">
-        <button class:on={llmMode === 'local'} onclick={() => setLLMMode('local')}>Local model</button>
-        <button class:on={llmMode === 'hosted'} onclick={() => setLLMMode('hosted')}>Hosted endpoint</button>
+        <button disabled={modelSaving || loginBusy} class:on={llmMode === 'local'} onclick={() => setLLMMode('local')}>Local model</button>
+        <button disabled={modelSaving || loginBusy} class:on={llmMode === 'hosted'} onclick={() => setLLMMode('hosted')}>Hosted endpoint</button>
+        <button disabled={modelSaving || loginBusy} class:on={llmMode === 'chatgpt'} onclick={() => setLLMMode('chatgpt')}>ChatGPT subscription</button>
       </span>
-      {#if llmMode === 'local'}
+      {#if llmMode === 'chatgpt'}
+        <p class="wiz-p sub">Connect your ChatGPT Codex subscription for classification and archive research. This account powers AI for the whole archive. Suchi sends extracted text to OpenAI; subscription limits apply.</p>
+        <p role="status">{llmStatus?.chatgpt_connected ? 'ChatGPT connected' : 'ChatGPT not connected'}</p>
+        <div class="toolbar">
+          <button class="btn sm" disabled={loginBusy || !!loginCode} onclick={startChatGPTLogin}>{llmStatus?.chatgpt_connected ? 'Reconnect ChatGPT' : 'Connect ChatGPT'}</button>
+          {#if llmStatus?.chatgpt_connected}<button class="btn sm" disabled={loginBusy} onclick={() => endChatGPTLogin('disconnect')}>Disconnect ChatGPT</button>{/if}
+        </div>
+        {#if loginCode}
+          <p>Open <a href={loginCode.verification_url} target="_blank" rel="noopener noreferrer">ChatGPT device login</a> and enter <strong class="mono">{loginCode.user_code}</strong>. Waiting for sign-in…</p>
+          <button class="btn sm" onclick={() => endChatGPTLogin('cancel')}>Cancel login</button>
+        {/if}
+        {#if loginError}<p class="err" role="alert">{loginError}</p>{/if}
+      {:else if llmMode === 'local'}
         <p class="wiz-p sub" style="font-size:.8rem">The Docker Compose default reaches Ollama on the host. Edit the URL for a native install or another machine on your network.</p>
       {:else}
         <p class="wiz-p sub" style="font-size:.8rem">Use the OpenAI-compatible base URL from your provider. Suchi sends extracted text, never the original file.</p>
       {/if}
+      {#if llmMode !== 'chatgpt'}
       <div class="field"><label for="l-url">Endpoint URL</label>
         <input id="l-url" class="input mono" placeholder="http://host.suchi.local:11434/v1" bind:value={llm.endpoint_url} oninput={invalidateLLMTest} /></div>
+      {/if}
       <div class="field"><label for="l-model">Model</label>
-        <input id="l-model" class="input mono" placeholder="qwen2.5:7b" bind:value={llm.model} oninput={invalidateLLMTest} /></div>
+        {#if llmMode === 'chatgpt'}
+          <select id="l-model" class="input" bind:value={llm.model} onchange={persistChatGPTModel} disabled={!llmStatus?.chatgpt_connected || modelsLoading || modelSaving || !chatGPTModels.length}>
+            {#if !chatGPTModels.length}<option value="">{modelsLoading ? 'Loading models…' : llmStatus?.chatgpt_connected ? 'No models available' : 'Connect ChatGPT to load models'}</option>{/if}
+            {#each chatGPTModels as model (model.id)}<option value={model.id}>{model.name} ({model.id})</option>{/each}
+          </select>
+        {:else}
+          <input id="l-model" class="input mono" placeholder="qwen2.5:7b" bind:value={llm.model} oninput={invalidateLLMTest} />
+        {/if}
+      </div>
+      {#if llmMode === 'chatgpt'}
+        {#if modelsError}<p class="err" role="alert">{modelsError}</p>{/if}
+        {#if llmStatus?.chatgpt_connected}<button class="btn sm" disabled={modelsLoading || modelSaving} onclick={loadChatGPTModels}>Refresh models</button>{/if}
+        <p class="sub">Selection saves automatically. Test and enable the model to use it for classification and research.</p>
+        {#if modelSaving}<p class="sub" role="status">Saving model selection…</p>{/if}
+        {#if modelSaveError}<p class="err" role="alert">{modelSaveError}</p><button class="btn sm" onclick={persistChatGPTModel}>Retry saving model</button>{/if}
+        <p class="sub">Models come from your connected ChatGPT account. Test connection verifies access to the selected model.</p>
+      {:else}
       <div class="field"><label for="l-key">API key (blank for local)</label>
         <input id="l-key" class="input mono" type="password" bind:value={llm.api_key} autocomplete="off"
                oninput={invalidateLLMTest}
@@ -346,13 +484,17 @@
         <label class="wiz-check"><input type="checkbox" checked={llm.clear_api_key} onchange={setClearAPIKey} />
           Clear the saved API key when saving. Config-file and environment keys are unchanged.</label>
       {/if}
+      {/if}
       {#if llmIsRemote}
         <label class="wiz-check attn"><input type="checkbox" bind:checked={llm.egress_ack} onchange={invalidateLLMTest} />
           This endpoint is not local. I acknowledge document text will leave this machine.</label>
       {/if}
 
+      {#if llmMode === 'chatgpt' && !llm.egress_ack}
+        <p class="sub">Check the acknowledgement above to test the model. The test sends only a synthetic sample; enabling the model allows document text to leave this machine.</p>
+      {/if}
       <div class="toolbar connection-actions">
-        <button class="btn primary sm" disabled={busy || llmTesting || !llm.endpoint_url || !llm.model || (llmIsRemote && !llm.egress_ack)}
+        <button class="btn primary sm" disabled={busy || llmTesting || modelSaving || !!modelSaveError || !llm.endpoint_url || !llm.model || (llmMode === 'chatgpt' && (!llmStatus?.chatgpt_connected || modelsLoading || !chatGPTModels.some(model => model.id === llm.model))) || (llmIsRemote && !llm.egress_ack)}
                 onclick={testClassifier}>Test connection</button>
         <button class="btn sm" disabled={busy || llmTesting}
                 onclick={() => saveAnd(() => saveClassifier(false), 'Model disabled; local matching settings unchanged')}>Disable model</button>
@@ -456,7 +598,7 @@
         </div>
 
         <div class="toolbar option-save">
-          <button class="btn primary sm" disabled={busy || llmTesting || !llmTestResult || !llm.endpoint_url || !llm.model || (llmIsRemote && !llm.egress_ack)}
+          <button class="btn primary sm" disabled={busy || llmTesting || modelSaving || !!modelSaveError || !llmTestResult || !llm.endpoint_url || !llm.model || (llmMode === 'chatgpt' && (!llmStatus?.chatgpt_connected || modelsLoading || !chatGPTModels.some(model => model.id === llm.model))) || (llmIsRemote && !llm.egress_ack)}
                   onclick={() => saveAnd(
                     () => saveClassifier(true),
                     () => `Model enabled; ${applicationModeLabel(llmStatus?.auto_apply ?? true)}`
