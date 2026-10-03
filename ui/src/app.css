@@ -444,11 +444,10 @@ textarea.input { resize: vertical; font-family: ui-monospace, monospace; font-si
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  margin-bottom: 26px;
-  padding: 6px 0 28px;
-  border: 0;
-  border-bottom: 1px solid var(--line);
-  border-radius: 0;
+  margin: 0;
+  padding: 13px 18px;
+  background: var(--tint);
+  border-radius: var(--r);
 }
 .setup-reminder-head { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
 .setup-reminder-head > div { display: grid; flex: 1; gap: 3px; min-width: 0; }

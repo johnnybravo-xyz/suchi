@@ -58,8 +58,9 @@
   .settings-tabs a:hover { color:var(--ink) }
   .settings-tabs a.on { border-color:var(--accent);color:var(--accent) }
   .settings-body { flex:1;min-height:0 }
-  .account-body { overflow-y:auto;padding-inline-end:28px;scrollbar-gutter:stable }
+  .account-body { display:flex;flex-direction:column;gap:16px;overflow-y:auto;padding:2px 28px 6px 2px;scrollbar-gutter:stable }
   .archive-body { display:flex;flex-direction:column;overflow:hidden;padding-inline-end:20px }
+  .archive-body > :global(.setup-reminder) { margin-bottom:18px }
   .archive-slot { flex:1;min-height:0 }
   .build-info { flex:none;padding:16px 0 0;color:var(--muted);font-size:.78rem;overflow-wrap:anywhere }
 </style>

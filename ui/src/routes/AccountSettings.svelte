@@ -220,14 +220,14 @@
     <div class="settings-list token-list">
       {#each items as t (t.id)}
         <div class="token-row">
-          <span class="token-name">{t.name}</span>
+          <span class="token-name" class:mono={!connected}>{t.name}</span>
           {#if t.system_code}<span class="pill">{t.system_code}</span>{/if}
           <span class="pill" title={t.scopes}>{tokenAccessLabel(t.scopes)}</span>
           <span class="row-date">
             <span>{connected ? 'Connected' : 'Created'} {t.created_at ? fmtDate(t.created_at) : '—'}</span>
             {#if connected}<span>{t.last_used_at ? 'Last used ' + fmtDate(t.last_used_at) : 'Not used yet'}</span>{/if}
           </span>
-          <button class="btn sm danger" disabled={revoking.includes(t.id)} onclick={() => revoke(t)}>Revoke</button>
+          <button class="act-quiet" disabled={revoking.includes(t.id)} onclick={() => revoke(t)}>Revoke</button>
         </div>
       {/each}
     </div>
@@ -250,7 +250,7 @@
           {#if session.user?.avatar_url}<img src={session.user.avatar_url} alt="" />{:else}{(profile.display_name || session.user?.email || '?').split(/[\s@._-]+/).filter(Boolean).slice(0,2).map(w=>w[0].toUpperCase()).join('')}{/if}
         </span>
         {#if !demoVisitor}
-          <button class="btn sm" onclick={() => avatarInput.click()}>Change photo</button>
+          <button class="act-link" onclick={() => avatarInput.click()}>Change photo</button>
           <input bind:this={avatarInput} type="file" accept="image/png,image/jpeg" hidden onchange={(e) => sendAvatar(e.target.files[0])} />
         {/if}
       </div>
@@ -264,23 +264,29 @@
           <label for="p-email">Email</label>
           <input id="p-email" class="input" type="email" value={session.user?.email || ''} readonly />
           {#if emailChangeMode === 'password'}
-            <span class="sub">This address is your sign-in identifier.</span>
-            <button class="btn sm email-change-action" type="button" bind:this={emailChangeButton}
-                    onclick={() => (emailDialogOpen = true)}>Change email</button>
+            <div class="help-row">
+              <span class="sub">This address is your sign-in identifier.</span>
+              <button class="act-link email-change-action" type="button" bind:this={emailChangeButton}
+                      onclick={() => (emailDialogOpen = true)}>Change email</button>
+            </div>
           {:else if emailChangeMode === 'oidc'}
-            <span class="sub">Your identity provider manages this address. Reauthenticate to check for an updated email.</span>
-            <form method="post" action="/oidc/email-change" class="oidc-sync-form">
-              <button class="btn sm" type="submit">Sync from identity provider</button>
-            </form>
+            <div class="help-row">
+              <span class="sub">Your identity provider manages this address. Reauthenticate to check for an updated email.</span>
+              <form method="post" action="/oidc/email-change" class="oidc-sync-form">
+                <button class="act-link" type="submit">Sync from identity provider</button>
+              </form>
+            </div>
           {:else}
             <span class="sub">Sign-in email changes are not available for this account.</span>
           {/if}
         </div>
-        {#if !demoVisitor}
-          <button class="btn primary sm profile-save" disabled={profileBusy} onclick={saveProfile}>Save profile</button>
-        {/if}
       </div>
     </div>
+    {#if !demoVisitor}
+      <div class="card-foot">
+        <button class="btn primary sm" disabled={profileBusy} onclick={saveProfile}>Save profile</button>
+      </div>
+    {/if}
   </section>
 
   {#if emailDialogOpen}
@@ -358,7 +364,7 @@
           <p>Connected inboxes and their latest sync status.</p>
         </div>
       </div>
-        <Lazy load={loadMailboxes} props={{ notify, viewerRole: session.user?.role }} />
+        <div class="card-body"><Lazy load={loadMailboxes} props={{ notify, viewerRole: session.user?.role }} /></div>
     </section>
   {/if}
 
@@ -374,6 +380,7 @@
         <div class="settings-list vault-list">
           {#each vault as v (v.id)}
             <div class="vault-row">
+              <span class="row-ico"><Icon name="lock" size={15} /></span>
               <input class="inline-edit vault-label" value={v.label || ''}
                      placeholder="unlabeled"
                      title={v.label || 'Unlabeled saved password'}
@@ -390,9 +397,7 @@
                   {/if}
                 {/if}
               </div>
-              <button class="btn sm danger" onclick={() => removeVault(v)} title="Delete saved password" aria-label="Delete saved password">
-                <Icon name="trash" size={13} />
-              </button>
+              <button class="act-quiet" onclick={() => removeVault(v)} title="Delete saved password" aria-label="Delete saved password">Remove</button>
             </div>
           {/each}
         </div>
@@ -402,64 +407,79 @@
   </section>
   {/if}
 <style>
-  .settings-section { padding:6px 0 28px;margin-bottom:26px;border-bottom:1px solid var(--line) }
-  .section-heading { display:flex;align-items:flex-start;justify-content:space-between;gap:24px;margin-bottom:18px }
-  .section-heading h2 { font-size:1.05rem;margin:0 }
-  .section-heading p { color:var(--muted);font-size:.84rem;line-height:1.45;margin:5px 0 0 }
-  .profile-meta { display:flex;align-items:center;gap:9px;color:var(--muted);font-size:.78rem }
-  .profile-layout { display:grid;grid-template-columns:auto minmax(0,1fr);gap:18px;align-items:start }
-  .avatar-control { display:flex;flex-direction:column;align-items:center;gap:8px }
-  .profile-avatar { width:64px;height:64px;font-size:1.25rem }
-  .profile-fields { display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;align-items:start }
+  .settings-section { --pad:22px; flex:none; container-type:inline-size; background:var(--surface); border:1px solid var(--line); border-radius:var(--r); padding:0; margin:0; overflow:hidden }
+  .section-heading { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px 24px; margin:0; padding:13px var(--pad); border-bottom:1px solid var(--line) }
+  .section-heading > div { display:flex; align-items:baseline; flex-wrap:wrap; column-gap:10px; row-gap:2px; min-width:0; flex:1 1 240px }
+  .section-heading h2 { font-size:.95rem; margin:0; white-space:nowrap }
+  .section-heading .btn { white-space:nowrap }
+  .section-heading p { color:var(--muted); font-size:.82rem; line-height:1.45; margin:0 }
+  .profile-meta { display:flex; align-items:center; gap:9px; color:var(--muted); font-size:.78rem; flex:none }
+  .profile-layout { display:grid; grid-template-columns:auto minmax(0,1fr); gap:18px 26px; align-items:start; padding:20px var(--pad) 4px }
+  .avatar-control { display:flex; flex-direction:column; align-items:center; gap:10px }
+  .profile-avatar { width:64px; height:64px; font-size:1.25rem }
+  .profile-fields { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:12px 22px; align-items:start }
   .profile-fields .field { margin:0 }
-  .profile-save { justify-self:start }
-  .email-change-action, .oidc-sync-form { justify-self:start }
-  .oidc-sync-form { margin:0 }
-  .auth-syntax { display:flex;flex-direction:column;align-items:flex-end;gap:4px;min-width:0 }
-  .auth-syntax span { color:var(--muted);font-size:.72rem;font-weight:600 }
-  .auth-syntax code { max-width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:4px;background:var(--surface-2);font-size:.75rem;overflow-wrap:anywhere }
-  .minted-token { margin-bottom:14px }
-  .minted-token > label { display:block;color:var(--muted);font-size:.78rem;font-weight:600;margin-bottom:5px }
-  .minted-token > div { display:flex;gap:8px }
-  .minted-token input { min-width:0;font-size:.76rem }
+  .profile-fields input[readonly] { background:var(--surface-2); color:var(--muted) }
+  .field :global(.sub) { display:block; color:var(--muted); font-size:.8rem; line-height:1.45; margin-top:4px }
+  .card-foot { display:flex; justify-content:flex-end; padding:8px var(--pad) 16px }
+  .card-body { padding:8px var(--pad) 16px }
+  .act-link { background:none; border:0; padding:0; color:var(--accent); font-weight:600; font-size:.8rem; cursor:pointer }
+  .act-link:hover { text-decoration:underline }
+  .act-quiet { background:none; border:0; padding:4px 2px; color:var(--muted); font-weight:600; font-size:.8rem; cursor:pointer; flex:none }
+  .act-quiet:hover { color:var(--danger) }
+  .act-quiet:disabled { opacity:.5; cursor:default }
+  .help-row { display:flex; flex-wrap:wrap; align-items:baseline; column-gap:8px; row-gap:2px }
+  .help-row .sub { display:inline; margin-top:0 }
+  .oidc-sync-form { margin:0; display:flex }
+  .auth-syntax { display:flex; align-items:center; flex-wrap:wrap; gap:4px 8px; min-width:0; flex:0 1 auto }
+  .auth-syntax span { color:var(--muted); font-size:.72rem; font-weight:600 }
+  .auth-syntax code { max-width:100%; padding:5px 8px; border:1px solid var(--line); border-radius:var(--r-sm); background:var(--surface-2); font-size:.74rem; overflow-wrap:anywhere }
+  .minted-token { margin:14px var(--pad) 0 }
+  .minted-token > label { display:block; color:var(--muted); font-size:.78rem; font-weight:600; margin-bottom:5px }
+  .minted-token > div { display:flex; gap:8px }
+  .minted-token input { min-width:0; font-size:.76rem }
   .token-form {
     display: grid;
     grid-template-columns: minmax(220px, 1fr) minmax(230px, auto) auto;
     gap: 10px 12px;
     align-items: end;
-    margin-bottom: 16px;
+    margin: 0;
+    padding: 16px var(--pad);
+    border-bottom: 1px solid var(--line);
   }
   .token-form .field { margin: 0; }
   .field-label { font-size: .78rem; font-weight: 600; color: var(--muted); }
   .token-access { min-height: 37px; }
   .token-access button { flex: 1; white-space: nowrap; }
   .token-create { white-space:nowrap }
-  .settings-list { border-top:1px solid var(--line) }
-  .token-row { display:flex;align-items:center;gap:12px;min-width:0;padding:12px 0;border-bottom:1px solid var(--line) }
+  .settings-list { border-top:0 }
+  .token-row { display:flex; align-items:center; gap:12px; min-width:0; padding:12px var(--pad); border-bottom:1px solid var(--line) }
   .token-row:last-child, .vault-row:last-child { border-bottom:0 }
-  .token-name { flex:1;min-width:0;font-weight:600;overflow-wrap:anywhere }
-  .row-date { display: flex; flex-direction: column; gap: 3px; color:var(--muted);font-size:.78rem;white-space:nowrap }
-  .empty-setting { color:var(--muted);font-size:.84rem;margin:0;padding:14px 0;border-top:1px solid var(--line) }
-  .vault-row { display:grid;grid-template-columns:minmax(220px,.9fr) minmax(0,1.4fr) auto;gap:18px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line) }
-  .vault-label { width:100%;min-width:0;font-weight:600 }
-  .vault-use { display:flex;align-items:center;gap:6px 14px;min-width:0;color:var(--muted);font-size:.78rem }
-  .vault-use a { min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
-  .linkish { background:none;border:0;padding:0;color:var(--faint);font:inherit;font-style:italic;cursor:pointer }
-  @media (max-width: 760px) {
-    .section-heading { flex-direction:column;gap:10px }
-    .auth-syntax { align-items:flex-start;width:100% }
+  .token-name { flex:1; min-width:0; font-weight:600; overflow-wrap:anywhere }
+  .token-name.mono { font-size:.84rem }
+  .row-date { display: flex; flex-direction: column; gap: 3px; color:var(--muted); font-size:.78rem; white-space:nowrap }
+  .settings-section .err { margin:14px var(--pad) 0 }
+  .empty-setting { color:var(--muted); font-size:.84rem; margin:0; padding:14px var(--pad) 16px; border-top:0 }
+  .row-ico { width:34px; height:34px; border-radius:10px; background:var(--manila); color:var(--ink); display:flex; align-items:center; justify-content:center; flex:none }
+  .vault-row { display:grid; grid-template-columns:auto minmax(200px,.9fr) minmax(0,1.4fr) auto; gap:14px; align-items:center; padding:12px var(--pad); border-bottom:1px solid var(--line) }
+  .vault-label { width:100%; min-width:0; font-weight:600 }
+  .vault-use { display:flex; align-items:center; gap:6px 14px; min-width:0; color:var(--muted); font-size:.78rem }
+  .vault-use a { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+  .linkish { background:none; border:0; padding:0; color:var(--faint); font:inherit; font-style:italic; cursor:pointer }
+  @container (max-width: 680px) {
+    .settings-section { --pad:16px }
     .profile-fields { grid-template-columns:minmax(0,1fr) }
     .token-form { grid-template-columns: minmax(0, 1fr); }
-    .token-create { width:100%;justify-content:center }
-    .vault-row { grid-template-columns:minmax(0,1fr) auto;gap:8px 12px }
-    .vault-use { grid-column:1 / -1;grid-row:2 }
+    .token-create { width:100%; justify-content:center }
+    .vault-row { grid-template-columns:auto minmax(0,1fr) auto; gap:8px 12px }
+    .vault-use { grid-column:2 / -1; grid-row:2 }
   }
-  @media (max-width: 520px) {
+  @container (max-width: 480px) {
     .profile-layout { grid-template-columns:minmax(0,1fr) }
-    .avatar-control { flex-direction:row;justify-content:flex-start }
-    .profile-save { width:100%;justify-content:center }
+    .avatar-control { flex-direction:row; justify-content:flex-start }
+    .card-foot button { width:100%; justify-content:center }
     .token-row { flex-wrap:wrap }
     .token-name { flex-basis:calc(100% - 100px) }
-    .row-date { order:4;flex-basis:100% }
+    .row-date { order:4; flex-basis:100% }
   }
 </style>
