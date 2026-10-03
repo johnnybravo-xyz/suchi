@@ -10,6 +10,9 @@ Notable user-visible changes to Suchi are recorded here.
 - Keep operational dead-job details and the Retry/Dismiss recovery controls out
   of member Approvals; administrators retain the audited recovery controls.
 
+- Keep **All documents** on the left of document detail while aligning Download,
+  access, sharing, phone, and Trash actions to the right.
+
 ### Changed
 
 - Keep document-change approvals compact with one-line value transitions,

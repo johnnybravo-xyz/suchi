@@ -462,7 +462,7 @@
 
 <div class="toolbar">
   <a class="btn sm" href={filingHref(trashed ? '#/trash' : '#/documents')}><Icon name="left" size={13} /> {trashed ? 'Back to Trash' : 'All documents'}</a>
-  <span class="spacer"></span>
+  <span class="spacer" style="flex:1"></span>
   {#if doc}
     {#if doc.jd_address}
       <input class="input mono" style="max-width:210px" aria-label="Filing address" readonly value={doc.jd_address}
