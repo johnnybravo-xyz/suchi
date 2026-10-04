@@ -252,6 +252,7 @@ func (s *Server) ListIntelligence(w http.ResponseWriter, r *http.Request) {
 	}
 	where = append(where, visibility)
 	args = append(args, visibilityArgs...)
+	where, args = appendDocumentFieldPresence(where, args, p, groups, queryPlan)
 	versionWhere, versionArgs := documentVersionWhere(r.Context(), p, groups, versionMode)
 	if versionWhere != "" {
 		where = append(where, versionWhere)

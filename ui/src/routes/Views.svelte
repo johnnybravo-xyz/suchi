@@ -2,8 +2,15 @@
 <script>
   import { scopedHash as filingHref } from '../lib/systems.svelte.js'
   import { listSavedViews, createSavedView, patchSavedView, deleteSavedView,
-           listTags, listCorrespondents, listDocumentTypes } from '../lib/api.js'
-  import { canonicalSavedViewQuery, documentListHash, parseSavedViewFilters } from '../lib/documentFilters.js'
+           listTags, listCorrespondents, listDocumentTypes, listCustomFields } from '../lib/api.js'
+  import {
+    canonicalSavedViewQuery,
+    documentListHash,
+    extractFieldPresence,
+    fieldPresenceSelection,
+    parseFieldPresenceSelection,
+    parseSavedViewFilters,
+  } from '../lib/documentFilters.js'
   import { SENSITIVITY_OPTIONS, sensitivityLabel } from '../lib/format.js'
   import { DATE_ROLES, intelligenceRoleLabel } from '../lib/intelligence.js'
   import Icon from '../lib/Icon.svelte'
@@ -20,7 +27,7 @@
   let editing = $state(null)
   let startCreateHandled = $state(false)
   let nameInput = $state()
-  let tags = $state([]), corrs = $state([]), types = $state([])
+  let tags = $state([]), corrs = $state([]), types = $state([]), customFields = $state([])
   const filingCategories = $derived(jdCategories.filter((category) => !category.is_area))
   let facetsPromise
   let facetsError = $state('')
@@ -35,7 +42,7 @@
   }
 
   function emptyView() {
-    return { name: '', q: '', tag: '', corr: '', type: '', jd: '', sens: '', dateFrom: '', dateTo: '', dateRole: '', ids: [], shared: false }
+    return { name: '', q: '', tag: '', corr: '', type: '', jd: '', sens: '', dateFrom: '', dateTo: '', dateRole: '', fieldPresence: '', ids: [], shared: false }
   }
 
   function parseDocumentIDs(value) {
@@ -85,16 +92,36 @@
     return summary.length ? summary : ['All documents']
   }
 
+  function knownFieldPresence(value) {
+    const selection = parseFieldPresenceSelection(value)
+    return selection && customFields.some((field) => field.name === selection.name)
+  }
+
+  function fieldPresenceLabel(value) {
+    const selection = parseFieldPresenceSelection(value)
+    if (!selection) return 'Saved custom field'
+    return `${selection.missing ? 'Missing value' : 'Has value'} — ${selection.name}`
+  }
+
   function openCreate(q = '', ids = []) {
     editing = null
-    nv = { ...emptyView(), q, ids }
+    const presence = extractFieldPresence(q)
+    nv = { ...emptyView(), q: presence.query, fieldPresence: presence.selection, ids }
     openEditor()
   }
 
   function openEdit(view) {
     if (view.owner_id) return
     editing = view
-    nv = { ...emptyView(), name: view.name, q: view.filters.q || '', ids: view.filters.document_ids || [], shared: !!view.shared }
+    const presence = extractFieldPresence(view.filters.q || '')
+    nv = {
+      ...emptyView(),
+      name: view.name,
+      q: presence.query,
+      fieldPresence: presence.selection,
+      ids: view.filters.document_ids || [],
+      shared: !!view.shared,
+    }
     for (const [field, key] of Object.entries(filterFields)) {
       nv[field] = String(view.filters[key] ?? '')
     }
@@ -115,6 +142,7 @@
       listTags().then((r) => (tags = r?.results || r || [])),
       listCorrespondents().then((r) => (corrs = r?.results || r || [])),
       listDocumentTypes().then((r) => (types = r?.results || r || [])),
+      listCustomFields().then((r) => (customFields = r?.results || r || [])),
     ]).then((results) => {
       if (results.some((result) => result.status === 'rejected')) {
         facetsError = 'Some filters could not be loaded.'
@@ -363,6 +391,19 @@
               {#each types as t}<option value={t.id}>{t.name}</option>{/each}
               {#if nv.type && !types.some(t => String(t.id) === String(nv.type))}
                 <option value={nv.type}>Saved type: {nv.type}</option>
+              {/if}
+            </select>
+          </div>
+          <div class="field">
+            <label for="view-field-presence">Custom field value</label>
+            <select id="view-field-presence" class="input" bind:value={nv.fieldPresence}>
+              <option value="">Any custom field value</option>
+              {#each customFields as field}
+                <option value={fieldPresenceSelection(field.name)}>Has value — {field.name}</option>
+                <option value={fieldPresenceSelection(field.name, true)}>Missing value — {field.name}</option>
+              {/each}
+              {#if nv.fieldPresence && !knownFieldPresence(nv.fieldPresence)}
+                <option value={nv.fieldPresence}>{fieldPresenceLabel(nv.fieldPresence)}</option>
               {/if}
             </select>
           </div>

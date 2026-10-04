@@ -42,7 +42,11 @@ func Resolve(ctx context.Context, query Query, resolver Resolver) (ResolvedQuery
 		}
 
 		switch clause.Filter {
-		case "jd", "tag", "from", "type":
+		case "jd", "tag", "from", "type", "has-field":
+			if clause.Filter == "has-field" && clause.Operator != OpEqual {
+				return ResolvedQuery{}, filterError(clause.Position, clause.Filter,
+					"has-field only supports equality", nil)
+			}
 			candidates, err := resolver.Resolve(ctx, clause.Filter, clause.Value)
 			if err != nil {
 				return ResolvedQuery{}, err

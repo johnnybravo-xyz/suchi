@@ -209,3 +209,32 @@ func TestCompileVersionSelector(t *testing.T) {
 		}
 	}
 }
+
+func TestCompileFieldPresence(t *testing.T) {
+	parsed, err := Parse(`has-field:"Governing contract" -has-field:Receipt`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := Resolve(context.Background(), parsed, fakeResolver{values: map[string][]Candidate{
+		"has-field:Governing contract": {{ID: 12, Label: "Governing contract"}},
+		"has-field:Receipt":            {{ID: 13, Label: "Receipt"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := Compile(resolved)
+	want := []FieldPresence{{FieldID: 12}, {FieldID: 13, Negated: true}}
+	if !reflect.DeepEqual(plan.FieldPresence, want) || len(plan.Predicates) != 0 {
+		t.Fatalf("field presence plan=%+v", plan)
+	}
+	if normalized := Normalize(parsed); normalized != `has-field:"Governing contract" -has-field:Receipt` {
+		t.Fatalf("normalized=%q", normalized)
+	}
+
+	invalid := Query{Clauses: []Clause{{
+		Kind: ClauseFilter, Filter: "has-field", Operator: OpGreater, Value: "Receipt",
+	}}}
+	if _, err := Resolve(context.Background(), invalid, fakeResolver{}); err == nil {
+		t.Fatal("ordered field presence was accepted")
+	}
+}

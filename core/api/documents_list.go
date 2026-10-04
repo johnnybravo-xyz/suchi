@@ -155,6 +155,7 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 	}
 	where = append(where, frag)
 	args = append(args, vargs...)
+	where, args = appendDocumentFieldPresence(where, args, p, groups, queryPlan)
 	versionWhere, versionArgs := documentVersionWhere(r.Context(), p, groups, versionMode)
 	if versionWhere != "" {
 		where = append(where, versionWhere)

@@ -3,9 +3,14 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"testing"
+
+	"github.com/johnnybravo-xyz/suchi/core/auth"
 )
 
 func seedDocumentReferences(t *testing.T, s *Server) {
@@ -177,4 +182,113 @@ func TestDeletingDocumentLinkFieldRemovesOutgoingValuesAndBacklinks(t *testing.T
 	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &backlinks) != nil || backlinks.Count != 0 {
 		t.Fatalf("deleted field backlinks: %d %s", w.Code, w.Body.String())
 	}
+}
+
+func TestFieldPresenceQueryUsesVisibleLiveReferenceTargets(t *testing.T) {
+	s, _ := newSystemsBoundaryServer(t)
+	seedSystemsBoundary(t, s)
+	seedDocumentReferences(t, s)
+	principal := memberPrincipal(5)
+
+	assertIDs := func(label string, got []int64, want ...int64) {
+		t.Helper()
+		gotSet := make(map[int64]bool, len(got))
+		for _, id := range got {
+			gotSet[id] = true
+		}
+		if len(gotSet) != len(want) {
+			t.Fatalf("%s ids=%v, want %v", label, got, want)
+		}
+		for _, id := range want {
+			if !gotSet[id] {
+				t.Fatalf("%s ids=%v, missing %d", label, got, id)
+			}
+		}
+	}
+	list := func(query string) (int, []int64) {
+		t.Helper()
+		code, rows, count := doList(t, s, "/api/documents/?q="+url.QueryEscape(query), principal)
+		ids := make([]int64, 0, len(rows))
+		for _, row := range rows {
+			ids = append(ids, row.ID)
+		}
+		if count != len(ids) {
+			t.Fatalf("list %q count=%d ids=%v", query, count, ids)
+		}
+		return code, ids
+	}
+
+	code, ids := list(`has-field:"Related" version:all`)
+	if code != http.StatusOK {
+		t.Fatalf("related list status=%d", code)
+	}
+	assertIDs("visible exact references", ids, 101, 103)
+
+	searchCode, search, searchErr := doSearch(t, s, `has-field:"Related" version:all`, principal)
+	searchIDs := make([]int64, 0, len(search.Results))
+	for _, result := range search.Results {
+		searchIDs = append(searchIDs, result.ID)
+	}
+	if searchCode != http.StatusOK {
+		t.Fatalf("related search status=%d body=%v", searchCode, searchErr)
+	}
+	assertIDs("ranked search", searchIDs, 101, 103)
+
+	_, ids = list(`has-field:"Local field" version:all`)
+	assertIDs("ordinary value", ids, 101)
+	_, ids = list(`has-field:"Secret" version:all`)
+	assertIDs("hidden reference target", ids)
+	_, ids = list(`-has-field:"Secret" version:all`)
+	if !containsDocumentID(ids, 101) {
+		t.Fatalf("hidden reference did not behave as absent: ids=%v", ids)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest("GET", "/api/autocomplete/?q="+url.QueryEscape("has-field:Rel"), nil)
+	request = request.WithContext(auth.WithPrincipal(context.Background(), principal))
+	s.Autocomplete(recorder, request)
+	var suggestions struct {
+		Results []AutocompleteSuggestion `json:"results"`
+	}
+	if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &suggestions) != nil ||
+		len(suggestions.Results) != 1 || suggestions.Results[0].Query != "has-field:Related" {
+		t.Fatalf("field autocomplete: %d %s", recorder.Code, recorder.Body.String())
+	}
+
+	if _, err := s.DB.Write.Exec(`UPDATE documents SET trashed_at=10 WHERE id=202`); err != nil {
+		t.Fatal(err)
+	}
+	_, ids = list(`has-field:"Related" version:all`)
+	assertIDs("trashed reference target", ids)
+	if _, err := s.DB.Write.Exec(`UPDATE documents SET trashed_at=NULL WHERE id=202`); err != nil {
+		t.Fatal(err)
+	}
+	_, ids = list(`has-field:"Related" version:all`)
+	assertIDs("restored reference target", ids, 101, 103)
+
+	if _, err := s.DB.Write.Exec(`UPDATE custom_fields SET name='Relationship' WHERE id=105`); err != nil {
+		t.Fatal(err)
+	}
+	code, _ = list(`has-field:"Related" version:all`)
+	if code != http.StatusBadRequest {
+		t.Fatalf("old field name status=%d, want 400", code)
+	}
+	_, ids = list(`has-field:"Relationship" version:all`)
+	assertIDs("renamed field", ids, 101, 103)
+	if _, err := s.DB.Write.Exec(`DELETE FROM custom_fields WHERE id=105`); err != nil {
+		t.Fatal(err)
+	}
+	code, _ = list(`has-field:"Relationship" version:all`)
+	if code != http.StatusBadRequest {
+		t.Fatalf("deleted field status=%d, want 400", code)
+	}
+}
+
+func containsDocumentID(ids []int64, want int64) bool {
+	for _, id := range ids {
+		if id == want {
+			return true
+		}
+	}
+	return false
 }

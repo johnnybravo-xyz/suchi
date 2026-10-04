@@ -681,6 +681,7 @@ async function mockAPI(page, options = {}) {
         ? options.jdCategoriesAfterPreset
         : (options.jdCategories || []),
     }
+    else if (path === '/api/custom_fields/') body = { results: options.customFields || [] }
     else if (path === '/api/presets/') body = { results: presets }
     else if (path === '/api/filing-sets/') body = filingSetCatalog
     else if (path === '/api/admin/taxonomy/import' && options.taxonomyImport) {
@@ -2294,6 +2295,7 @@ test('starts view creation from the dashboard action', async ({ page }) => {
 test('stores new saved views as one canonical query', async ({ page }) => {
   await mockAPI(page, {
     jdCategories: [{ id: 6, code: 22, name: 'Investments', area_code: 20, area_name: 'Money', is_area: false }],
+    customFields: [{ id: 12, name: 'Payment receipt', data_type: 'documentlink' }],
   })
   await page.goto('/#/views')
   await page.getByRole('button', { name: 'New view' }).click()
@@ -2302,6 +2304,7 @@ test('stores new saved views as one canonical query', async ({ page }) => {
   await dialog.getByLabel('Query').fill('"distribution advice"')
   await dialog.getByLabel('Filing category').selectOption('6')
   await dialog.getByLabel('Sensitivity').selectOption('confidential')
+  await dialog.getByLabel('Custom field value').selectOption({ label: 'Missing value — Payment receipt' })
   await expect(dialog.getByLabel('Document date from', { exact: true })).toHaveAttribute('placeholder', 'yyyy-mm-dd')
   await dialog.getByLabel('Document date from', { exact: true }).fill('2026-01-01')
   await dialog.getByLabel('Document date from', { exact: true }).press('Tab')
@@ -2314,8 +2317,36 @@ test('stores new saved views as one canonical query', async ({ page }) => {
   await dialog.getByRole('button', { name: 'Save view' }).click()
   const payload = (await saveRequest).postDataJSON()
   expect(JSON.parse(payload.filter_json)).toEqual({
-    q: '"distribution advice" jd:22 sensitivity:confidential date:>=2026-01-01 date:<=2026-12-31',
+    q: '"distribution advice" jd:22 -has-field:"Payment receipt" sensitivity:confidential date:>=2026-01-01 date:<=2026-12-31',
   })
+})
+
+test('reopens custom-field presence views and keeps browser navigation stable', async ({ page }) => {
+  const query = 'type:invoice -has-field:"Payment receipt"'
+  await mockAPI(page, {
+    customFields: [{ id: 12, name: 'Payment receipt', data_type: 'documentlink' }],
+    savedViews: [{ id: 9, name: 'Invoices missing receipts', filter_json: JSON.stringify({ q: query }), shared: false }],
+  })
+  await page.goto('/#/views')
+  await page.getByRole('button', { name: 'Edit Invoices missing receipts' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Edit view' })
+  await expect(dialog.getByLabel('Query')).toHaveValue('type:invoice')
+  await expect(dialog.getByLabel('Custom field value')).toHaveValue(
+    JSON.stringify({ name: 'Payment receipt', missing: true }),
+  )
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+
+  const documentRequest = page.waitForRequest(request => {
+    const url = new URL(request.url())
+    return url.pathname === '/api/documents/' && url.searchParams.get('q') === query
+  })
+  await page.getByRole('link', { name: /Invoices missing receipts/ }).click()
+  await documentRequest
+  await expect(page).toHaveURL(/#\/documents\?q=/)
+  await page.goBack()
+  await expect(page).toHaveURL(/#\/views$/)
+  await page.goForward()
+  await expect(page).toHaveURL(/#\/documents\?q=/)
 })
 
 test('keeps an invalid saved view open with the server error', async ({ page }) => {

@@ -9,6 +9,11 @@ type Predicate struct {
 	Args []any
 }
 
+type FieldPresence struct {
+	FieldID int64
+	Negated bool
+}
+
 type Plan struct {
 	Match           string
 	Predicates      []Predicate
@@ -16,6 +21,7 @@ type Plan struct {
 	SelectsTrash    bool
 	VersionMode     VersionMode
 	VersionExplicit bool
+	FieldPresence   []FieldPresence
 }
 
 func Compile(query ResolvedQuery) Plan {
@@ -44,6 +50,13 @@ func Compile(query ResolvedQuery) Plan {
 		if clause.Filter == "version" {
 			plan.VersionMode = VersionMode(clause.Value)
 			plan.VersionExplicit = true
+			continue
+		}
+		if clause.Filter == "has-field" {
+			plan.FieldPresence = append(plan.FieldPresence, FieldPresence{
+				FieldID: clause.ID,
+				Negated: clause.Negated,
+			})
 			continue
 		}
 		// Positive accepted-date clauses describe one fact. Keeping them in a

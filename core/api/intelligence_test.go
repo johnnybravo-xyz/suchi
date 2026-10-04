@@ -179,6 +179,30 @@ func TestIntelligenceVersionSelectionKeepsReviewQueuesExact(t *testing.T) {
 	}
 }
 
+func TestIntelligenceListAppliesFieldPresenceQuery(t *testing.T) {
+	s := newIntelligenceTestServer(t)
+	seedChatDoc(t, s, 52, 1, "Has note", "Renews 2026-09-01", "public", false)
+	seedChatDoc(t, s, 53, 1, "No note", "Renews 2027-09-01", "public", false)
+	seedDateIntelligence(t, s, 52, "accepted", "2026-09-01")
+	seedDateIntelligence(t, s, 53, "accepted", "2027-09-01")
+	if _, err := s.DB.Write.Exec(`
+		INSERT INTO custom_fields(id, system_id, name, data_type, created_at, updated_at)
+		VALUES (9, 1, 'Calendar note', 'text', 0, 0);
+		INSERT INTO document_custom_field_values(document_id, field_id, value_text)
+		VALUES (52, 9, 'present');
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := doIntelligenceRequest(t, s, http.MethodGet,
+		"/api/intelligence/?type=date&q=has-field%3A%22Calendar+note%22", "", adminPrincipal(1))
+	var envelope Envelope[IntelligenceRow]
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil || rec.Code != http.StatusOK ||
+		envelope.Count != 1 || len(envelope.Results) != 1 || envelope.Results[0].DocumentID != 52 {
+		t.Fatalf("field-scoped intelligence: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestDemoCalendarIsReadOnlyAndUsesCorpusVisibility(t *testing.T) {
 	s := newIntelligenceTestServer(t)
 	if _, err := s.DB.Write.Exec(`UPDATE users SET email = ? WHERE id = 1`, authz.DemoCorpusOwnerEmail); err != nil {

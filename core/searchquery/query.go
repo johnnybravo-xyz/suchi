@@ -101,6 +101,7 @@ var filterNames = []string{
 	"lang",
 	"title",
 	"content",
+	"has-field",
 	"added",
 	"date",
 	"date-role",

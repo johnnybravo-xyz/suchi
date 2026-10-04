@@ -195,6 +195,43 @@ func documentVersionWhere(ctx context.Context, p *pluginapi.Principal, groups []
 	return "(d.version_family_key IS NULL OR NOT " + newerExists + ")", args
 }
 
+func documentFieldPresenceWhere(p *pluginapi.Principal, groups []int64, field searchquery.FieldPresence) (string, []any) {
+	targetVisibility, targetArgs := intrinsicDocumentVisibilityWhereAlias(p, groups, "sq_target")
+	presence := `EXISTS (
+		SELECT 1
+		FROM document_custom_field_values sq_value
+		JOIN custom_fields sq_field ON sq_field.id = sq_value.field_id
+		WHERE sq_value.document_id = d.id
+		  AND sq_value.field_id = ?
+		  AND (
+			sq_field.data_type <> 'documentlink'
+			OR EXISTS (
+				SELECT 1
+				FROM documents sq_target
+				WHERE sq_target.id = sq_value.value_int
+				  AND sq_target.trashed_at IS NULL
+				  AND (` + targetVisibility + `)
+			)
+		  )
+	)`
+	if field.Negated {
+		presence = "NOT " + presence
+	}
+	args := make([]any, 0, len(targetArgs)+1)
+	args = append(args, field.FieldID)
+	args = append(args, targetArgs...)
+	return presence, args
+}
+
+func appendDocumentFieldPresence(where []string, args []any, p *pluginapi.Principal, groups []int64, plan searchquery.Plan) ([]string, []any) {
+	for _, field := range plan.FieldPresence {
+		predicate, predicateArgs := documentFieldPresenceWhere(p, groups, field)
+		where = append(where, predicate)
+		args = append(args, predicateArgs...)
+	}
+	return where, args
+}
+
 // documentPermissionDecisions resolves a bulk request with one group lookup.
 func (s *Server) documentPermissionDecisions(ctx context.Context, tx *sql.Tx, p *pluginapi.Principal,
 	ids []int64, want authz.Perm) (map[int64]bool, error) {

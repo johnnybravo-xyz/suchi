@@ -25,6 +25,32 @@ function quotedQueryValue(value) {
   return `"${String(value).replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`
 }
 
+export function fieldPresenceSelection(name, missing = false) {
+  return name ? JSON.stringify({ name: String(name), missing: !!missing }) : ''
+}
+
+export function parseFieldPresenceSelection(value) {
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed.name === 'string' && parsed.name
+      ? { name: parsed.name, missing: !!parsed.missing }
+      : null
+  } catch {
+    return null
+  }
+}
+
+export function extractFieldPresence(query = '') {
+  const text = String(query)
+  const match = /(^|\s)(-?)has-field:(?:"((?:\\.|[^"\\])*)"|([^\s]+))(?=\s|$)/i.exec(text)
+  if (!match) return { query: text, selection: '' }
+  const name = (match[3] ?? match[4] ?? '').replace(/\\(.)/g, '$1')
+  return {
+    query: (text.slice(0, match.index) + text.slice(match.index + match[0].length)).trim(),
+    selection: fieldPresenceSelection(name, match[2] === '-'),
+  }
+}
+
 export function canonicalSavedViewQuery(draft, { tags = [], correspondents = [], types = [], categories = [] } = {}) {
   const parts = []
   const text = String(draft?.q || '').trim()
@@ -38,6 +64,10 @@ export function canonicalSavedViewQuery(draft, { tags = [], correspondents = [],
   if (type) parts.push(`type:${quotedQueryValue(type.name)}`)
   const category = categories.find((item) => String(item.id) === String(draft?.jd))
   if (category) parts.push(`jd:${category.code}`)
+  const fieldPresence = parseFieldPresenceSelection(draft?.fieldPresence)
+  if (fieldPresence) {
+    parts.push(`${fieldPresence.missing ? '-' : ''}has-field:${quotedQueryValue(fieldPresence.name)}`)
+  }
   if (draft?.sens) parts.push(`sensitivity:${draft.sens}`)
   if (draft?.dateFrom) parts.push(`date:>=${draft.dateFrom}`)
   if (draft?.dateTo) parts.push(`date:<=${draft.dateTo}`)

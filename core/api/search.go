@@ -134,6 +134,7 @@ func (s *Server) Search(w http.ResponseWriter, r *http.Request) {
 	}
 	extra += " AND " + visibility
 	extraArgs = append(extraArgs, visibilityArgs...)
+	where, args = appendDocumentFieldPresence(where, args, principal, groups, queryPlan)
 	versionWhere, versionArgs := documentVersionWhere(r.Context(), principal, groups, versionMode)
 	if versionWhere != "" {
 		extra += " AND " + versionWhere

@@ -717,6 +717,7 @@ func (s *Server) chatSourceWhere(ctx context.Context, q sqlQueryer, scope ChatSc
 	if err != nil {
 		return nil, nil, err
 	}
+	where, args = appendDocumentFieldPresence(where, args, p, groups, plan)
 	versionWhere, versionArgs := documentVersionWhere(ctx, p, groups, versionMode)
 	if versionWhere != "" {
 		where = append(where, versionWhere)
