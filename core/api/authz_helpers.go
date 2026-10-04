@@ -137,7 +137,11 @@ func (s *Server) principalGroups(ctx context.Context, userID int64) ([]int64, er
 }
 
 func documentVisibilityWhere(ctx context.Context, p *pluginapi.Principal, groups []int64) (string, []any) {
-	return authz.DocVisibilityWhere(systemPrincipal(ctx, p, groups), collectionSystemID(ctx, p))
+	return documentVisibilityWhereAlias(ctx, p, groups, "d")
+}
+
+func documentVisibilityWhereAlias(ctx context.Context, p *pluginapi.Principal, groups []int64, alias string) (string, []any) {
+	return authz.DocVisibilityWhereAlias(systemPrincipal(ctx, p, groups), collectionSystemID(ctx, p), alias)
 }
 
 func (s *Server) collectionVisibility(ctx context.Context, p *pluginapi.Principal) (string, []any, error) {
