@@ -17,6 +17,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 - Keep document-change approvals compact with one-line value transitions,
   collapsed plain-language source explanations, and no producer score details.
+- Streamline Classification with concise helper copy and a contained **Similar
+  documents** switch that exposes standard switch semantics.
 
 
 ## [0.1.0] - 2026-09-28

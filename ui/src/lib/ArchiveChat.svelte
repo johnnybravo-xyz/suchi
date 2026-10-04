@@ -354,8 +354,8 @@
               {/if}
             </div>
 
-            <section class="evidence-stack" aria-label="Evidence sources">
-              <header><span>Evidence</span><small>{turn.citations.length || 0} cited / {turn.sources.length} retrieved</small></header>
+            <section class="evidence-stack" aria-label="From your documents">
+              <header><span>From your documents</span><small>{turn.citations.length || 0} cited / {turn.sources.length} retrieved</small></header>
               {#each groups.primary as item (item.source.id)}
                 <ArchiveChatSource {item} cited onOpen={closeForNavigation} />
               {/each}

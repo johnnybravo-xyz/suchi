@@ -382,12 +382,12 @@
                       <blockquote class="intelligence-evidence">“{candidate.evidence_text}”</blockquote>
                       <small>{candidate.source_current === true ? 'Exact text from the linked document' : 'Stored extraction quote; not verified against the current document'}{Number.isInteger(candidate.evidence_start) ? ` · UTF-8 byte ${candidate.evidence_start}` : ''}</small>
                     {:else}
-                      <small>Evidence is unavailable here. Open the source document; sensitive text uses its existing reveal controls.</small>
+                      <small>The document passage is unavailable here. Open the source document; sensitive text uses its existing reveal controls.</small>
                     {/if}
                     {#if typeof candidate.confidence === 'number'}
                       <details class="task-details">
                         <summary>Producer detail</summary>
-                        <p>Score: {candidate.confidence.toFixed(2)}</p>
+                        <p>Confidence: {Math.round(candidate.confidence * 100)}%</p>
                         {#if candidate.extractor}<p>Producer: {candidate.extractor}</p>{/if}
                       </details>
                     {/if}

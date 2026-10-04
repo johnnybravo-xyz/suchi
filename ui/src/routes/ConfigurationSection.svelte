@@ -47,6 +47,9 @@
 
   // Section form state.
   let mailUsers = $state([])
+  let modelDialogOpen = $state(false)
+  let thresholdsOpen = $state(false)
+  let researchOpen = $state(false)
   let llm = $state({
     enabled: false, endpoint_url: '', model: '', api_key: '', clear_api_key: false,
     egress_ack: false, confidence_threshold: 0.7,
@@ -311,76 +314,60 @@
       <EmailAccounts {notify} users={mailUsers} />
 
     {:else if section === 'llm'}
-      <h3>Filing suggestions, dates, and research</h3>
-      <p class="wiz-p">Local matching can suggest filing details from documents already in your archive, without a model or sending text elsewhere. An optional model proposes metadata and dates, and powers <b>Archive research</b> for authorized users.</p>
-      <div class="side-head" style="padding-left:0;margin-top:20px">Optional model</div>
-      <div class="toolbar" style="margin:0 0 12px">
-        {#if llmStatus?.active}
-          <span class="pill ok">Model active</span>
-        {:else if llmStatus?.enabled}
-          <span class="pill warn">Model inactive</span>
-        {:else}
-          <span class="pill">No model</span>
-        {/if}
-        {#if llmStatus?.has_api_key}<span class="chip">API key configured</span>{/if}
-      </div>
-      <span class="seg" style="margin-bottom:14px">
-        <button class:on={llmMode === 'local'} onclick={() => setLLMMode('local')}>Local model</button>
-        <button class:on={llmMode === 'hosted'} onclick={() => setLLMMode('hosted')}>Hosted endpoint</button>
-      </span>
-      {#if llmMode === 'local'}
-        <p class="wiz-p sub" style="font-size:.8rem">The Docker Compose default reaches Ollama on the host. Edit the URL for a native install or another machine on your network.</p>
-      {:else}
-        <p class="wiz-p sub" style="font-size:.8rem">Use the OpenAI-compatible base URL from your provider. Suchi sends extracted text, never the original file.</p>
-      {/if}
-      <div class="field"><label for="l-url">Endpoint URL</label>
-        <input id="l-url" class="input mono" placeholder="http://host.suchi.local:11434/v1" bind:value={llm.endpoint_url} oninput={invalidateLLMTest} /></div>
-      <div class="field"><label for="l-model">Model</label>
-        <input id="l-model" class="input mono" placeholder="qwen2.5:7b" bind:value={llm.model} oninput={invalidateLLMTest} /></div>
-      <div class="field"><label for="l-key">API key (blank for local)</label>
-        <input id="l-key" class="input mono" type="password" bind:value={llm.api_key} autocomplete="off"
-               oninput={invalidateLLMTest}
-               disabled={llm.clear_api_key}
-               placeholder={llmStatus?.has_api_key ? 'stored key — leave blank to keep' : ''} /></div>
-      {#if llmStatus?.has_api_key}
-        <label class="wiz-check"><input type="checkbox" checked={llm.clear_api_key} onchange={setClearAPIKey} />
-          Clear the saved API key when saving. Config-file and environment keys are unchanged.</label>
-      {/if}
-      {#if llmIsRemote}
-        <label class="wiz-check attn"><input type="checkbox" bind:checked={llm.egress_ack} onchange={invalidateLLMTest} />
-          This endpoint is not local. I acknowledge document text will leave this machine.</label>
-      {/if}
-
-      <div class="toolbar connection-actions">
-        <button class="btn primary sm" disabled={busy || llmTesting || !llm.endpoint_url || !llm.model || (llmIsRemote && !llm.egress_ack)}
-                onclick={testClassifier}>Test connection</button>
-        <button class="btn sm" disabled={busy || llmTesting}
-                onclick={() => saveAnd(() => saveClassifier(false), 'Model disabled; local matching settings unchanged')}>Disable model</button>
-      </div>
-      {#if llmTestError}
-        <div class="test-result failed">
-          <b>Connection failed</b>
-          <span>{llmTestError}</span>
-        </div>
-      {:else if llmTestResult}
-        <div class="test-result">
-          <b>Connection responded in {llmTestResult.elapsed_ms} ms</b>
-          <span>{llmTestResult.title || 'No title'} · self-reported score {Number(llmTestResult.confidence).toFixed(2)}</span>
-          {#if llmTestResult.tags?.length}<span class="sub">Tags: {llmTestResult.tags.join(', ')}</span>{/if}
-        </div>
-      {/if}
-      <p class="wiz-p sub" style="font-size:.8rem;margin-top:12px">Test connection sends a sample, not your documents. A valid response checks connectivity and response format, not accuracy or permission to apply suggestions. Testing does not enable the model.</p>
-
-      <section class="research-context" aria-labelledby="research-context-title">
-        <div class="research-context-heading">
-          <div>
-            <span class="option-kind">Archive answer evidence</span>
-            <h4 id="research-context-title">Archive research configuration</h4>
+      <div class="cls-card">
+        <div class="cls-head"><h3>Suggestions</h3><p>How suggestions are made and applied.</p></div>
+        <div class="cls-row">
+          <div class="apply-mode" role="radiogroup" aria-label="Suggestion application" aria-describedby="application-mode-help">
+            <label class="apply-opt"><input type="radio" name="application-mode" value="review" checked={!autoApply} disabled={busy} onchange={() => (autoApply = false)} />
+              <span><b>Review first</b><small>Every suggestion waits in Approvals.</small></span></label>
+            <label class="apply-opt"><input type="radio" name="application-mode" value="auto" checked={autoApply} disabled={busy} onchange={() => (autoApply = true)} />
+              <span><b>Apply when confident</b><small>High-confidence suggestions file themselves; the rest wait in Approvals.</small></span></label>
           </div>
-          <span class="context-live">Applies to the next question</span>
+          <p class="cls-note" id="application-mode-help">Dates follow the same choice, into Calendar or Approvals.</p>
         </div>
-        <p>Choose how many relevant sections Archive research can include from each document. When room remains, Suchi may also include a separate document ending. More text can improve answers from long documents, but may take longer and send more to your model. It still considers only documents the person asking can access, with at most six documents per answer.</p>
-        <div class="context-presets" role="radiogroup" aria-label="Research context">
+        <div class="cls-row">
+          <button type="button" class="switch" role="switch" aria-checked={llm.archive_enabled}
+                  aria-label="Offer filing suggestions from similar documents"
+                  onclick={() => (llm.archive_enabled = !llm.archive_enabled)}></button>
+          <div class="cls-main"><b>Similar documents</b><small>Learns from what is already filed. Nothing leaves this machine.</small></div>
+          <div class="cls-right"><span class="mono-sum">review ≥ {Math.round(Number(llm.archive_review_threshold) * 100)}% · auto ≥ {Math.round(Number(llm.archive_auto_threshold) * 100)}%</span>
+            <button class="act-link" onclick={() => (thresholdsOpen = !thresholdsOpen)}>{thresholdsOpen ? 'Hide' : 'Adjust'}</button></div>
+        </div>
+        {#if thresholdsOpen}
+          <div class="cls-disc">
+            <div class="field"><label for="archive-review">Minimum confidence to suggest for review · {Math.round(Number(llm.archive_review_threshold) * 100)}%</label>
+              <input id="archive-review" class="range" type="range" min="0.5" max="0.9" step="0.05" bind:value={llm.archive_review_threshold} /></div>
+            <div class="field"><label for="archive-auto">Minimum confidence to apply automatically · {Math.round(Number(llm.archive_auto_threshold) * 100)}%</label>
+              <input id="archive-auto" class="range" type="range" min="0.55" max="0.95" step="0.05" bind:value={llm.archive_auto_threshold} disabled={!autoApply} /></div>
+            {#if llmStatus?.enabled}
+              <div class="field"><label for="l-confidence">Minimum model confidence to apply automatically · {Math.round(Number(llm.confidence_threshold) * 100)}%</label>
+                <input id="l-confidence" class="range" type="range" min="0.5" max="0.95" step="0.05" bind:value={llm.confidence_threshold} disabled={!autoApply} /></div>
+            {/if}
+            <p class="cls-note">Automatic must stay above the review floor.</p>
+            {#if Number(llm.archive_review_threshold) >= Number(llm.archive_auto_threshold)}<p role="alert">The review floor must be below the automatic threshold.</p>{/if}
+          </div>
+        {/if}
+        <div class="cls-row">
+          <div class="cls-main">
+            <b>Document model{#if llmStatus?.active}<span class="mdot"></span><em>Active</em>{/if}</b>
+            {#if llmStatus?.active}<small><span class="mono">{llm.model}</span> · {llmMode === 'hosted' ? 'hosted endpoint' : 'local model'}</small>
+            {:else}<small>Titles, dates, tags and Archive research. Off.</small>{/if}
+          </div>
+          <div class="cls-right">{#if llmStatus?.active}<button class="act-link" onclick={() => (modelDialogOpen = true)}>Manage</button>
+            {:else}<button class="btn sm" onclick={() => (modelDialogOpen = true)}>Set up model</button>{/if}</div>
+        </div>
+        <div class="cls-foot"><span class="cls-note">New documents only; use Rescan in Documents for older ones.</span>
+          <button class="btn primary sm" disabled={busy || Number(llm.archive_review_threshold) >= Number(llm.archive_auto_threshold)}
+                  onclick={() => saveAnd(async () => { await saveApplicationMode(); return saveMatching() }, 'Classification saved')}>Save changes</button></div>
+      </div>
+      <div class="cls-card">
+        <div class="cls-head"><h3 id="research-context-title">Archive research</h3><p>Answers questions from your documents.</p><span class="cls-when">Applies to the next question</span></div>
+        <div class="cls-row"><div class="cls-main"><b>Reading per document</b>
+            {#if llmStatus?.active}<small style="text-transform:capitalize">{researchContextMode}</small>
+            {:else}<small>Needs the document model.</small>{/if}</div>
+          <div class="cls-right">{#if llmStatus?.active}<button class="act-link" onclick={() => (researchOpen = !researchOpen)}>{researchOpen ? 'Hide' : 'Change'}</button>
+            {:else}<button class="act-link" onclick={() => (modelDialogOpen = true)}>Set up model</button>{/if}</div></div>
+        {#if researchOpen}<div class="cls-disc"><div class="context-presets" role="radiogroup" aria-label="Research context">
           {#each RESEARCH_CONTEXT_MODES as mode, index (mode.id)}
             <label class="context-preset" class:on={researchContextMode === mode.id}>
               <input type="radio" name="research-context-mode" bind:group={researchContextMode} value={mode.id} />
@@ -402,68 +389,37 @@
           <button class="btn primary sm" disabled={busy || llmTesting}
                   onclick={() => saveAnd(saveResearchContext, 'Research context saved')}>Save research context</button>
         </div>
-      </section>
-
-      <section class="model-options" aria-labelledby="model-options-title">
-        <h4 id="model-options-title">Classification options</h4>
-        <label class="wiz-check application-mode"><input type="checkbox" bind:checked={autoApply} disabled={busy} aria-describedby="application-mode-help" /> Automatically apply high-confidence suggestions</label>
-        <p id="application-mode-help" class="options-intro"><b>On:</b> Add dates to Calendar and apply suggested metadata when they meet your thresholds.<br /><b>Off:</b> Review inferred changes in Approvals before they apply.</p>
-        <div class="toolbar option-save">
-          <button class="btn primary sm" disabled={busy || llmTesting}
-                  onclick={() => saveAnd(saveApplicationMode, result => applicationModeLabel(result.auto_apply))}>Save application mode</button>
-        </div>
-        <p class="options-intro">Local matching and model activation are separate. This choice does not enable a model or authorize external text sharing. Explicit filing rules still run independently.</p>
-
-        <div class="option-group independent">
-          <span class="option-kind">Works without a model</span>
-          <h5>Similar-document matching</h5>
-          <p>Uses locally indexed documents already filed in this archive to suggest metadata. Saving these options does not enable a model or authorize external text sharing.</p>
-          <label class="wiz-check"><input type="checkbox" bind:checked={llm.archive_enabled} /> Offer filing suggestions from similar documents</label>
-          {#if llm.archive_enabled}
-            <div class="field">
-              <label for="archive-review">Minimum similarity score for review suggestions · {Number(llm.archive_review_threshold).toFixed(2)}</label>
-              <input id="archive-review" class="range" type="range" min="0.5" max="0.9" step="0.05"
-                     bind:value={llm.archive_review_threshold} />
+      </div>{/if}
+      </div>
+      {#if modelDialogOpen}
+        <div class="mdl-dim" aria-hidden="true"></div>
+        <div class="mdl" role="dialog" aria-label="Set up document model">
+          <div class="mdl-head"><b>Set up document model</b><button class="act-link" style="color:var(--muted)" onclick={() => (modelDialogOpen = false)}>Cancel</button></div>
+          <div class="mdl-body">
+            <span class="seg"><button class:on={llmMode === 'local'} onclick={() => setLLMMode('local')}>Local model</button>
+              <button class:on={llmMode === 'hosted'} onclick={() => setLLMMode('hosted')}>Hosted endpoint</button></span>
+            <div class="field"><label for="l-endpoint">Endpoint URL</label><input id="l-endpoint" class="input mono" bind:value={llm.endpoint_url} onchange={invalidateLLMTest} />
+              <p class="cls-note">An OpenAI-compatible base URL. Suchi sends extracted text, never the original file.</p></div>
+            <div class="mdl-grid">
+              <div class="field"><label for="l-model">Model</label><input id="l-model" class="input mono" bind:value={llm.model} onchange={invalidateLLMTest} /></div>
+              <div class="field"><label for="l-key">API key (blank for local)</label><input id="l-key" class="input mono" type="password" bind:value={llm.api_key} placeholder="stored key · leave blank to keep" onchange={invalidateLLMTest} />
+                <label class="wiz-check" style="margin:6px 0 0"><input type="checkbox" checked={llm.clear_api_key} onchange={setClearAPIKey} /> Remove stored key when saving</label></div>
             </div>
-              <div class="field">
-                <label for="archive-auto">Minimum similarity score to apply automatically · {Number(llm.archive_auto_threshold).toFixed(2)}</label>
-                <input id="archive-auto" class="range" type="range" min="0.55" max="0.95" step="0.05"
-                       bind:value={llm.archive_auto_threshold} disabled={!autoApply} aria-describedby="archive-score-help" />
-              </div>
-              <p id="archive-score-help">Must be above the review floor. Lower-scoring eligible matches remain in Approvals.</p>
-          {/if}
-          {#if Number(llm.archive_review_threshold) >= Number(llm.archive_auto_threshold)}
-            <p role="alert">The review floor must be below the automatic threshold. Lower the review floor or turn automatic mode on to adjust its threshold.</p>
-          {/if}
-          <div class="toolbar option-save">
-            <button class="btn primary sm" disabled={busy || llmTesting || Number(llm.archive_review_threshold) >= Number(llm.archive_auto_threshold)}
-                    onclick={() => saveAnd(saveMatching, 'Similar-document matching saved')}>Save matching options</button>
+            {#if llmMode === 'hosted' || llmIsRemote}<label class="wiz-check attn"><input type="checkbox" bind:checked={llm.egress_ack} onchange={invalidateLLMTest} /> This endpoint is not local. I acknowledge document text will leave this machine.</label>{/if}
+            <div class="mdl-test">
+              <button class="btn sm" disabled={busy || llmTesting || !llm.endpoint_url || !llm.model || (llmIsRemote && !llm.egress_ack)} onclick={testClassifier}>Test connection</button>
+              {#if llmTestError}<span class="mdl-bad">{llmTestError}</span>
+              {:else if llmTestResult}<span class="mdl-ok">Responded in {llmTestResult.elapsed_ms} ms · self-reported confidence {Math.round(Number(llmTestResult.confidence) * 100)}%</span>
+              {:else}<span class="cls-note">Sends one sample sentence, never your documents.</span>{/if}
+            </div>
           </div>
+          <div class="mdl-foot"><span class="cls-note">Enabling starts suggestions for new documents.</span>
+            {#if llmStatus?.enabled}<button class="act-link" style="color:var(--muted)" disabled={busy || llmTesting}
+                onclick={() => saveAnd(() => saveClassifier(false), 'Model disabled; local matching settings unchanged').then(() => (modelDialogOpen = false))}>Disable model</button>{/if}
+            <button class="btn primary sm" disabled={busy || llmTesting || !llm.endpoint_url || !llm.model || (llmIsRemote && !llm.egress_ack)}
+                onclick={() => saveAnd(() => saveClassifier(true), 'Model enabled').then(() => (modelDialogOpen = false))}>Enable model</button></div>
         </div>
-
-        <div class="option-group model-driven">
-          <span class="option-kind">Uses the configured model</span>
-          <h5>Model suggestions</h5>
-          <p>Suggests titles, correspondents, filing details, tags, languages, and dates. Test the connection before enabling the model.</p>
-            <div class="field">
-              <label for="l-confidence">Minimum model score to apply automatically · {Number(llm.confidence_threshold).toFixed(2)}</label>
-              <input id="l-confidence" class="range" type="range" min="0.5" max="0.95" step="0.05"
-                     bind:value={llm.confidence_threshold} disabled={!autoApply} aria-describedby="model-score-help" />
-            </div>
-          <p id="model-score-help">Confidence sets the automatic-apply threshold. Eligible suggestions below it stay in Approvals.</p>
-          <h5>Calendar dates</h5>
-          <p>Automatic mode adds eligible high-confidence dates to Calendar. In review-first mode, accept each new date in Approvals first. Existing decisions are preserved; saving settings or restarting Suchi does not accept pending dates.</p>
-        </div>
-
-        <div class="toolbar option-save">
-          <button class="btn primary sm" disabled={busy || llmTesting || !llmTestResult || !llm.endpoint_url || !llm.model || (llmIsRemote && !llm.egress_ack)}
-                  onclick={() => saveAnd(
-                    () => saveClassifier(true),
-                    () => `Model enabled; ${applicationModeLabel(llmStatus?.auto_apply ?? true)}`
-                  )}>Enable model and save options</button>
-        </div>
-      </section>
-      <p class="wiz-p sub" style="font-size:.8rem;margin-top:14px">The enabled model proposes metadata and dates for new documents and answers authorized research questions on demand. To request suggestions for older documents, select them in <a href={filingHref("#/documents")}>Documents</a> and use Rescan or Extract dates. Existing review decisions are preserved.</p>
+      {/if}
 
     {:else if section === 'automations'}
       <h3>Automations</h3>
@@ -493,20 +449,14 @@
 
 <style>
   .wiz-p { color: var(--muted); font-size: .92rem; margin: 6px 0 16px; max-width: 46em; }
+  .apply-mode { margin: 0 0 14px; display: flex; flex-direction: column; gap: 10px }
+  .apply-opt { display: flex; gap: 10px; align-items: flex-start; cursor: pointer }
+  .apply-opt input { margin-top: 3px }
+  .apply-opt b { display: block; font-size: .88rem; font-weight: 600; color: var(--ink) }
+  .apply-opt small { display: block; font-size: .78rem; color: var(--muted); margin-top: 2px }
   .wiz-check { display: flex; gap: 9px; align-items: baseline; font-size: .86rem; color: var(--muted); margin: 0 0 14px; }
   .wiz-check.attn { color: var(--warn); }
   .range { width: 100%; accent-color: var(--accent); }
-  .test-result {
-    display: flex; flex-direction: column; gap: 3px; border-left: 3px solid var(--ok);
-    padding: 7px 10px; margin-top: 12px; font-size: .82rem;
-  }
-  .test-result.failed { border-left-color: var(--danger); }
-  .connection-actions { margin-top: 16px; }
-  .research-context { margin-top: 24px; padding: 18px; border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--surface-2); }
-  .research-context-heading { display: flex; align-items: end; justify-content: space-between; gap: 16px; }
-  .research-context h4 { margin: 0; font-size: 1rem; }
-  .research-context > p { max-width: 56em; margin: 7px 0 14px; color: var(--muted); font-size: .8rem; line-height: 1.5; }
-  .context-live { color: var(--muted); font-size: .76rem; white-space: nowrap; }
   .context-presets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
   .context-preset {
     position: relative; display: grid; grid-template-columns: auto 1fr; gap: 8px; min-width: 0;
@@ -523,26 +473,37 @@
   .context-depth i { display: block; width: 3px; height: 5px; border-radius: 2px; background: var(--accent); }
   .context-depth i:nth-child(2) { height: 8px; }
   .context-depth i:nth-child(3) { height: 11px; }
-  .model-options { margin-top: 24px; padding: 18px; border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--surface-2); }
-  .model-options h4 { margin: 0; font-size: 1rem; }
-  .options-intro { max-width: 54em; margin: 6px 0 0; color: var(--muted); font-size: .8rem; line-height: 1.5; }
-  .application-mode { margin-top: 14px; align-items: start; }
-  .application-mode input { flex-shrink: 0; }
-  .model-options .option-save .btn { white-space: normal; text-align: left; }
-  .option-group { margin-top: 14px; padding: 14px; border: 1px solid var(--line); border-left-width: 3px; border-radius: var(--r-sm); background: var(--surface); }
-  .option-group.independent { border-left-color: var(--ok); }
-  .option-group.model-driven { border-left-color: var(--accent); }
-  .option-kind { display: inline-flex; margin-bottom: 5px; padding: 3px 7px; border-radius: 999px; background: var(--surface-2); color: var(--muted); font-size: .67rem; font-weight: 650; }
-  .option-group h5 { margin: 0; font-size: .88rem; }
-  .option-group > p { margin: 4px 0 12px; color: var(--muted); font-size: .76rem; line-height: 1.45; }
-  .option-group .field:last-child, .option-group .wiz-check:last-child { margin-bottom: 0; }
   .option-save { margin-top: 14px; }
   .configuration-loading { display:grid;gap:12px;padding:8px 0; }
   .configuration-load-error .toolbar { margin-top:10px; }
-  @media (max-width: 640px) { .model-options { padding: 13px; } }
   @media (max-width: 760px) {
-    .research-context { padding: 13px; }
-    .research-context-heading { align-items: start; flex-direction: column; gap: 4px; }
     .context-presets { grid-template-columns: 1fr; }
   }
+  .cls-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); margin-top: 16px; overflow: visible }
+  .cls-head { display: flex; align-items: baseline; gap: 10px; padding: 14px 20px; border-bottom: 1px solid var(--line) }
+  .cls-head h3 { margin: 0; font-size: .95rem } .cls-head p { margin: 0; color: var(--muted); font-size: .8rem }
+  .cls-when { margin-left: auto; color: var(--faint); font-size: .76rem }
+  .cls-row { display: flex; align-items: center; gap: 14px; padding: 13px 20px; border-top: 1px solid var(--line) }
+  .cls-row:nth-child(2) { border-top: 0 }
+  .cls-main { min-width: 0 } .cls-main b { display: flex; align-items: center; gap: 8px; font-size: .9rem }
+  .cls-main small { display: block; color: var(--muted); font-size: .78rem; margin-top: 2px }
+  .cls-main em { font-style: normal; font-size: .76rem; font-weight: 600; color: var(--ok) }
+  .mdot { width: 8px; height: 8px; border-radius: 4px; background: var(--ok) }
+  .cls-right { margin-left: auto; display: flex; align-items: center; gap: 12px; flex: none }
+  .mono-sum { font-family: 'Spline Sans Mono', ui-monospace, Menlo, monospace; font-size: .76rem; color: var(--faint) }
+  .cls-disc { margin: 0 20px 14px 20px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface-2); padding: 14px 16px }
+  .cls-note { color: var(--muted); font-size: .76rem; margin: 6px 0 0 }
+  .cls-foot { display: flex; align-items: center; gap: 14px; padding: 12px 20px; border-top: 1px solid var(--line) }
+  .cls-foot .btn { margin-left: auto }
+  .act-link { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-size: .8rem; font-weight: 600; cursor: pointer }
+  .act-link:hover { text-decoration: underline }
+  .mdl-dim { position: fixed; inset: 0; background: rgba(23,24,26,.4); z-index: 60 }
+  .mdl { position: fixed; left: 50%; top: 7vh; transform: translateX(-50%); width: min(620px, 94vw); background: var(--surface); border-radius: var(--r); box-shadow: 0 30px 70px rgba(20,22,28,.3); z-index: 61; max-height: 86vh; overflow: auto }
+  .mdl-head { display: flex; justify-content: space-between; align-items: center; padding: 16px 22px; border-bottom: 1px solid var(--line) } .mdl-head b { font-size: 1rem }
+  .mdl-body { padding: 16px 22px } .mdl-body .seg { margin-bottom: 14px }
+  .mdl-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px }
+  .mdl-test { display: flex; align-items: center; gap: 12px; margin-top: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface-2); flex-wrap: wrap }
+  .mdl-ok { color: var(--ok); font-weight: 600; font-size: .8rem } .mdl-bad { color: var(--danger); font-size: .8rem }
+  .mdl-foot { display: flex; align-items: center; gap: 14px; padding: 14px 22px; border-top: 1px solid var(--line) }
+  .mdl-foot .btn.primary { margin-left: auto }
 </style>

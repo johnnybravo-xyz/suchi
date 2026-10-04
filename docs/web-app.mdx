@@ -288,20 +288,18 @@ admit admins only. Membership and document ACLs remain separate.
 
 Filing trees, metadata, rules, views, mailboxes/password records and memberships
 use the current system. Accounts/groups, global capabilities, profiles, watched
-folders, OCR/models and backups are server-wide. **Classification** includes
-**Offer filing suggestions from similar documents** for model-free matching.
-In **Classification options**, **Automatically apply high-confidence suggestions**
-is checked by default:
+folders, OCR/models and backups are server-wide. **Classification** keeps its
+controls in two cards. In **Suggestions**, choose **Review first** or **Apply
+when confident**, switch **Similar documents** on or off, and use **Adjust** for
+the review and automatic confidence thresholds. **Save changes** stores the
+application choice and local-matching settings together.
 
-- **On:** Add dates to Calendar and apply suggested metadata when they meet your thresholds.
-- **Off:** Review inferred changes in Approvals before they apply.
-
-Use **Save application mode** independently of model activation, matching and
-research settings. The default model/date threshold is `0.70`; local automatic
-and review-suggestion thresholds are `0.90` and `0.50`. Turning the mode off
-disables automatic threshold controls without clearing their saved values.
-The choice does not change explicit rules, grant egress permission, or bulk-accept
-pending suggestions. New ingests and explicit rescans use the current mode.
+The Similar documents switch controls model-free matching against already-filed
+documents; it does not send text outside the archive. **Document model** remains
+separate and opens its own setup dialog. The default model/date confidence is
+`0.70`; local automatic and review-suggestion confidence defaults are `0.90`
+and `0.50`. Explicit rules remain independent, and existing pending suggestions
+are not accepted by changing these settings.
 
 Admins manage system mailboxes and owners in **Email intake**; capable members
 manage only their own under **My account > Mailboxes**.

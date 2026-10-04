@@ -58,7 +58,7 @@
     }
     if (llm.status === 'fulfilled') {
       const value = llm.value
-      next.llm = status(value?.active ? 'Model active' : value?.archive_enabled ? 'Archive learning' : 'Manual', value?.active ? value.model || 'Configured model' : 'No external model', value?.active || value?.archive_enabled ? 'ok' : '')
+      next.llm = status(value?.active ? 'Model active' : value?.archive_enabled ? 'Local matching' : 'Manual', value?.active ? value.model || 'Configured model' : 'No external model', value?.active || value?.archive_enabled ? 'ok' : '')
     }
     if (automations.status === 'fulfilled') {
       const active = rows(automations.value).filter((automation) => automation.enabled).length
@@ -103,27 +103,36 @@
         <div>
           <span class="eyebrow">Archive</span>
           <h2>Configure how your archive works</h2>
-          <p>Filing trees, metadata, mailboxes and automations target {systems.code || 'this archive'}. Users, server intake, OCR, models and backups remain instance-wide settings.</p>
+          <p>Filing trees, metadata, mailboxes and automations live in {systems.code || 'this archive'}; users, server intake, OCR, models and backups are instance-wide. Administrators only.</p>
         </div>
-        <span class="admin-pill"><Icon name="shield" size={13} /> Administrators</span>
       </header>
 
       {@const filingStatus = statuses[FILING_TREE_SETTINGS_ITEM.name]}
-      <a class="configuration-row filing-row" href={filingHref(FILING_TREE_SETTINGS_ITEM.href)}>
-        <span class="configuration-icon"><Icon name={FILING_TREE_SETTINGS_ITEM.icon} size={15} /></span>
-        <span class="configuration-copy">
-          <b>{FILING_TREE_SETTINGS_ITEM.label}</b>
-          <small>{filingStatus?.detail || FILING_TREE_SETTINGS_ITEM.description}</small>
-        </span>
-        {#if filingStatus}<span class="status" class:ok={filingStatus.tone === 'ok'} class:warn={filingStatus.tone === 'warn'}>{filingStatus.label}</span>{/if}
-        <Icon name="chev" size={13} />
-      </a>
+      {#if filingStatus && filingStatus.tone !== 'ok'}
+        <div class="filing-hero">
+          <span class="configuration-icon"><Icon name={FILING_TREE_SETTINGS_ITEM.icon} size={18} /></span>
+          <span class="configuration-copy">
+            <b>Choose your filing tree</b>
+            <small>Required before Suchi can file anything. Everything else below is optional.</small>
+          </span>
+          <a class="btn primary sm" href={filingHref(FILING_TREE_SETTINGS_ITEM.href)}>Choose filing tree</a>
+        </div>
+      {:else}
+        <a class="configuration-row filing-row" href={filingHref(FILING_TREE_SETTINGS_ITEM.href)}>
+          <span class="configuration-icon"><Icon name={FILING_TREE_SETTINGS_ITEM.icon} size={15} /></span>
+          <span class="configuration-copy">
+            <b>{FILING_TREE_SETTINGS_ITEM.label}</b>
+            <small>{filingStatus?.detail || FILING_TREE_SETTINGS_ITEM.description}</small>
+          </span>
+          {#if filingStatus}<span class="status" class:ok={filingStatus.tone === 'ok'}>{filingStatus.label}</span>{/if}
+          <Icon name="chev" size={13} />
+        </a>
+      {/if}
       <div class="configuration-groups">
         {#each ARCHIVE_SETTINGS_GROUPS as group (group.name)}
           <section class="configuration-group" aria-labelledby={`group-${group.name}`}>
             <header>
               <h3 id={`group-${group.name}`}>{group.label}</h3>
-              <p>{group.description}</p>
             </header>
             {#each group.items as item (item.name)}
               {@const itemStatus = statuses[item.name]}
@@ -140,10 +149,9 @@
           </section>
         {/each}
       </div>
-      <p class="archive-note">Changes here apply to the archive, not only to your account.</p>
     {:else if currentItem}
       <header class="section-intro">
-        <a href={filingHref("#/settings?tab=archive")}><Icon name="left" size={13} /> Archive overview</a>
+        <a href={filingHref("#/settings?tab=archive")}><Icon name="left" size={13} /> Overview</a>
         <span>{currentItem.description}</span>
       </header>
       {#if current === 'filing-tree'}
@@ -185,13 +193,16 @@
   .eyebrow { display: block; margin-bottom: 5px; color: var(--accent); font-family: ui-monospace, monospace; font-size: .64rem; font-weight: 700; letter-spacing: .07em; }
   .archive-intro h2 { font-size: 1.35rem; line-height: 1.2; }
   .archive-intro p { max-width: 590px; margin: 6px 0 0; color: var(--muted); font-size: .82rem; }
-  .admin-pill { display: inline-flex; align-items: center; gap: 6px; flex: none; padding: 5px 9px; border-radius: 99px; background: var(--surface-2); color: var(--muted); font-size: .68rem; font-weight: 600; }
-  .filing-row { margin-bottom: 14px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--r); background: var(--tint); }
+  .filing-row { margin-bottom: 14px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
+  .filing-hero { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; padding: 16px 18px; border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line)); border-radius: var(--r); background: var(--tint); }
+  .filing-hero .configuration-icon { width: 40px; height: 40px; background: var(--surface); }
+  .filing-hero b { font-size: .98rem; letter-spacing: -.01em }
+  .filing-hero small { display: block; margin-top: 2px; color: var(--muted); font-size: .8rem }
+  .filing-hero .btn { margin-left: auto; flex: none; white-space: nowrap }
   .configuration-groups { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
   .configuration-group { overflow: hidden; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
-  .configuration-group > header { padding: 14px 15px 12px; border-top: 3px solid var(--accent); border-bottom: 1px solid var(--line); background: var(--bg); cursor: default; }
+  .configuration-group > header { padding: 13px 15px 11px; border-bottom: 1px solid var(--line); cursor: default; }
   .configuration-group h3 { color: var(--ink); font-size: .92rem; font-weight: 700; line-height: 1.2; }
-  .configuration-group header p { margin: 4px 0 0; color: var(--muted); font-size: .72rem; line-height: 1.35; }
   .configuration-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto auto; gap: 10px; align-items: center; min-height: 61px; padding: 10px 12px; border-bottom: 1px solid var(--line); color: inherit; text-decoration: none; }
   .configuration-row:last-child { border-bottom: 0; }
   .configuration-row:hover { background: var(--tint); }
@@ -203,7 +214,6 @@
   .status { padding: 2px 7px; border-radius: 99px; background: var(--surface-2); color: var(--muted); font-size: .62rem; white-space: nowrap; }
   .status.ok { background: var(--ok-soft); color: var(--ok); }
   .status.warn { background: var(--warn-soft); color: var(--warn); }
-  .archive-note { margin: 16px 0 0; padding: 10px 12px; border-left: 3px solid var(--accent); background: var(--tint); color: var(--muted); font-size: .72rem; }
   .section-intro { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 10px; }
   .section-intro a { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); font-size: .76rem; font-weight: 600; text-decoration: none; }
   .section-intro > span { color: var(--muted); font-size: .72rem; text-align: right; }
