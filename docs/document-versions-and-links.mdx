@@ -80,8 +80,10 @@ applies.
 An administrator first creates a custom field whose type is **Document link** in
 **Settings > Archive configuration > Metadata > Custom fields**. On a document,
 open **Linked documents** and choose **Add link** to select an unused relationship
-type. **Change** searches documents the current user may view; an exact numeric ID
-or same-instance document URL is also accepted. **Clear** removes the value.
+type. **Change link** searches documents the current user may view; an exact
+numeric ID or canonical same-instance document URL is also accepted, including
+URL-encoded links and their filing-system context. **Remove link** removes the
+value.
 
 Example: an invoice uses the `Payment receipt` field to point to receipt 312.
 The receipt detail shows the invoice under **Linked documents**:

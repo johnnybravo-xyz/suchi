@@ -11,9 +11,9 @@ Notable user-visible changes to Suchi are recorded here.
   versions.
 - Show typed custom-field values and exact named document links. **Linked
   documents** separates editable links from paged incoming links in plain
-  language, offers administrators direct link-type setup, rejects self and
-  same-family targets, redacts hidden or trashed endpoints, and removes incoming
-  values on permanent deletion.
+  language, accepts only canonical same-instance URL forms, offers administrators
+  direct link-type setup, rejects self and same-family targets, redacts hidden or
+  trashed endpoints, and removes incoming values on permanent deletion.
 - Add `version:` and `has-field:` query qualifiers across Documents, Search,
   saved Views, Calendar, and archive research, plus a saved-view control for
   documents with or without a named custom-field value.

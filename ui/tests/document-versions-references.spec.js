@@ -106,7 +106,7 @@ test('shows explicit revision state and retries an uncertain replacement with on
   const similarTab = page.getByRole('tab', { name: /^Similar documents/ })
   await expect(similarTab).toHaveAttribute('aria-selected', 'true')
   await expect(page.getByRole('tabpanel', { name: /^Similar documents/ })).toContainText(
-    "Nothing in the archive overlaps this document's vocabulary yet.",
+    'No similar documents found.',
   )
   await expect(page.getByRole('tab', { name: 'Versions 1' })).toBeVisible()
   const history = await openVersions(page)
@@ -226,6 +226,13 @@ test('keeps outgoing and incoming document links in one compact tab', async ({ p
       await route.fulfill({ json: detail(42, { title: 'Amendment', custom_fields }) })
       return true
     }
+    if (path === '/api/documents/42/similar') {
+      await route.fulfill({ json: {
+        method: 'fts',
+        results: [{ id: 71, title: 'Related receipt', created_at: 1780000071 }],
+      } })
+      return true
+    }
     if (path === '/api/documents/77' && request.method() === 'GET') {
       exactReads++
       await route.fulfill({ json: detail(77, { title: 'Replacement target', system_code: 'S02', jd_address: 'S02.13.77' }) })
@@ -257,6 +264,9 @@ test('keeps outgoing and incoming document links in one compact tab', async ({ p
   })
 
   await page.goto('/#/doc/42')
+  const similarDocuments = page.getByRole('tabpanel', { name: 'Similar documents' })
+  await expect(similarDocuments.getByText('Related receipt', { exact: true })).toBeVisible()
+  await expect(similarDocuments.getByText('fts', { exact: true })).toHaveCount(0)
   await expect(page.getByText('Amount', { exact: true })).toBeVisible()
   await expect(page.getByText('12.5', { exact: true })).toBeVisible()
   await expect(page.getByRole('region', { name: 'Document references' })).toHaveCount(0)
@@ -285,9 +295,11 @@ test('keeps outgoing and incoming document links in one compact tab', async ({ p
   await expect(linksFrom.getByText('Only links from this archive can be used.', { exact: true })).toBeVisible()
   expect(exactReads).toBe(0)
 
-  await input.fill('77')
+  const encodedTargetURL = encodeURIComponent(`${new URL(page.url()).origin}/#/doc/77?system=S02`)
+  await input.fill(encodedTargetURL)
   await linksFrom.getByRole('button', { name: 'Search', exact: true }).click()
   await expect(linksFrom.getByRole('button', { name: /Replacement target/ })).toBeVisible()
+  expect(exactReads).toBe(1)
   await linksFrom.getByRole('button', { name: 'Use selected document', exact: true }).click()
   await expect(linksFrom.getByText('Replacement target', { exact: true })).toBeVisible()
   expect(writes[0]).toEqual({ method: 'PUT', body: { value: 77 } })

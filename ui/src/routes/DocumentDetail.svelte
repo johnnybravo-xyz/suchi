@@ -473,7 +473,7 @@
     const editor = referenceEditor(field.id)
     const query = editor.query.trim()
     if (!query || editor.busy) return
-    const exact = parseDocumentReference(query, location.origin)
+    const exact = parseDocumentReference(query, location.origin, location.pathname)
     if (exact?.error) {
       updateReferenceEditor(field.id, { results: [], selected: null, error: exact.error })
       return
@@ -1113,17 +1113,14 @@
                   <button class="btn sm" onclick={() => loadSimilarDocuments()}>Retry</button>
                 </div>
               {:else if similar?.results?.length}
-                <div class="related-meta">
-                  {#if similar.method}
-                    <span class="pill" title={similar.method === 'fts' ? 'lexical (FTS5 more-like-this)' : 'semantic'}>{similar.method}</span>
-                  {/if}
-                  {#if similar.matched_on_title_only}
+                {#if similar.matched_on_title_only}
+                  <div class="related-meta">
                     <span class="pill warn"
-                          title="This document has no extracted text; matches are based on title alone and may be noisy.">
-                      title-only match
+                          title="Only the title was available when finding similar documents.">
+                      Title only
                     </span>
-                  {/if}
-                </div>
+                  </div>
+                {/if}
                 <div class="index" style="border:0">
                   {#each similar.results.slice(0, 6) as sd (sd.id)}
                     <a class="irow" href={filingHref(`#/doc/${sd.id}`)} style="padding:8px 4px">
@@ -1136,9 +1133,9 @@
               {:else}
                 <p class="sub related-empty">
                   {#if similar?.matched_on_title_only}
-                    Nothing overlaps the title strongly enough. Reingesting this document so its text is extracted will usually surface more.
+                    No similar documents found from the title.
                   {:else}
-                    Nothing in the archive overlaps this document's vocabulary yet.
+                    No similar documents found.
                   {/if}
                 </p>
               {/if}
