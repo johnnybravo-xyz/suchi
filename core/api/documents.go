@@ -652,12 +652,13 @@ type DocumentDetail struct {
 	// SourceMTime is the mtime of the source file captured at ingest
 	// (browser upload, watcher, importer) — the closest thing to a
 	// real creation date. Nil when the ingest path didn't carry it.
-	SourceMTime    *int64             `json:"source_mtime,omitempty"`
-	TrashedAt      *int64             `json:"trashed_at,omitempty"`
-	DeletesAt      *int64             `json:"deletes_at,omitempty"`
-	Sources        []DocumentSource   `json:"sources"`
-	Tags           []string           `json:"tags"`
-	Correspondents []DocCorrespondent `json:"correspondents"`
+	SourceMTime    *int64                     `json:"source_mtime,omitempty"`
+	TrashedAt      *int64                     `json:"trashed_at,omitempty"`
+	DeletesAt      *int64                     `json:"deletes_at,omitempty"`
+	Sources        []DocumentSource           `json:"sources"`
+	Tags           []string                   `json:"tags"`
+	Correspondents []DocCorrespondent         `json:"correspondents"`
+	CustomFields   []DocumentCustomFieldValue `json:"custom_fields"`
 	// Languages — comma-separated ISO-639-1 codes (e.g. "de", "de,en").
 	// Stored comma-bracketed in the column; serialised without the
 	// leading/trailing commas for JSON clients.
@@ -941,6 +942,12 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 	}
 	if d.Sources == nil {
 		d.Sources = []DocumentSource{}
+	}
+
+	d.CustomFields, err = s.loadCustomFieldValues(r.Context(), principal, id)
+	if err != nil {
+		s.serverErr(w, "documents.custom_fields", err)
+		return
 	}
 
 	s.writeJSON(w, http.StatusOK, d)

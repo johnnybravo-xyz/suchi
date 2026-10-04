@@ -347,6 +347,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// Document versions (chain of previous_version_id).
 	mux.HandleFunc("GET /api/documents/{id}/versions/", s.ListVersions)
 	mux.HandleFunc("POST /api/documents/{id}/versions/", s.UploadNewVersion)
+	mux.HandleFunc("GET /api/documents/{id}/referenced-by/", s.ListReferencedBy)
 
 	// Custom-field values — typed write + delete per (doc, field).
 	mux.HandleFunc("PUT /api/documents/{id}/custom_fields/{field}", s.SetCustomField)

@@ -3,7 +3,10 @@
 package api
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -36,5 +39,49 @@ func TestCustomFieldValuesPreserveTrashedDocuments(t *testing.T) {
 				t.Fatalf("trashed field changed: value=%q jobs=%d (before %d)", value, afterJobs, beforeJobs)
 			}
 		})
+	}
+}
+
+func TestDocumentLinkTopologyRejectsSelfAndVersionFamilyButAllowsPeerCycles(t *testing.T) {
+	s, mux := newSystemsBoundaryServer(t)
+	seedSystemsBoundary(t, s)
+	seedDocumentReferences(t, s)
+
+	put := func(source, target int64) *httptest.ResponseRecorder {
+		t.Helper()
+		return systemsBoundaryRequest(mux, http.MethodPut,
+			fmt.Sprintf("/api/documents/%d/custom_fields/105", source),
+			fmt.Sprintf(`{"value":%d}`, target), memberPrincipal(5))
+	}
+	assertCode := func(response *httptest.ResponseRecorder, status int, code string) {
+		t.Helper()
+		var body struct {
+			Code string `json:"code"`
+		}
+		if response.Code != status || json.Unmarshal(response.Body.Bytes(), &body) != nil || body.Code != code {
+			t.Fatalf("status=%d body=%s, want %d %s", response.Code, response.Body.String(), status, code)
+		}
+	}
+
+	assertCode(put(101, 101), http.StatusBadRequest, "document_link_self")
+	assertCode(put(101, 105), http.StatusBadRequest, "document_link_same_family")
+
+	if response := put(101, 103); response.Code != http.StatusNoContent {
+		t.Fatalf("first peer link: %d %s", response.Code, response.Body.String())
+	}
+	if response := put(103, 101); response.Code != http.StatusNoContent {
+		t.Fatalf("reciprocal peer link: %d %s", response.Code, response.Body.String())
+	}
+	for source, target := range map[int64]int64{101: 103, 103: 101} {
+		var stored int64
+		if err := s.DB.Read.QueryRow(`
+			SELECT value_int FROM document_custom_field_values
+			WHERE document_id=? AND field_id=105
+		`, source).Scan(&stored); err != nil {
+			t.Fatal(err)
+		}
+		if stored != target {
+			t.Fatalf("source %d target=%d, want %d", source, stored, target)
+		}
 	}
 }

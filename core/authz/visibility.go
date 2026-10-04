@@ -66,6 +66,18 @@ func DocVisibilityWhereAlias(p Principal, systemID int64, alias string) (string,
 		return "1=0", nil
 	}
 	p.SystemID = systemID
+	return docVisibilityWhereAlias(p, alias)
+}
+
+// DocVisibilityIntrinsicWhereAlias applies system entry, token, and ACL
+// predicates using each document's own system. It is for exact cross-system
+// relationships, not ordinary collection listing.
+func DocVisibilityIntrinsicWhereAlias(p Principal, alias string) (string, []any) {
+	p.SystemID = 0
+	return docVisibilityWhereAlias(p, alias)
+}
+
+func docVisibilityWhereAlias(p Principal, alias string) (string, []any) {
 	boundary, args := systemBoundaryWhereAlias(p, alias)
 	if p.Kind == KindDemoAnon || p.Kind == KindDemoScratch {
 		corpus, corpusArgs := DemoCorpusVisibilityWhereAlias(p.UserID, alias)

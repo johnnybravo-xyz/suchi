@@ -321,6 +321,9 @@ func (s *Service) purge(ctx context.Context, filter purgeFilter, actor *pluginap
 				JOIN json_each(?) AS purged ON CAST(shared.value AS INTEGER) = CAST(purged.value AS INTEGER)
 			)`, []any{idsJSON}},
 			{`DELETE FROM audit_events WHERE object_kind = 'document' AND object_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))`, []any{idsJSON}},
+			{`DELETE FROM document_custom_field_values
+				WHERE value_int IN (SELECT CAST(value AS INTEGER) FROM json_each(?))
+				  AND field_id IN (SELECT id FROM custom_fields WHERE data_type = 'documentlink')`, []any{idsJSON}},
 			{`DELETE FROM documents WHERE trashed_at IS NOT NULL AND id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))`, []any{idsJSON}},
 		}
 		for _, statement := range statements {

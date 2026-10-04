@@ -145,6 +145,17 @@ func documentVisibilityWhereAlias(ctx context.Context, p *pluginapi.Principal, g
 	return authz.DocVisibilityWhereAlias(systemPrincipal(ctx, p, groups), collectionSystemID(ctx, p), alias)
 }
 
+func intrinsicDocumentVisibilityWhereAlias(p *pluginapi.Principal, groups []int64, alias string) (string, []any) {
+	actor := authz.Principal{
+		UserID:        p.UserID,
+		Role:          p.Role,
+		Kind:          p.Kind,
+		Groups:        groups,
+		TokenSystemID: tokenSystemID(p),
+	}
+	return authz.DocVisibilityIntrinsicWhereAlias(actor, alias)
+}
+
 func (s *Server) collectionVisibility(ctx context.Context, p *pluginapi.Principal) (string, []any, error) {
 	where, args, _, err := s.collectionVisibilityWithGroups(ctx, p)
 	return where, args, err

@@ -405,6 +405,11 @@ var handlerMulti = &Handler{
 
 // ---------- documentlink (references another doc id) ----------
 
+var (
+	ErrDocumentLinkSelf       = errors.New("a document cannot link to itself")
+	ErrDocumentLinkSameFamily = errors.New("versions of the same document cannot be linked")
+)
+
 var handlerDocumentLink = &Handler{
 	Name: "documentlink",
 	Validate: func(_ json.RawMessage, raw any) (any, error) {
@@ -424,19 +429,38 @@ var handlerDocumentLink = &Handler{
 // WriteDocumentLinkInTx allows a cross-system link only after the caller has
 // authorized both documents in this same writer transaction.
 func WriteDocumentLinkInTx(ctx context.Context, tx *sql.Tx, docID, fieldID, targetID int64, allowCrossSystem bool) error {
-	var systemID int64
+	var (
+		systemID int64
+		family   sql.NullString
+	)
 	if err := tx.QueryRowContext(ctx, `
-		SELECT d.system_id FROM documents d JOIN custom_fields f ON f.system_id = d.system_id
-		WHERE d.id = ? AND d.trashed_at IS NULL AND f.id = ? AND f.data_type = 'documentlink'
-	`, docID, fieldID).Scan(&systemID); err != nil {
+		SELECT d.system_id, d.version_family_key
+		FROM documents d
+		JOIN custom_fields f ON f.system_id = d.system_id
+		WHERE d.id = ? AND d.trashed_at IS NULL
+		  AND f.id = ? AND f.data_type = 'documentlink'
+	`, docID, fieldID).Scan(&systemID, &family); err != nil {
 		return err
 	}
 	if targetID == 0 {
 		return deleteRow(ctx, tx, docID, fieldID)
 	}
-	var targetSystem int64
-	if err := tx.QueryRowContext(ctx, `SELECT system_id FROM documents WHERE id = ? AND trashed_at IS NULL`, targetID).Scan(&targetSystem); err != nil {
+	if targetID == docID {
+		return ErrDocumentLinkSelf
+	}
+	var (
+		targetSystem int64
+		targetFamily sql.NullString
+	)
+	if err := tx.QueryRowContext(ctx, `
+		SELECT system_id, version_family_key
+		FROM documents
+		WHERE id = ? AND trashed_at IS NULL
+	`, targetID).Scan(&targetSystem, &targetFamily); err != nil {
 		return err
+	}
+	if targetSystem == systemID && family.Valid && targetFamily.Valid && family.String == targetFamily.String {
+		return ErrDocumentLinkSameFamily
 	}
 	if targetSystem != systemID && !allowCrossSystem {
 		return errors.New("documentlink: target belongs to another system")

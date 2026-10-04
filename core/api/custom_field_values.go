@@ -118,6 +118,12 @@ func (s *Server) SetCustomField(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, errForbidden):
 		s.writeError(w, http.StatusNotFound, "not_found", "document not found")
 		return
+	case errors.Is(err, customfield.ErrDocumentLinkSelf):
+		s.writeError(w, http.StatusBadRequest, "document_link_self", err.Error())
+		return
+	case errors.Is(err, customfield.ErrDocumentLinkSameFamily):
+		s.writeError(w, http.StatusBadRequest, "document_link_same_family", err.Error())
+		return
 	case err != nil:
 		s.Log.Error("api.customfield.set", "err", err.Error())
 		s.writeError(w, http.StatusInternalServerError, "db_write", err.Error())
