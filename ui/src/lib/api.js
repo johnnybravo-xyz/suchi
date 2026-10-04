@@ -126,7 +126,10 @@ export const getDocument = (id) => api.get(`/api/documents/${id}`)
 export const patchDocument = (id, body) => api.patch(`/api/documents/${id}`, body)
 export const deleteDocument = (id) => api.del(`/api/documents/${id}`)
 export const restoreDocument = (id) => api.post(`/api/documents/${id}/restore`)
-export const documentVersions = (id) => api.get(`/api/documents/${id}/versions/`)
+export const documentVersions = (id, params) => api.get(`/api/documents/${id}/versions/${qs(params)}`)
+export const documentBacklinks = (id, params) => api.get(`/api/documents/${id}/referenced-by/${qs(params)}`)
+export const setDocumentCustomField = (id, field, value) => api.put(`/api/documents/${id}/custom_fields/${field}`, { value })
+export const clearDocumentCustomField = (id, field) => api.del(`/api/documents/${id}/custom_fields/${field}`)
 
 export const search = (q, params, signal) => api.get(`/api/search/${qs({ q, ...params })}`, { signal })
 export const autocomplete = (q, limit = 8, signal) => api.get(`/api/autocomplete/${qs({ q, limit })}`, { signal })
@@ -282,12 +285,21 @@ export const savePreferences = (b) => api.post('/api/admin/settings/preferences'
 export const getIngestSettings = () => api.get('/api/admin/settings/ingest')
 export const saveIngestSettings = (b) => api.post('/api/admin/settings/ingest', b)
 
-export function uploadDocument(file, system = systems.code) {
+function uploadMultipart(path, file, { system = systems.code, keepScope = true, idempotencyKey = '' } = {}) {
   const fd = new FormData()
   fd.append('document', file)
   // Preserve source mtime separately from ingestion time.
   if (file?.lastModified) {
     fd.append('source_mtime', String(Math.floor(file.lastModified / 1000)))
   }
-  return req('POST', '/api/documents/', fd, { system, keepScope: true })
+  const headers = idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined
+  return req('POST', path, fd, { system, keepScope, headers })
+}
+
+export function uploadDocument(file, system = systems.code) {
+  return uploadMultipart('/api/documents/', file, { system })
+}
+
+export function uploadDocumentVersion(id, file, idempotencyKey) {
+  return uploadMultipart(`/api/documents/${id}/versions/`, file, { idempotencyKey })
 }

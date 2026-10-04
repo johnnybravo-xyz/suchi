@@ -5,7 +5,7 @@ import test from 'node:test'
 // Transport-only tests run without Svelte compilation. Browser regressions
 // exercise the reactive account/system lifecycle with the real compiled module.
 globalThis.$state = value => value
-const { askArchive, changeMyEmail, login, logout, uploadDocument, exportTaxonomy, cancelMobilePairing, getDemoMode, whoami } = await import('./api.js')
+const { askArchive, changeMyEmail, login, logout, uploadDocument, uploadDocumentVersion, exportTaxonomy, cancelMobilePairing, getDemoMode, whoami } = await import('./api.js')
 const { systems, resetSystems } = await import('./systems.svelte.js')
 delete globalThis.$state
 
@@ -102,6 +102,32 @@ test('concurrent demo uploads share one cookie-session upgrade', async () => {
     assert.equal(uploads, 4)
     assert.equal(upgrades, 1)
   } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('version upload preserves source time and sends a stable idempotency key', async () => {
+  const originalFetch = globalThis.fetch
+  const previousCode = systems.code
+  let request
+  systems.code = 'S01'
+  globalThis.fetch = async (path, options) => {
+    request = { path, options }
+    return new Response(JSON.stringify({ id: 92 }), {
+      status: 201,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+  try {
+    const file = new File(['replacement'], 'replacement.pdf', { lastModified: 1704067200123 })
+    const result = await uploadDocumentVersion(91, file, 'retry-key')
+    assert.equal(result.id, 92)
+    assert.equal(request.path, '/api/documents/91/versions/?system=S01')
+    assert.equal(request.options.headers['Idempotency-Key'], 'retry-key')
+    assert.equal(request.options.body.get('document').name, 'replacement.pdf')
+    assert.equal(request.options.body.get('source_mtime'), '1704067200')
+  } finally {
+    systems.code = previousCode
     globalThis.fetch = originalFetch
   }
 })
