@@ -2712,6 +2712,29 @@ test('shows every document source and the source date', async ({ page }) => {
   await expect(page.getByText('Created', { exact: true })).toHaveCount(0)
 })
 
+test('keeps wide document detail within one viewport-height row', async ({ page }) => {
+  test.skip((page.viewportSize()?.width || 0) <= 1000, 'wide layout only')
+  await mockAPI(page, { documentContent: 'Extracted document text. '.repeat(400) })
+  await page.goto('/#/doc/42')
+  await expect(page.getByRole('heading', { name: 'Electricity bill' })).toBeVisible()
+
+  const layout = await page.locator('.document-detail-grid').evaluate(element => {
+    const preview = element.querySelector('.preview').getBoundingClientRect()
+    const sidebar = element.querySelector('.detail-sidebar')
+    const sidebarBox = sidebar.getBoundingClientRect()
+    return {
+      bottom: element.getBoundingClientRect().bottom,
+      previewBottom: preview.bottom,
+      sidebarBottom: sidebarBox.bottom,
+      sidebarClientHeight: sidebar.clientHeight,
+      sidebarScrollHeight: sidebar.scrollHeight,
+    }
+  })
+  expect(layout.bottom).toBeLessThanOrEqual((page.viewportSize()?.height || 0) + 1)
+  expect(Math.abs(layout.previewBottom - layout.sidebarBottom)).toBeLessThan(1)
+  expect(layout.sidebarScrollHeight).toBeGreaterThan(layout.sidebarClientHeight)
+})
+
 test('protects restricted previews like confidential documents', async ({ page }) => {
   await mockAPI(page, {
     documentSensitivity: 'restricted',

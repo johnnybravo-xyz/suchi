@@ -460,6 +460,7 @@
   })
 </script>
 
+<div class="document-view">
 <div class="toolbar">
   <a class="btn sm" href={filingHref(trashed ? '#/trash' : '#/documents')}><Icon name="left" size={13} /> {trashed ? 'Back to Trash' : 'All documents'}</a>
   <span class="spacer" style="flex:1"></span>
@@ -520,7 +521,7 @@
       {/if}
     </section>
   {/if}
-  <div class="detail">
+  <div class="detail document-detail-grid">
     <div class="preview" class:blurred>
       {#if !canReadFile}
         <div class="reveal"><span class="sub">Only the owner or an administrator can preview files in Trash.</span></div>
@@ -543,7 +544,7 @@
       {/if}
     </div>
 
-    <div style="display:flex;flex-direction:column;gap:14px">
+    <div class="detail-sidebar">
       <div class="card">
         {#if trashed}
           <h2 style="font-size:1.15rem;overflow-wrap:anywhere">{doc.title || `Document #${doc.id}`}</h2>
@@ -766,6 +767,7 @@
     </div>
   </div>
 {/if}
+</div>
 
 {#if accessOpen && access}
   <div class="modal-veil" onclick={() => (accessOpen = false)} role="presentation">
@@ -897,6 +899,17 @@
 {/if}
 
 <style>
+  .document-view { min-height:100%; }
+  .detail-sidebar { display:flex; flex-direction:column; gap:14px; }
+  .detail-sidebar > .card { flex:none; }
+  @media (min-width: 1001px) {
+    .document-view { display:flex; flex-direction:column; height:100%; min-height:0; }
+    .document-view > .toolbar, .document-view > .trash-notice { flex:none; }
+    .document-detail-grid { flex:1 1 0; min-height:0; overflow:hidden; align-items:stretch; }
+    .document-detail-grid > .preview { display:flex; align-self:auto; flex-direction:column; height:100%; min-height:0; }
+    .document-detail-grid > .preview iframe { flex:1; height:100%; min-height:0; }
+    .detail-sidebar { height:100%; min-height:0; overflow-y:auto; overscroll-behavior:contain; scrollbar-gutter:stable; }
+  }
   .document-tags { min-width:0 }
   .tag-pills, .tag-actions { display:flex; flex-wrap:wrap; align-items:center; gap:6px }
   .tag-pills .pill { max-width:100%; white-space:normal }
@@ -904,6 +917,7 @@
   .tag-remove:disabled { cursor:default; opacity:.5 }
   .tag-actions { margin:8px 0 4px }
   .tag-actions :global(.tag-picker) { flex:1 1 140px }
+
   .extracted { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; font-size: .8rem; color: var(--muted); margin: 0; }
   .extracted.expanded { max-height: 65vh; }
   .extracted-copy { width: 100%; max-width: none; font-size: .8rem; }

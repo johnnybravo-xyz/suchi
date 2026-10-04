@@ -175,6 +175,11 @@ refresh. Arrival of sidebar categories must not restart reads or discard edits.
 Metadata/language saves check that same document generation before updating local
 state, so an earlier save cannot change the next document's sensitivity or Reveal.
 
+Above the single-column breakpoint, `DocumentDetail.svelte` consumes the
+available content height, fixes the preview and detail sidebar to the same
+bounds, and gives overflow ownership to the sidebar. Narrow layouts retain
+normal document flow.
+
 Calendar derives `month`, `date`, `view_id`, `role` and document scope from the
 hash. `document_ids` opens an all-dates agenda; ordinary routes use the month grid.
 Day links preserve originating month/View/role. Exact-day requests use equal date

@@ -12,6 +12,10 @@ Notable user-visible changes to Suchi are recorded here.
 
 - Keep **All documents** on the left of document detail while aligning Download,
   access, sharing, phone, and Trash actions to the right.
+- Keep the wide document preview and detail column at a stable viewport height;
+  longer metadata and extracted text now scroll inside the detail column.
+
+
 
 ### Changed
 
