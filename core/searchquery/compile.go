@@ -10,13 +10,16 @@ type Predicate struct {
 }
 
 type Plan struct {
-	Match          string
-	Predicates     []Predicate
-	HasTrashFilter bool
+	Match           string
+	Predicates      []Predicate
+	HasTrashFilter  bool
+	SelectsTrash    bool
+	VersionMode     VersionMode
+	VersionExplicit bool
 }
 
 func Compile(query ResolvedQuery) Plan {
-	plan := Plan{Predicates: make([]Predicate, 0, len(query.Clauses))}
+	plan := Plan{Predicates: make([]Predicate, 0, len(query.Clauses)), VersionMode: VersionLatest}
 	positiveText := make([]string, 0, len(query.Clauses))
 	positiveDateIndex := -1
 	positiveDateWhere := []string{
@@ -36,6 +39,11 @@ func Compile(query ResolvedQuery) Plan {
 			} else {
 				positiveText = append(positiveText, expression)
 			}
+			continue
+		}
+		if clause.Filter == "version" {
+			plan.VersionMode = VersionMode(clause.Value)
+			plan.VersionExplicit = true
 			continue
 		}
 		// Positive accepted-date clauses describe one fact. Keeping them in a
@@ -59,6 +67,7 @@ func Compile(query ResolvedQuery) Plan {
 		plan.Predicates = append(plan.Predicates, compileFilter(clause))
 		if clause.Filter == "is" && clause.Value == "trash" {
 			plan.HasTrashFilter = true
+			plan.SelectsTrash = !clause.Negated
 		}
 	}
 	if positiveDateIndex >= 0 {

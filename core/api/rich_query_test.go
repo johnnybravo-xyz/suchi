@@ -5,6 +5,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"slices"
@@ -333,6 +334,11 @@ func TestRichQueryTrashState(t *testing.T) {
 	if searchResult.Count != 1 || listCount != 1 || searchResult.Results[0].ID != trashedID || listRows[0].ID != trashedID {
 		t.Fatalf("search=%+v documents=%+v", searchResult, listRows)
 	}
+	searchCode, _, _ := doSearch(t, s, "version:latest is:trash", adminPrincipal(1))
+	listCode, _, _ := doList(t, s, "/api/documents/?q=is%3Atrash&version=latest", adminPrincipal(1))
+	if searchCode != http.StatusBadRequest || listCode != http.StatusBadRequest {
+		t.Fatalf("Trash version selectors search=%d documents=%d, want 400", searchCode, listCode)
+	}
 }
 
 func TestRichQueryAutocompleteUsesVisibleValues(t *testing.T) {
@@ -368,6 +374,10 @@ func TestRichQueryAutocompleteUsesVisibleValues(t *testing.T) {
 	tags := get("tag:ta")
 	if len(tags) != 1 || tags[0].Query != "tag:tax" {
 		t.Fatalf("tag suggestions=%+v", tags)
+	}
+	versions := get("version:o")
+	if len(versions) != 1 || versions[0].Query != "version:older" {
+		t.Fatalf("version suggestions=%+v", versions)
 	}
 	longPrefix := strings.Repeat("annual ", 16) + "jd:2"
 	if len(longPrefix) <= 100 {

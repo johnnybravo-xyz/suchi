@@ -181,3 +181,31 @@ func TestCompileTrashMode(t *testing.T) {
 		}
 	}
 }
+
+func TestCompileVersionSelector(t *testing.T) {
+	parsed, err := Parse(`version:older`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := Resolve(context.Background(), parsed, fakeResolver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := Compile(resolved)
+	if plan.VersionMode != VersionOlder || !plan.VersionExplicit || len(plan.Predicates) != 0 {
+		t.Fatalf("version plan=%+v", plan)
+	}
+	if normalized := Normalize(parsed); normalized != "version:older" {
+		t.Fatalf("normalized=%q", normalized)
+	}
+
+	for _, input := range []string{"version:newest", "-version:all", "version:latest version:older"} {
+		parsed, err := Parse(input)
+		if err == nil {
+			_, err = Resolve(context.Background(), parsed, fakeResolver{})
+		}
+		if err == nil {
+			t.Fatalf("%q was accepted", input)
+		}
+	}
+}

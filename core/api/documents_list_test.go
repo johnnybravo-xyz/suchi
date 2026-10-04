@@ -97,6 +97,73 @@ func TestListDocuments_ReturnsSeeded(t *testing.T) {
 	}
 }
 
+func TestListDocumentsVersionModesUseVisibleCurrentRows(t *testing.T) {
+	s := newListServer(t)
+	inbox := seedStatsJDInbox(t, s.DB)
+	rootID := seedStatsDoc(t, s.DB, 1, "version-root", "Matching root", inbox, false, 100)
+	headID := seedStatsDoc(t, s.DB, 1, "version-head", "Current revision", inbox, false, 200)
+	standaloneID := seedStatsDoc(t, s.DB, 1, "version-single", "Standalone", inbox, false, 150)
+	const family = "v:22222222222222222222222222222222"
+	if _, err := s.DB.Write.Exec(`
+		UPDATE documents
+		SET version_family_key=?,
+		    previous_version_id=CASE id WHEN ? THEN ? ELSE previous_version_id END
+		WHERE id IN (?,?)
+	`, family, headID, rootID, rootID, headID); err != nil {
+		t.Fatal(err)
+	}
+
+	code, rows, count := doList(t, s, "/api/documents/?ordering=created_at", adminPrincipal(1))
+	if code != 200 || count != 2 || len(rows) != 2 ||
+		rows[0].ID != standaloneID || rows[1].ID != headID {
+		t.Fatalf("latest status=%d count=%d rows=%+v", code, count, rows)
+	}
+	code, rows, count = doList(t, s, "/api/documents/?version=all&ordering=created_at", adminPrincipal(1))
+	if code != 200 || count != 3 || len(rows) != 3 || rows[0].ID != rootID {
+		t.Fatalf("all status=%d count=%d rows=%+v", code, count, rows)
+	}
+	code, rows, count = doList(t, s, "/api/documents/?q=version%3Aolder", adminPrincipal(1))
+	if code != 200 || count != 1 || len(rows) != 1 || rows[0].ID != rootID {
+		t.Fatalf("older status=%d count=%d rows=%+v", code, count, rows)
+	}
+	code, rows, count = doList(t, s, "/api/documents/?q=title%3AMatching", adminPrincipal(1))
+	if code != 200 || count != 0 || len(rows) != 0 {
+		t.Fatalf("matching older row escaped latest filter: status=%d count=%d rows=%+v", code, count, rows)
+	}
+	code, rows, count = doList(t, s, "/api/documents/?q=version%3Aall%20title%3AMatching", adminPrincipal(1))
+	if code != 200 || count != 1 || len(rows) != 1 || rows[0].ID != rootID {
+		t.Fatalf("all matching status=%d count=%d rows=%+v", code, count, rows)
+	}
+	code, _, _ = doList(t, s, "/api/documents/?version=all&q=version%3Aolder", adminPrincipal(1))
+	if code != 400 {
+		t.Fatalf("conflicting selectors status=%d, want 400", code)
+	}
+	code, rows, count = doList(t, s,
+		"/api/documents/?document_ids="+fmt.Sprintf("%d", rootID), adminPrincipal(1))
+	if code != 200 || count != 1 || len(rows) != 1 || rows[0].ID != rootID {
+		t.Fatalf("exact IDs status=%d count=%d rows=%+v", code, count, rows)
+	}
+	code, _, _ = doList(t, s,
+		"/api/documents/?document_ids="+fmt.Sprintf("%d", rootID)+"&version=latest", adminPrincipal(1))
+	if code != 400 {
+		t.Fatalf("exact IDs with selector status=%d, want 400", code)
+	}
+
+	seedUser(t, s.DB, 2)
+	if _, err := s.DB.Write.Exec(`
+		UPDATE users SET role='member' WHERE id=2;
+		INSERT INTO object_acls(
+			object_kind,object_id,principal_kind,principal_id,perm_bits,created_at,created_by
+		) VALUES('document',?,'user',2,?,1,1)
+	`, rootID, int(authz.PermView)); err != nil {
+		t.Fatal(err)
+	}
+	code, rows, count = doList(t, s, "/api/documents/", memberPrincipal(2))
+	if code != 200 || count != 1 || len(rows) != 1 || rows[0].ID != rootID {
+		t.Fatalf("hidden head status=%d count=%d rows=%+v", code, count, rows)
+	}
+}
+
 func TestListDocuments_OrderingHasStableIDTieBreak(t *testing.T) {
 	s := newListServer(t)
 	inbox := seedStatsJDInbox(t, s.DB)

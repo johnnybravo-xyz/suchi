@@ -186,6 +186,10 @@ func (s *Server) queryCompletions(ctx context.Context, raw string, limit int) ([
 		fixed = []string{"issued", "due", "start", "end", "expiry", "renewal", "service", "other"}
 	case "is":
 		fixed = []string{"inbox", "trash", "encrypted", "dated"}
+	case "version":
+		if !completion.Negated {
+			fixed = []string{"latest", "all", "older"}
+		}
 	}
 	if fixed != nil {
 		suggestions := make([]AutocompleteSuggestion, 0, len(fixed))

@@ -412,6 +412,7 @@ var savedViewAllowedKeys = map[string]bool{
 	"sensitivity":            true,
 	"ordering":               true,
 	"document_ids":           true,
+	"version":                true,
 }
 
 // NormalizeSavedViewFilterJSON validates the transitional flat shape and
@@ -498,6 +499,17 @@ func NormalizeSavedViewFilterJSON(raw string) (string, error) {
 		}
 		filter["q"] = searchquery.Normalize(parsed)
 	}
+	if value, exists := filter["version"]; exists {
+		raw, ok := value.(string)
+		if !ok {
+			return "", &savedViewFilterError{message: "filter key version must be latest, all, or older"}
+		}
+		mode, err := parseVersionMode(raw)
+		if err != nil {
+			return "", &savedViewFilterError{message: "filter key version must be latest, all, or older"}
+		}
+		filter["version"] = string(mode)
+	}
 	normalized, err := json.Marshal(filter)
 	if err != nil {
 		return "", &savedViewFilterError{message: "filter_json could not be normalized"}
@@ -510,18 +522,20 @@ func (s *Server) normalizeSavedViewFilterJSON(ctx context.Context, raw string) (
 	if err != nil {
 		return "", err
 	}
-	var filter struct {
-		Query string `json:"q"`
-	}
-	if err := json.Unmarshal([]byte(normalized), &filter); err != nil {
+	scope, err := documentScopeFromSavedViewJSON(normalized)
+	if err != nil {
 		return "", err
 	}
-	if _, err := s.compileQuery(ctx, filter.Query); err != nil {
+	plan, err := s.compileQuery(ctx, scope.Query)
+	if err != nil {
 		var queryErr *searchquery.Error
 		if errors.As(err, &queryErr) {
 			return "", &savedViewFilterError{message: "filter key q: " + queryErr.Error()}
 		}
 		return "", err
+	}
+	if _, err := resolveDocumentVersionMode(scope, plan, len(scope.DocumentIDs) > 0 || plan.SelectsTrash); err != nil {
+		return "", &savedViewFilterError{message: err.Error()}
 	}
 	return normalized, nil
 }

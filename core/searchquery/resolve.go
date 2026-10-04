@@ -33,6 +33,7 @@ type ResolvedQuery struct {
 
 func Resolve(ctx context.Context, query Query, resolver Resolver) (ResolvedQuery, error) {
 	resolved := ResolvedQuery{Clauses: make([]ResolvedClause, 0, len(query.Clauses))}
+	var versionMode string
 	for _, clause := range query.Clauses {
 		item := ResolvedClause{Clause: clause}
 		if clause.Kind == ClauseText {
@@ -102,6 +103,23 @@ func Resolve(ctx context.Context, query Query, resolver Resolver) (ResolvedQuery
 					fmt.Sprintf("unknown is value %q", clause.Value),
 					[]string{"inbox", "trash", "encrypted", "dated"})
 			}
+		case "version":
+			if clause.Negated {
+				return ResolvedQuery{}, filterError(clause.Position, clause.Filter,
+					"version cannot be negated", []string{string(VersionLatest), string(VersionAll), string(VersionOlder)})
+			}
+			switch VersionMode(clause.Value) {
+			case VersionLatest, VersionAll, VersionOlder:
+			default:
+				return ResolvedQuery{}, filterError(clause.Position, clause.Filter,
+					fmt.Sprintf("unknown version mode %q", clause.Value),
+					[]string{string(VersionLatest), string(VersionAll), string(VersionOlder)})
+			}
+			if versionMode != "" && versionMode != clause.Value {
+				return ResolvedQuery{}, filterError(clause.Position, clause.Filter,
+					"version mode conflicts with an earlier selector", nil)
+			}
+			versionMode = clause.Value
 		default:
 			return ResolvedQuery{}, filterError(clause.Position, clause.Filter,
 				fmt.Sprintf("unknown filter %q", clause.Filter), nil)

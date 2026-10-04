@@ -31,6 +31,14 @@ const (
 	OpLessEqual    Operator = "<="
 )
 
+type VersionMode string
+
+const (
+	VersionLatest VersionMode = "latest"
+	VersionAll    VersionMode = "all"
+	VersionOlder  VersionMode = "older"
+)
+
 type ClauseKind uint8
 
 const (
@@ -97,6 +105,7 @@ var filterNames = []string{
 	"date",
 	"date-role",
 	"is",
+	"version",
 }
 
 func IsFilterName(name string) bool {

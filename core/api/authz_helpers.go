@@ -14,6 +14,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
+	"github.com/johnnybravo-xyz/suchi/core/searchquery"
 )
 
 func (s *Server) requireAuth(w http.ResponseWriter, r *http.Request) *pluginapi.Principal {
@@ -145,16 +146,42 @@ func documentVisibilityWhereAlias(ctx context.Context, p *pluginapi.Principal, g
 }
 
 func (s *Server) collectionVisibility(ctx context.Context, p *pluginapi.Principal) (string, []any, error) {
+	where, args, _, err := s.collectionVisibilityWithGroups(ctx, p)
+	return where, args, err
+}
+
+func (s *Server) collectionVisibilityWithGroups(ctx context.Context, p *pluginapi.Principal) (string, []any, []int64, error) {
 	var groups []int64
 	if p.Role != "admin" {
 		var err error
 		groups, err = s.principalGroups(ctx, p.UserID)
 		if err != nil {
-			return "", nil, err
+			return "", nil, nil, err
 		}
 	}
 	where, args := documentVisibilityWhere(ctx, p, groups)
-	return where, args, nil
+	return where, args, groups, nil
+}
+
+func documentVersionWhere(ctx context.Context, p *pluginapi.Principal, groups []int64, mode searchquery.VersionMode) (string, []any) {
+	if mode == searchquery.VersionAll {
+		return "", nil
+	}
+	newerVisibility, args := documentVisibilityWhereAlias(ctx, p, groups, "newer")
+	newerExists := `EXISTS (
+		SELECT 1
+		FROM documents newer
+		WHERE d.version_family_key IS NOT NULL
+		  AND newer.system_id = d.system_id
+		  AND newer.version_family_key = d.version_family_key
+		  AND newer.id > d.id
+		  AND newer.trashed_at IS NULL
+		  AND (` + newerVisibility + `)
+	)`
+	if mode == searchquery.VersionOlder {
+		return "d.version_family_key IS NOT NULL AND " + newerExists, args
+	}
+	return "(d.version_family_key IS NULL OR NOT " + newerExists + ")", args
 }
 
 // documentPermissionDecisions resolves a bulk request with one group lookup.

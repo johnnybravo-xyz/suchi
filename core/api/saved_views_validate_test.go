@@ -20,6 +20,7 @@ func TestValidateFilterJSON_Allowed(t *testing.T) {
 		`{"tags__id__in":["1","2","3"]}`,
 		`{"jd_category_id":"42","sensitivity":"confidential"}`,
 		`{"document_ids":[17,28,39]}`,
+		`{"version":"older"}`,
 	}
 	for _, c := range cases {
 		if _, err := NormalizeSavedViewFilterJSON(c); err != nil {
@@ -42,6 +43,7 @@ func TestValidateFilterJSON_Rejects(t *testing.T) {
 		{`{"q":"` + strings.Repeat("x", 2100) + `"}`, "size"},
 		{`{"document_ids":"1,2"}`, "document-ids-string"},
 		{`{"document_ids":[0,2]}`, "document-ids-zero"},
+		{`{"version":"newest"}`, "version"},
 	}
 	for _, tc := range cases {
 		if _, err := NormalizeSavedViewFilterJSON(tc.in); err == nil {
@@ -60,6 +62,16 @@ func TestNormalizeSavedViewQuery(t *testing.T) {
 	}
 	if _, err := NormalizeSavedViewFilterJSON(`{"q":"unknown:value"}`); err == nil {
 		t.Fatal("malformed saved query was accepted")
+	}
+}
+
+func TestSavedViewVersionSelectorRoundTrips(t *testing.T) {
+	scope, err := documentScopeFromSavedViewJSON(`{"version":"older","q":"version:older"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !scope.VersionExplicit || scope.Version != "older" {
+		t.Fatalf("version scope=%+v", scope)
 	}
 }
 

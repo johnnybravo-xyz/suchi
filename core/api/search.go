@@ -84,6 +84,21 @@ func (s *Server) Search(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	versionScope := documentScope{}
+	if rawVersion := strings.TrimSpace(r.URL.Query().Get("version")); rawVersion != "" {
+		versionScope.Version, err = parseVersionMode(rawVersion)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, "bad_version", "version must be latest, all, or older")
+			return
+		}
+		versionScope.VersionExplicit = true
+	}
+	versionMode, err := resolveDocumentVersionMode(versionScope, queryPlan, queryPlan.SelectsTrash)
+	if err != nil {
+		scopeErr := err.(*documentScopeError)
+		s.writeError(w, http.StatusBadRequest, scopeErr.Code, scopeErr.Message)
+		return
+	}
 
 	fromSQL := " FROM documents d"
 	where := make([]string, 0, len(queryPlan.Predicates)+2)
@@ -112,13 +127,18 @@ func (s *Server) Search(w http.ResponseWriter, r *http.Request) {
 		s.serverErr(w, "search.parse_filters", err)
 		return
 	}
-	visibility, visibilityArgs, err := s.collectionVisibility(r.Context(), principal)
+	visibility, visibilityArgs, groups, err := s.collectionVisibilityWithGroups(r.Context(), principal)
 	if err != nil {
 		s.serverErr(w, "search.visibility", err)
 		return
 	}
 	extra += " AND " + visibility
 	extraArgs = append(extraArgs, visibilityArgs...)
+	versionWhere, versionArgs := documentVersionWhere(r.Context(), principal, groups, versionMode)
+	if versionWhere != "" {
+		extra += " AND " + versionWhere
+		extraArgs = append(extraArgs, versionArgs...)
+	}
 	whereSQL := " WHERE " + strings.Join(where, " AND ") + extra
 	countArgs := append([]any{}, args...)
 	countArgs = append(countArgs, extraArgs...)

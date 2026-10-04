@@ -776,6 +776,52 @@ func TestChatAdditionalPassagePlanBuildsOneSnippet(t *testing.T) {
 	}
 }
 
+func TestChatRetrievalUsesLatestVersionsButKeepsContextIDsExact(t *testing.T) {
+	s := newChatTestServer(t)
+	seedChatDoc(t, s, 60, 1, "Older record", "historicalneedle evidence", "public", false)
+	seedChatDoc(t, s, 61, 1, "Current record", "current evidence", "public", false)
+	const family = "v:55555555555555555555555555555555"
+	if _, err := s.DB.Write.Exec(`
+		UPDATE documents
+		SET version_family_key=?,
+		    previous_version_id=CASE id WHEN 61 THEN 60 ELSE previous_version_id END
+		WHERE id IN (60,61)
+	`, family); err != nil {
+		t.Fatal(err)
+	}
+	ctx := auth.WithPrincipal(context.Background(), adminPrincipal(1))
+	research := chatResearchContextForMode(settings.ResearchContextBalanced)
+
+	sources, _, err := s.retrieveChatSources(
+		ctx, []string{"historicalneedle"}, nil, ChatScope{}, false, research,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 0 {
+		t.Fatalf("older revision appeared in default research: %+v", sources)
+	}
+	sources, _, err = s.retrieveChatSources(
+		ctx, []string{"historicalneedle"}, nil,
+		ChatScope{Version: "all"}, false, research,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 1 || sources[0].ID != 60 {
+		t.Fatalf("all-version research sources=%+v", sources)
+	}
+	sources, _, err = s.retrieveChatSources(
+		ctx, []string{"historicalneedle"}, []int64{60}, ChatScope{}, false, research,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 1 || sources[0].ID != 60 {
+		t.Fatalf("exact context sources=%+v", sources)
+	}
+}
+
 func TestChatRetrievalUsesOneSQLiteSnapshot(t *testing.T) {
 	s := newChatTestServer(t)
 	oldContent := "oldanchor retained evidence " + strings.Repeat("snapshot filler ", 260)
@@ -786,7 +832,7 @@ func TestChatRetrievalUsesOneSQLiteSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	where, args, err := s.chatSourceWhere(ctx, tx, ChatScope{}, false)
+	where, args, err := s.chatSourceWhere(ctx, tx, ChatScope{}, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}

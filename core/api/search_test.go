@@ -88,6 +88,46 @@ func TestSearchFTSPaginationKeepsStableSnippets(t *testing.T) {
 	}
 }
 
+func TestSearchMatchesOnlySelectedVersionRows(t *testing.T) {
+	s := newChatTestServer(t)
+	seedChatDoc(t, s, 40, 1, "Older", "historicalneedle", "public", false)
+	seedChatDoc(t, s, 41, 1, "Current", "current content", "public", false)
+	const family = "v:33333333333333333333333333333333"
+	if _, err := s.DB.Write.Exec(`
+		UPDATE documents
+		SET version_family_key=?,
+		    previous_version_id=CASE id WHEN 41 THEN 40 ELSE previous_version_id END
+		WHERE id IN (40,41)
+	`, family); err != nil {
+		t.Fatal(err)
+	}
+
+	search := func(query string) Envelope[SearchHit] {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet,
+			"/api/search/?recency=off&q="+url.QueryEscape(query), nil)
+		req = req.WithContext(auth.WithPrincipal(req.Context(), adminPrincipal(1)))
+		rec := httptest.NewRecorder()
+		s.Search(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("query %q status=%d body=%s", query, rec.Code, rec.Body.String())
+		}
+		var out Envelope[SearchHit]
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+
+	if out := search("historicalneedle"); out.Count != 0 {
+		t.Fatalf("older text appeared in latest search: %+v", out)
+	}
+	if out := search("version:all historicalneedle"); out.Count != 1 ||
+		len(out.Results) != 1 || out.Results[0].ID != 40 {
+		t.Fatalf("all-version search=%+v", out)
+	}
+}
+
 func TestSearchRecencyPaginationAppliesFiltersAndACLBeforeLimit(t *testing.T) {
 	s := newListServer(t)
 	inbox := seedStatsJDInbox(t, s.DB)
