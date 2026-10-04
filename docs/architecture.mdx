@@ -145,6 +145,63 @@ different documents/systems may share CAS bytes. Mailbox history preserves the
 observed name/folder after account deletion. Split children/email attachments
 inherit sources; each version records its own upload.
 
+### Versions, references, and discovery currentness
+
+Acquisition sources, replacement versions, and document links are separate
+relations. `document_sources` records where one exact row's bytes came from.
+`previous_version_id` and the internal `version_family_key` identify revisions
+that supersede one another. A `documentlink` custom-field value connects two
+exact rows that continue to coexist. None of these relations is inferred from
+shared CAS bytes.
+
+`core/api/versions.go` owns replacement upload and visible family history.
+The upload rechecks predecessor change permission inside the single-writer
+transaction, gives a previously standalone row and its replacement one random
+`v:` family key, inserts the new source and `post-ingest` job with the row, and
+copies only continuity metadata: system, owner, filing category, sensitivity,
+document type, explicit ACL grants, manual tags, correspondents, and title.
+Extraction state, accepted intelligence, classifier-owned tags, custom-field
+values, and other exact-revision state start fresh. The original predecessor
+row and every immutable blob remain unchanged. Idempotency receipts and the
+predecessor/hash fallback recover a lost successful response without creating a
+second version.
+Before inserting a non-replay replacement, the same transaction requires the
+predecessor to be the greatest remaining family ID and live. A newer or trashed
+head returns the same ID-free `version_head_changed` conflict. This makes
+concurrent replacement single-winner and prevents Trash/restore from creating
+new sibling branches.
+
+Migration `0002_document_version_families.sql` assigns deterministic internal
+`m:` keys to valid pre-existing chains and rejects a cycle or disconnected
+predecessor graph before advancing the schema. Family keys are storage identity,
+not a public address. Discovery in `core/api/documents_list.go`, `search.go`,
+`intelligence.go`, and `chat.go` uses `core/searchquery` plus
+`documentVersionWhere`: by default a family contributes the greatest live row ID
+visible to that caller. `version:all` and `version:older` change that selection.
+Exact detail IDs, saved snapshots, and Trash remain exact-row operations.
+
+`core/api/custom_field_values.go` owns reference mutation;
+`document_references.go` owns typed detail projection and the paged computed
+backlink view. An authenticated cross-system write requires change permission on
+the source, view permission on the live target, and entry to both systems;
+actorless writes stay same-system. Reads return a bounded target summary only
+when the exact target is still live and visible. They never substitute a newer
+revision or expose a raw stored target ID. Backlink counts/pages put source ACL
+and liveness checks inside SQL before pagination. `has-field:` uses the same
+exact-target rule inside its `EXISTS`, so hidden or trashed targets behave as
+absent without becoming an existence oracle.
+
+Trash suppresses a target from outgoing projections, backlinks, and field
+presence without deleting the value, so restore makes it visible again.
+Permanent target purge removes incoming `documentlink` value rows before deleting
+the document. Replacing either endpoint neither copies nor retargets links.
+The mutation helper and schema triggers reject self-links and links within one
+version family. Reciprocal or cyclic links between distinct documents remain
+valid named relationships, but no API recursively traverses them.
+Verify these boundaries with `go test ./core/api ./core/customfield ./core/db
+./core/searchquery ./core/trash ./core/authz` and the version/reference browser
+workflow in `ui/tests/document-versions-references.spec.js`.
+
 ## Storage and transaction invariants
 
 `DB.Write` has one connection; `DB.Read` has a small pool. Both use the same WAL
@@ -172,10 +229,9 @@ AUTOINCREMENT. IDs purged before upgrade have no retained allocation history and
 may be reused; nonreuse starts at upgrade. Categories, metadata, views, automations,
 mailboxes, passwords, shares and approval definitions/runs are system-owned.
 Composite constraints/targeted guards reject foreign-system relationships.
-Authenticated custom-field document links are the exception: change-source and
-view-target checks cover both systems; actorless writes stay local. There is no
-per-document custom-field value read projection yet; one must recheck/redact
-inaccessible targets before exposing links.
+Authenticated custom-field document links are the exception described above;
+authorization is checked at both endpoints, while all projections and reverse
+lookups redact inaccessible rows before counts or pagination.
 
 `core/api/tags.go` owns tag catalog writes, independently of document
 assignment via `core/api/documents_bulk.go`. A document assignment uses an
@@ -275,36 +331,42 @@ without OCR/classifier/filing reruns. [Backup and restore](/backup-restore) requ
 all of `DATA_DIR`, including credential keys, with writers stopped or an atomic
 whole-directory snapshot; a database-only copy is incomplete.
 
-The active catalog in `core/db/migrations/` contains one declarative
-`0001_baseline.sql`: the complete v0.1.0 schema at `user_version = 1` with the
-one-row `schema_lineage = 'stable-v1'` identity. Frozen beta SQL and the final
-account-identity rebuild live separately as compatibility migrations
-`0002`–`0005`; the normal catalog cannot discover them.
+The active catalog in `core/db/migrations/` contains the declarative
+`0001_baseline.sql` at `user_version = 1`, lineage `stable-v1`, followed by
+`0002_document_version_families.sql`. The current schema is
+`user_version = 2` with the same lineage. Migration 0002 adds
+`documents.version_family_key`, the family/currentness index, the partial
+document-link reverse index, and the guarded chain backfill. Frozen beta SQL and
+the final account-identity rebuild live separately as compatibility migrations
+`0002`–`0005`; the active catalog cannot discover them by path.
 
 `migrations.Prepare` delegates core admission to `db.PrepareStable`, which
-classifies the database before writing. Empty databases receive the baseline;
-already-stable databases are no-ops. Every other accepted state must match its
-complete canonical `sqlite_schema` fingerprint and lineage, not merely a
-`user_version`. Unknown, partial, spoofed, corrupt and future states fail
-without mutation. The exact pre-identity schema-4 fingerprint is an explicit
-compatibility boundary that runs only `0005`; a schema claiming the stable
-lineage with the older fingerprint is deliberately rejected for reviewed manual
-recovery. The [release process compatibility table](/release-process#stable-v1-database-compatibility)
+classifies the database before writing. Empty databases receive both active
+migrations. An exact current schema-2 database is a no-op. An exact stable
+schema-1 database first passes integrity and foreign-key checks, then applies
+only active migration 0002 and must match the current manifest. Every accepted
+pre-stable state must match its complete canonical `sqlite_schema` fingerprint
+and lineage, not merely a `user_version`. Unknown, partial, spoofed, corrupt and
+future states fail without mutation. The exact pre-identity schema-4 fingerprint
+is an explicit compatibility boundary; a schema claiming stable lineage with an
+unrecognized fingerprint is deliberately rejected. The
+[release process compatibility table](/release-process#stable-v1-database-compatibility)
 is the sole authority for supported incoming states, frozen steps and the
 required release test matrix.
 
 Every admitted pre-stable archive passes integrity and foreign-key checks and
 gets an exclusive mode-0600 SQLite snapshot before adoption. Remaining
-compatibility steps, stable lineage and stable version commit in one immediate
-transaction through the sole writer. `0005` rebuilds `users`, `documents` and
-`audit_events`; adds provider identity, a durable development-account marker and
-retained-event metadata; moves the singular correspondent into the role-bearing
-junction; and preserves primary keys, revision values and dependent references.
-It also resolves the watched-folder owner email setting to a numeric user ID,
-drops the empty obsolete `plugin_kv` table and redundant ACL index, and removes
-successful jobs older than seven days. The final integrity, foreign keys and
-canonical schema fingerprint must match a fresh stable database; failures roll
-back while retaining the snapshot and restoring foreign-key enforcement.
+compatibility steps, active migration 0002, stable lineage and schema version 2
+commit in one immediate transaction through the sole writer. Compatibility
+`0005` rebuilds `users`, `documents` and `audit_events`; adds provider identity,
+a durable development-account marker and retained-event metadata; moves the
+singular correspondent into the role-bearing junction; and preserves primary
+keys, revision values and dependent references. It also resolves watched-folder
+ownership to a numeric user ID, drops the empty obsolete `plugin_kv` table and
+redundant ACL index, and removes successful jobs older than seven days. The final
+integrity, foreign keys and canonical schema-2 fingerprint must match a fresh
+archive; failures roll back while retaining the snapshot and restoring
+foreign-key enforcement.
 Extension objects created after `_suchi_extension_migrations` are outside the
 core fingerprint. Core objects rebuilt during adoption remain explicitly
 included even when SQLite places their replacement rows after that extension

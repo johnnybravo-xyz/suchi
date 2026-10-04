@@ -49,7 +49,28 @@ filters stay left while list/grid display, refresh and sorting remain grouped
 right. **Any date** opens the From/To added-date controls.
 
 Document detail keeps **All documents** on the left and groups Download, access,
-sharing, phone, and Trash actions on the right.
+sharing, phone, and Trash actions on the right. Live documents show a tabbed
+card in the order **Similar documents**, **Linked documents**, and **Versions**;
+2: document resets selection to the first tab. Linked documents renders assigned
+outgoing values and one field chooser rather than every empty Document link
+definition, alongside independently paged backlinks.
+
+`api.js:uploadDocumentVersion` uses private multipart assembly so `source_mtime`
+and the caller's idempotency key are preserved. The screen keeps the selected
+file/key after recoverable failures and clears them only after a successful
+response and navigation. Versions and backlinks page independently; late
+responses check document, account, and system scope before changing state. Trash
+skips these reads.
+3: the first tab is selected whenever a document opens. **Linked documents** keeps
+assigned outgoing links under **From this document**, unused Document link field
+types behind **Add link**, and incoming relationships under **To this document**.
+Links cannot point to the same document or another revision in the same version
+family; **Versions** owns that history. Replacement upload is available on the
+latest visible revision, and the server rejects an older or raced predecessor
+without exposing a hidden revision. These deliberate limits prevent confusing
+branch/link mashups. Named links between distinct documents may still be
+reciprocal, and the tab shows only direct relationships.
+Ordinary typed custom fields remain in the metadata card.
 
 The top bar provides search, **Upload** and theme controls. The search menu matches
 **Commands** and **Pages**; **Search everything for** submits its complete text.
@@ -85,6 +106,28 @@ Detail previews 2,000 characters. **Read all** expands the complete text; **Show
 less** collapses it. **Copy text** copies the whole extraction and offers a
 selectable field if copying fails. Confidential/Restricted text requires **Reveal**.
 These controls do not change stored extraction.
+
+## Versions and document links
+
+Use **Upload replacement** on a live document to add a newer revision. The
+selected file and source timestamp remain in the form after a network or server
+failure so the same upload can be retried safely. The history labels the newest
+visible revision **Latest**, the open row **Viewing**, and other rows **Earlier**.
+Opening an earlier revision never redirects to the newest one.
+
+Replacement preserves filing/access continuity while extraction results,
+classifier metadata, dates, and custom-field values start fresh. A concise note
+beside the upload control lists this ownership boundary.
+
+Typed ordinary custom fields appear in document detail. A **Document link**
+field can **Set**, **Change**, or **Clear** one exact target. Set/Change searches
+authorized documents and accepts an exact numeric ID or a same-instance document
+URL; a remote URL is rejected without a request. Outgoing and incoming links
+label a non-current target or source **Earlier revision** rather than silently
+retargeting it.
+
+See [Document versions and links](/document-versions-and-links) for currentness,
+permissions, query examples, and Trash/purge behavior.
 
 ## Dashboard behavior
 
@@ -125,6 +168,11 @@ Previous/Next; page one may omit `page`. Changing a filter/sort starts at page o
 explicit historical URLs restore their page. Invalid values become page one and
 out-of-range values become the last page without adding history. Only the newest
 request updates the screen.
+
+Live Documents, Search, Calendar, and archive research show only the newest live
+revision visible to the caller by default. The `version:` query selector can
+show all or only older revisions; direct document URLs and exact saved snapshots
+continue to address the selected row.
 
 The **Type or sharing** filter includes **My active shares** alongside document types.
 It includes each document once while at least one link created by the current
@@ -174,23 +222,29 @@ restore within 30 days or confirm permanent deletion. Sensitive content still
 requires **Reveal**; public shares cannot serve trashed documents.
 
 **Document in Trash** shows the deletion deadline and hides editing, filing,
-sharing, access, versions and similarity until restoration. Restore keeps the
-document open; **Back to Trash** returns to the list. On phones, row titles/deadlines
-sit above **Restore** and **Delete permanently**.
+sharing, access, versions and similarity until restoration. A trashed link target
+also disappears from outgoing fields, **Linked documents**, and field-presence
+matches; restoration makes the stored link visible again. Permanent deletion
+removes incoming links to that exact row. Restore keeps the document open;
+**Back to Trash** returns to the list. On phones, row titles/deadlines sit above
+**Restore** and **Delete permanently**.
 
 ## Saved views
 
 **New view** opens **Create a view** with optional Query, category, tag,
-correspondent, document type, sensitivity and date filters. Empty choices mean all
-values. Date ranges use `yyyy-mm-dd`. Select a view's name to open its documents;
-**Edit** is available only for your views. **Save changes** updates in place;
-**Cancel**/Escape discards the draft.
+correspondent, document type, one **Custom field value** presence choice,
+sensitivity and date filters. The custom-field choice can require **Has value**
+or **Missing value** and serializes to the same `has-field:` query used by
+Search/Documents. Empty choices mean all values. Date ranges use `yyyy-mm-dd`.
+Select a view's name to open its documents; **Edit** is available only for your
+views. **Save changes** updates in place; **Cancel**/Escape discards the draft.
 
-Rich filters appear in **Query** for editing/removal. Older flat filters retain
-selections, multi-value scopes and ordering; exact research snapshots can be
-renamed/shared without changing their document set. New views store a normalized
-rich query; untouched legacy fields survive edits. Validation failures remain in
-the open form. Choices load when needed, not for an empty view list. See
+Rich filters appear in **Query** for editing/removal. The custom-field presence
+token reopens in its dedicated control. Older flat filters retain selections,
+multi-value scopes and ordering; exact research snapshots can be renamed/shared
+without changing their document set. New views store a normalized rich query;
+untouched legacy fields survive edits. Validation failures remain in the open
+form. Choices load when needed, not for an empty view list. See
 [Saved-view query rules](/query-language#saved-views).
 
 Admins and members with **Share saved views** can select **Share this view**.

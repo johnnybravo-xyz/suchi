@@ -37,6 +37,7 @@
               "search",
               "query-language",
               "llm-classifier",
+              "document-versions-and-links",
               "document-dates",
               "archive-chat",
               "pipeline-versions",

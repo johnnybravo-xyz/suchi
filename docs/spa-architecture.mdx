@@ -175,6 +175,40 @@ refresh. Arrival of sidebar categories must not restart reads or discard edits.
 Metadata/language saves check that same document generation before updating local
 state, so an earlier save cannot change the next document's sensitivity or Reveal.
 
+`DocumentDetail.svelte` owns similar-document results, version history,
+replacement upload, typed custom fields, outgoing references, and backlinks for
+one live route generation. Similar documents, linked documents, and versions load
+concurrently but share one screen-local tab card in that order; opening another
+2: document resets selection to the first tab. Linked documents renders assigned
+outgoing values and one field chooser rather than every empty Document link
+definition, alongside independently paged backlinks.
+
+`api.js:uploadDocumentVersion` uses private multipart assembly so `source_mtime`
+and the caller's idempotency key are preserved. The screen keeps the selected
+file/key after recoverable failures and clears them only after a successful
+response and navigation. The server rejects stale family heads; version history
+exposes upload only on the latest visible revision and an ID-free conflict tells
+the user to reload after a race. Versions and backlinks page independently; late
+responses check document, account, and system scope before changing state. Trash
+skips these reads.
+3: the first tab is selected whenever a document opens. **Linked documents** keeps
+assigned outgoing links under **From this document**, unused Document link field
+types behind **Add link**, and incoming relationships under **To this document**.
+Ordinary typed custom fields remain in the metadata card.
+
+`lib/documentReferences.js` parses only exact numeric IDs or same-instance
+document URLs. It rejects another origin before any lookup. Target search,
+PUT/DELETE, and post-mutation detail/backlink refresh remain screen-owned; the
+browser never infers visibility, currentness, or reciprocal links.
+
+`Views.svelte` exposes one custom-field presence selector. Helpers in
+`lib/documentFilters.js` extract one generated `has-field:` token when reopening
+the editor and serialize it back into the canonical rich query. The saved
+contract remains `filters.q`, so summary chips, Documents navigation, copied
+hashes, and Back/Forward need no second state channel. Verify the combined
+surface with `cd ui && bun run e2e tests/document-versions-references.spec.js`
+and the custom-field presence cases in `tests/setup.spec.js`.
+
 Calendar derives `month`, `date`, `view_id`, `role` and document scope from the
 hash. `document_ids` opens an all-dates agenda; ordinary routes use the month grid.
 Day links preserve originating month/View/role. Exact-day requests use equal date
