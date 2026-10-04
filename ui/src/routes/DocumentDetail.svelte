@@ -8,7 +8,7 @@
   import { SENSITIVITY_OPTIONS, fmtDate, fmtBytes, isHighSensitivity, sensDot, sensitivityLabel } from '../lib/format.js'
   import { session } from '../lib/session.svelte.js'
   import { hasCapability } from '../lib/capabilities.js'
-  import { TAGS_SETTINGS_HASH } from '../lib/configuration.js'
+  import { CUSTOM_FIELDS_SETTINGS_HASH, TAGS_SETTINGS_HASH } from '../lib/configuration.js'
   import Icon from '../lib/Icon.svelte'
   import TagPicker from '../lib/TagPicker.svelte'
   import DocumentUnlockStatus from '../lib/DocumentUnlockStatus.svelte'
@@ -90,7 +90,7 @@
   ]
 
   function relatedTabCount(tab) {
-    return tab === 'backlinks' ? linkedDocumentCount : versionHistory.count
+    return tab === 'backlinks' ? linkedDocumentCount : Math.max(0, versionHistory.count - 1)
   }
 
   function selectRelatedTab(tab) {
@@ -497,7 +497,7 @@
         busy: false,
         results,
         selected: results.length === 1 ? results[0] : null,
-        error: results.length ? '' : 'No readable live documents matched.',
+        error: results.length ? '' : 'No matching documents found.',
       })
     } catch (ex) {
       if (!disposed && version === loadVersion && id === documentID && scopeCurrent(scope)) {
@@ -1147,11 +1147,10 @@
             <div id="related-panel-backlinks" class="related-panel" role="tabpanel"
                  aria-labelledby="related-tab-backlinks" tabindex="0">
               <div class="linked-sections">
-                <section class="linked-section" aria-label="Links from this document">
+                <section class="linked-section" aria-label="This document links to">
                   <div class="linked-section-head">
                     <div>
-                      <strong>From this document</strong>
-                      <span class="sub">Named relationships stored on this document.</span>
+                      <strong>This document links to</strong>
                     </div>
                     {#if availableDocumentLinkFields.length && !addingReference}
                       <button class="btn sm" onclick={startNewReference}>Add link</button>
@@ -1178,12 +1177,12 @@
                                 <a class="reference-target" href={filingHref(`#/doc/${current.value.id}`, current.value.system_code)}>
                                   {current.value.title || `Document #${current.value.id}`}
                                 </a>
-                                <span class="sub">{current.value.jd_address || `#${current.value.id}`}</span>
-                                {#if !current.value.is_latest}<span class="pill warn">Earlier revision</span>{/if}
+                                {#if current.value.jd_address}<span class="sub">{current.value.jd_address}</span>{/if}
+                                {#if !current.value.is_latest}<span class="pill warn">Earlier version</span>{/if}
                               </div>
                               <div class="reference-actions">
-                                <button class="btn sm" onclick={() => toggleReferenceEditor(field)}>Change</button>
-                                <button class="btn sm" disabled={editor.busy} onclick={() => clearReference(field)}>Clear</button>
+                                <button class="btn sm" onclick={() => toggleReferenceEditor(field)}>Change link</button>
+                                <button class="btn sm" disabled={editor.busy} onclick={() => clearReference(field)}>Remove link</button>
                               </div>
                             </div>
                             {#if editor.open}
@@ -1192,8 +1191,14 @@
                           </div>
                         {/each}
                       </div>
+                    {:else if !documentLinkFields.length}
+                      {#if session.user?.role === 'admin'}
+                        <a role="button" class="btn sm" href={filingHref(CUSTOM_FIELDS_SETTINGS_HASH)}>Create Document link field</a>
+                      {:else}
+                        <p class="sub related-empty">No link types are configured. Ask an administrator to create one.</p>
+                      {/if}
                     {:else}
-                      <p class="sub related-empty">No links from this document.</p>
+                      <p class="sub related-empty">This document does not link to another document yet.</p>
                     {/if}
 
                     {#if addingReference}
@@ -1212,23 +1217,22 @@
                         {#if selectedNewReferenceField}
                           {@render referenceSearch(selectedNewReferenceField, referenceEditor(selectedNewReferenceField.id), true)}
                         {:else}
-                          <p class="sub">Choose the relationship this link represents.</p>
+                          <p class="sub">Choose how this document is linked.</p>
                         {/if}
                       </div>
                     {/if}
                   {/if}
                 </section>
 
-                <section class="linked-section" aria-label="Links to this document">
+                <section class="linked-section" aria-label="Documents linking to this version">
                   <div class="linked-section-head">
                     <div>
-                      <strong>To this document</strong>
-                      <span class="sub">Other documents that reference this exact revision.</span>
+                      <strong>Documents linking to this version</strong>
                     </div>
                     <span class="pill">{backlinks.count}</span>
                   </div>
                   {#if backlinksLoading}
-                    <p class="sub">Loading linked documents…</p>
+                    <p class="sub">Loading documents linking here…</p>
                   {:else if backlinksError}
                     <div class="inline-state err" role="alert">
                       <span>{backlinksError}</span>
@@ -1241,10 +1245,10 @@
                           <span class="dot" class:warn={!source.is_latest}></span>
                           <span class="grow">
                             <span class="title">{source.title || `Document #${source.id}`}</span>
-                            <span class="sub" style="display:block">{source.field_name}</span>
+                            <span class="sub" style="display:block">Linked here as “{source.field_name}”</span>
                           </span>
-                          {#if !source.is_latest}<span class="pill warn">Earlier revision</span>{/if}
-                          <span class="sub">{source.jd_address || `#${source.id}`}</span>
+                          {#if !source.is_latest}<span class="pill warn">Earlier version</span>{/if}
+                          {#if source.jd_address}<span class="sub">{source.jd_address}</span>{/if}
                         </a>
                       {/each}
                     </div>
@@ -1256,7 +1260,7 @@
                       </div>
                     {/if}
                   {:else}
-                    <p class="sub related-empty">No readable live documents reference this exact revision.</p>
+                    <p class="sub related-empty">No documents link to this version.</p>
                   {/if}
                 </section>
               </div>
@@ -1500,7 +1504,6 @@
   .linked-section-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:10px; }
   .linked-section-head > div { display:flex; min-width:0; flex-direction:column; gap:2px; }
   .linked-section-head strong { font-size:.82rem; }
-  .linked-section-head .sub { font-size:.7rem; }
   .reference-add { margin-top:10px; padding:11px; border:1px solid var(--line); border-radius:9px; background:var(--bg); }
   .reference-add-head { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:8px; }
   .reference-add-head label { color:var(--muted); font-size:.72rem; font-weight:650; }

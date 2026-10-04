@@ -49,28 +49,11 @@ filters stay left while list/grid display, refresh and sorting remain grouped
 right. **Any date** opens the From/To added-date controls.
 
 Document detail keeps **All documents** on the left and groups Download, access,
-sharing, phone, and Trash actions on the right. Live documents show a tabbed
-card in the order **Similar documents**, **Linked documents**, and **Versions**;
-2: document resets selection to the first tab. Linked documents renders assigned
-outgoing values and one field chooser rather than every empty Document link
-definition, alongside independently paged backlinks.
-
-`api.js:uploadDocumentVersion` uses private multipart assembly so `source_mtime`
-and the caller's idempotency key are preserved. The screen keeps the selected
-file/key after recoverable failures and clears them only after a successful
-response and navigation. Versions and backlinks page independently; late
-responses check document, account, and system scope before changing state. Trash
-skips these reads.
-3: the first tab is selected whenever a document opens. **Linked documents** keeps
-assigned outgoing links under **From this document**, unused Document link field
-types behind **Add link**, and incoming relationships under **To this document**.
-Links cannot point to the same document or another revision in the same version
-family; **Versions** owns that history. Replacement upload is available on the
-latest visible revision, and the server rejects an older or raced predecessor
-without exposing a hidden revision. These deliberate limits prevent confusing
-branch/link mashups. Named links between distinct documents may still be
-reciprocal, and the tab shows only direct relationships.
-Ordinary typed custom fields remain in the metadata card.
+sharing, phone, and Trash actions on the right. Live documents show **Similar
+documents**, **Linked documents**, and **Versions** in one tabbed card; the first
+tab is selected whenever a document opens. **Linked documents** separates links
+added on the open document from links added elsewhere, while ordinary typed
+custom fields remain in the metadata card.
 
 The top bar provides search, **Upload** and theme controls. The search menu matches
 **Commands** and **Pages**; **Search everything for** submits its complete text.
@@ -111,23 +94,21 @@ These controls do not change stored extraction.
 
 Use **Upload replacement** on a live document to add a newer revision. The
 selected file and source timestamp remain in the form after a network or server
-failure so the same upload can be retried safely. The history labels the newest
-visible revision **Latest**, the open row **Viewing**, and other rows **Earlier**.
-Opening an earlier revision never redirects to the newest one.
+failure so the same upload can be retried safely. The Versions tab badge counts
+other revisions, so a document with no replacement history shows `0`. The
+history labels the newest visible revision **Latest**, the open row **Viewing**,
+and other rows **Earlier**. Opening an earlier revision never redirects to the
+newest one.
 
 Replacement preserves filing/access continuity while extraction results,
 classifier metadata, dates, and custom-field values start fresh. A concise note
 beside the upload control lists this ownership boundary.
 
-Typed ordinary custom fields appear in document detail. A **Document link**
-field can **Set**, **Change**, or **Clear** one exact target. Set/Change searches
-authorized documents and accepts an exact numeric ID or a same-instance document
-URL; a remote URL is rejected without a request. Outgoing and incoming links
-label a non-current target or source **Earlier revision** rather than silently
-retargeting it.
-
-See [Document versions and links](/document-versions-and-links) for currentness,
-permissions, query examples, and Trash/purge behavior.
+**Linked documents** keeps editable links and documents linking to the open
+version in separate plain-language sections. Link types remain visible on both
+sides, and a titled document omits its raw numeric ID. See [Document versions
+and links](/document-versions-and-links) for exact-link semantics, relationship
+limits, permissions, and Trash/purge behavior.
 
 ## Dashboard behavior
 

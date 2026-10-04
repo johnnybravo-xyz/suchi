@@ -177,11 +177,12 @@ state, so an earlier save cannot change the next document's sensitivity or Revea
 
 `DocumentDetail.svelte` owns similar-document results, version history,
 replacement upload, typed custom fields, outgoing references, and backlinks for
-one live route generation. Similar documents, linked documents, and versions load
-concurrently but share one screen-local tab card in that order; opening another
-2: document resets selection to the first tab. Linked documents renders assigned
-outgoing values and one field chooser rather than every empty Document link
-definition, alongside independently paged backlinks.
+one live route generation. Those reads load concurrently but share one
+screen-local tab card; opening another document resets selection to the first
+tab. Outgoing custom-field values and the independently paged backlink projection
+remain separate state and operations. [Document versions and
+links](/document-versions-and-links) owns their user-facing vocabulary and
+semantic contract. Ordinary typed custom fields remain in the metadata card.
 
 `api.js:uploadDocumentVersion` uses private multipart assembly so `source_mtime`
 and the caller's idempotency key are preserved. The screen keeps the selected
@@ -191,10 +192,6 @@ exposes upload only on the latest visible revision and an ID-free conflict tells
 the user to reload after a race. Versions and backlinks page independently; late
 responses check document, account, and system scope before changing state. Trash
 skips these reads.
-3: the first tab is selected whenever a document opens. **Linked documents** keeps
-assigned outgoing links under **From this document**, unused Document link field
-types behind **Add link**, and incoming relationships under **To this document**.
-Ordinary typed custom fields remain in the metadata card.
 
 `lib/documentReferences.js` parses only exact numeric IDs or same-instance
 document URLs. It rejects another origin before any lookup. Target search,

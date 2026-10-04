@@ -5,13 +5,15 @@ Notable user-visible changes to Suchi are recorded here.
 ## [Unreleased]
 ### Added
 
-- Add document replacement history with caller-relative latest-revision
-  discovery, exact historical URLs, idempotent replacement retries, and explicit
-  metadata inheritance boundaries.
-- Show typed custom-field values and exact Document link relationships on
-  document detail. **Linked documents** combines a compact outgoing-link editor
-  with paged incoming results that redact hidden or trashed endpoints and clean
-  up incoming values on permanent deletion.
+- Add linear document replacement history with current-head uploads, exact
+  historical URLs, idempotent retries, caller-relative latest discovery,
+  explicit metadata inheritance boundaries, and a badge that counts only other
+  versions.
+- Show typed custom-field values and exact named document links. **Linked
+  documents** separates editable links from paged incoming links in plain
+  language, offers administrators direct link-type setup, rejects self and
+  same-family targets, redacts hidden or trashed endpoints, and removes incoming
+  values on permanent deletion.
 - Add `version:` and `has-field:` query qualifiers across Documents, Search,
   saved Views, Calendar, and archive research, plus a saved-view control for
   documents with or without a named custom-field value.
@@ -32,10 +34,6 @@ Notable user-visible changes to Suchi are recorded here.
   collapsed plain-language source explanations, and no producer score details.
 - Streamline Classification with concise helper copy and a contained **Similar
   documents** switch that exposes standard switch semantics.
-- Keep replacement history linear by accepting uploads only from the current
-  live family head, and reject document self-links or links within one version
-  family while preserving exact reciprocal links between distinct documents.
-
 
 ## [0.1.0] - 2026-09-28
 

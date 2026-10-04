@@ -96,11 +96,14 @@ replaces 287, the new invoice starts without that link. Suchi never copies,
 promotes, or retargets a link during replacement.
 
 Ordinary custom fields appear in the document metadata card with their declared
-types. **Linked documents** shows assigned outgoing values under **From this
-document** and keeps unused Document link fields in the **Add link** chooser,
-rather than rendering every empty field. **To this document** is computed from
-current values and paged independently; it is not reciprocal metadata stored on
-the target.
+types. **Linked documents** shows assigned outgoing values under **This document
+links to** and keeps unused link types in the **Add link** chooser. Outgoing rows
+use **Change link** and **Remove link**.
+
+**Documents linking to this version** is an independently paged projection of
+current values; each row says **Linked here as “link type”**. These rows are
+navigation, not reciprocal metadata stored on the target. A titled document
+omits its raw numeric ID; **Earlier version** identifies a non-current endpoint.
 
 ### Deliberate relationship limits
 

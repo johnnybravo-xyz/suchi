@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 export const TAGS_SETTINGS_HASH = '#/settings?tab=archive&section=metadata&metadata=tags'
+export const CUSTOM_FIELDS_SETTINGS_HASH = '#/settings?tab=archive&section=metadata&metadata=custom_fields'
 
 export const FILING_TREE_SETTINGS_ITEM = {
   name: 'filing-tree', label: 'Filing tree', icon: 'docs',

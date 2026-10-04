@@ -108,7 +108,7 @@ test('shows explicit revision state and retries an uncertain replacement with on
   await expect(page.getByRole('tabpanel', { name: /^Similar documents/ })).toContainText(
     "Nothing in the archive overlaps this document's vocabulary yet.",
   )
-  await expect(page.getByRole('tab', { name: 'Versions 2' })).toBeVisible()
+  await expect(page.getByRole('tab', { name: 'Versions 1' })).toBeVisible()
   const history = await openVersions(page)
   await expect(history.locator('.version-notice')).toHaveCount(0)
   await expect(history.getByText('Latest', { exact: true })).toBeVisible()
@@ -185,6 +185,30 @@ for (const failure of [
     await expect(history.getByRole('button', { name: 'Retry upload', exact: true })).toBeVisible()
   })
 }
+test('offers link type setup and counts only other revisions', async ({ page }) => {
+  await installDetailAPI(page, async ({ route, request, path }) => {
+    if (path === '/api/documents/42/versions/' && request.method() === 'GET') {
+      await route.fulfill({ json: {
+        count: 1,
+        head_id: 42,
+        can_upload: true,
+        results: [{ id: 42, title: 'Document 42', created_at: 1780000042, is_head: true }],
+      } })
+      return true
+    }
+    return false
+  })
+
+  await page.goto('/#/doc/42')
+  await expect(page.getByRole('tab', { name: 'Versions 0' })).toBeVisible()
+  await page.getByRole('tab', { name: /^Linked documents/ }).click()
+  const linksFrom = page.getByRole('region', { name: 'This document links to' })
+  await expect(linksFrom.getByRole('button', { name: 'Add link', exact: true })).toHaveCount(0)
+  const createLinkField = linksFrom.getByRole('button', { name: 'Create Document link field' })
+  await expect(createLinkField).toBeVisible()
+  await expect(createLinkField).toHaveAttribute('href', /metadata=custom_fields/)
+})
+
 test('keeps outgoing and incoming document links in one compact tab', async ({ page }) => {
   let targetID = 70
 
@@ -197,7 +221,7 @@ test('keeps outgoing and incoming document links in one compact tab', async ({ p
       ]
       if (targetID) custom_fields.push({
         field_id: 9, name: 'Governing record', data_type: 'documentlink',
-        value: { id: targetID, title: targetID === 70 ? 'Original record' : 'Replacement target', system_code: 'S02', jd_address: `S02.13.${targetID}`, created_at: 1780000000, is_latest: targetID !== 70 },
+        value: { id: targetID, title: targetID === 70 ? 'Original record' : 'Replacement target', system_code: 'S02', jd_address: targetID === 70 ? '' : `S02.13.${targetID}`, created_at: 1780000000, is_latest: targetID !== 70 },
       })
       await route.fulfill({ json: detail(42, { title: 'Amendment', custom_fields }) })
       return true
@@ -240,19 +264,21 @@ test('keeps outgoing and incoming document links in one compact tab', async ({ p
   await expect(linkedTab).toContainText('2')
   await linkedTab.click()
   const linkedDocuments = page.getByRole('tabpanel', { name: /^Linked documents/ })
-  const linksFrom = linkedDocuments.getByRole('region', { name: 'Links from this document' })
-  const linksTo = linkedDocuments.getByRole('region', { name: 'Links to this document' })
+  const linksFrom = linkedDocuments.getByRole('region', { name: 'This document links to' })
+  const linksTo = linkedDocuments.getByRole('region', { name: 'Documents linking to this version' })
   await expect(linksFrom.getByText('Original record', { exact: true })).toBeVisible()
-  await expect(linksFrom.getByText('Earlier revision', { exact: true })).toBeVisible()
+  await expect(linksFrom.getByText('#70', { exact: true })).toHaveCount(0)
+  await expect(linksFrom.getByText('Earlier version', { exact: true })).toBeVisible()
   await expect(linksFrom.getByText('Supporting record', { exact: true })).toHaveCount(0)
   await expect(linksTo.getByText('Follow-up note', { exact: true })).toBeVisible()
-  await expect(linksTo.getByText('Earlier revision', { exact: true })).toBeVisible()
+  await expect(linksTo.getByText('Linked here as “Previous agreement”', { exact: true })).toBeVisible()
+  await expect(linksTo.getByText('Earlier version', { exact: true })).toBeVisible()
   await linkedTab.focus()
   await linkedTab.press('ArrowRight')
   await expect(page.getByRole('tab', { name: /^Versions/ })).toHaveAttribute('aria-selected', 'true')
   await linkedTab.click()
 
-  await linksFrom.getByRole('button', { name: 'Change', exact: true }).click()
+  await linksFrom.getByRole('button', { name: 'Change link', exact: true }).click()
   const input = linksFrom.getByLabel('Governing record document')
   await input.fill('https://remote.example/#/doc/77')
   await linksFrom.getByRole('button', { name: 'Search', exact: true }).click()
@@ -266,8 +292,8 @@ test('keeps outgoing and incoming document links in one compact tab', async ({ p
   await expect(linksFrom.getByText('Replacement target', { exact: true })).toBeVisible()
   expect(writes[0]).toEqual({ method: 'PUT', body: { value: 77 } })
 
-  await linksFrom.getByRole('button', { name: 'Clear', exact: true }).click()
-  await expect(linksFrom.getByText('No links from this document.', { exact: true })).toBeVisible()
+  await linksFrom.getByRole('button', { name: 'Remove link', exact: true }).click()
+  await expect(linksFrom.getByText('This document does not link to another document yet.', { exact: true })).toBeVisible()
   await expect(linkedTab).toContainText('1')
   await linksFrom.getByRole('button', { name: 'Add link', exact: true }).click()
   const linkType = linksFrom.getByLabel('Link type')
