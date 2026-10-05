@@ -632,12 +632,6 @@ func TestScopedTokenAppliesEveryDocumentChangeField(t *testing.T) {
 			want:   "Reviewed correspondent",
 		},
 		{
-			name:   "document_type",
-			change: approvals.DocumentChange{Field: "document_type", Value: "Reviewed type", Confidence: .9, Source: "llm"},
-			query:  `SELECT dt.name FROM documents d JOIN document_types dt ON dt.id=d.document_type_id WHERE d.id=10`,
-			want:   "Reviewed type",
-		},
-		{
 			name:   "tag",
 			change: approvals.DocumentChange{Field: "tag", Value: "Reviewed tag", Confidence: .9, Source: "llm"},
 			query:  `SELECT t.name FROM document_tags d JOIN tags t ON t.id=d.tag_id WHERE d.document_id=10`,
@@ -1040,124 +1034,114 @@ func TestLanguageReviewUsesIndependentRevisionAndLocksAcceptedValue(t *testing.T
 }
 
 func TestDocumentChangeNamedVocabularyRequiresCurrentAdmin(t *testing.T) {
-	for field, table := range map[string]string{"tag": "tags", "document_type": "document_types"} {
-		for _, scenario := range []struct {
-			name      string
-			member    bool
-			existing  bool
-			downgrade bool
-		}{
-			{name: "member cannot create", member: true},
-			{name: "member can link canonical term", member: true, existing: true},
-			{name: "admin can create"},
-			{name: "queued creation rejects admin downgrade", downgrade: true},
-		} {
-			t.Run(field+"/"+scenario.name, func(t *testing.T) {
-				e := newEngine(t)
-				seedDocumentForChange(t, e.DB())
-				ctx := context.Background()
-				if scenario.member {
+	for _, scenario := range []struct {
+		name      string
+		member    bool
+		existing  bool
+		downgrade bool
+	}{
+		{name: "member cannot create", member: true},
+		{name: "member can link canonical term", member: true, existing: true},
+		{name: "admin can create"},
+		{name: "queued creation rejects admin downgrade", downgrade: true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			e := newEngine(t)
+			seedDocumentForChange(t, e.DB())
+			ctx := context.Background()
+			if scenario.member {
+				if _, err := e.DB().Write.Exec(`UPDATE users SET role='member' WHERE id=1`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if scenario.existing {
+				if _, err := e.DB().Write.Exec("INSERT INTO tags(system_id,id,name,slug,created_at,updated_at) VALUES(1,99,'Reviewed term','reviewed-term',0,0)"); err != nil {
+					t.Fatal(err)
+				}
+				// Reusing vocabulary must not even attempt an unauthorized
+				// insert before discovering the canonical-slug conflict.
+				if _, err := e.DB().Write.Exec("CREATE TRIGGER forbid_vocabulary_insert BEFORE INSERT ON tags BEGIN SELECT RAISE(ABORT,'unexpected vocabulary creation'); END"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			runID, taskID := proposeDocumentReview(t, e, approvals.DocumentChange{Field: "tag", Value: "  Reviewed TERM  ", Confidence: .9})
+			actor := interactiveReviewer(t, e)
+			actor.Role = "admin" // Caller claims never replace the writer's current role.
+			err := e.Resolve(ctx, taskID, "apply", actor)
+			if scenario.member && !scenario.existing {
+				if !errors.Is(err, approvals.ErrForbidden) {
+					t.Fatalf("nonadmin creation resolution: %v", err)
+				}
+				var status string
+				if err := e.DB().Read.QueryRow(`SELECT status FROM approval_tasks WHERE id=?`, taskID).Scan(&status); err != nil {
+					t.Fatal(err)
+				}
+				var queued int
+				if err := e.DB().Read.QueryRow(`SELECT COUNT(*) FROM jobs WHERE kind='approval:advance' AND json_extract(payload,'$.run_id')=? AND json_extract(payload,'$.trigger')='apply'`, runID).Scan(&queued); err != nil {
+					t.Fatal(err)
+				}
+				if status != "open" || queued != 0 {
+					t.Fatalf("denied review status=%q queued apply jobs=%d", status, queued)
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				var count int
+				if err := e.DB().Read.QueryRow("SELECT COUNT(*) FROM tags").Scan(&count); err != nil {
+					t.Fatal(err)
+				}
+				if !scenario.existing && count != 0 {
+					t.Fatal("resolution created vocabulary before the queued effect")
+				}
+				if err := e.Advance(ctx, runID, "apply"); err != nil {
+					t.Fatal(err)
+				}
+				if scenario.downgrade {
 					if _, err := e.DB().Write.Exec(`UPDATE users SET role='member' WHERE id=1`); err != nil {
 						t.Fatal(err)
 					}
 				}
-				if scenario.existing {
-					if _, err := e.DB().Write.Exec("INSERT INTO " + table + "(system_id,id,name,slug,created_at,updated_at) VALUES(1,99,'Reviewed term','reviewed-term',0,0)"); err != nil {
-						t.Fatal(err)
-					}
-					// Reusing vocabulary must not even attempt an unauthorized
-					// insert before discovering the canonical-slug conflict.
-					if _, err := e.DB().Write.Exec("CREATE TRIGGER forbid_vocabulary_insert BEFORE INSERT ON " + table + " BEGIN SELECT RAISE(ABORT,'unexpected vocabulary creation'); END"); err != nil {
-						t.Fatal(err)
-					}
-				}
-				runID, taskID := proposeDocumentReview(t, e, approvals.DocumentChange{Field: field, Value: "  Reviewed TERM  ", Confidence: .9})
-				actor := interactiveReviewer(t, e)
-				actor.Role = "admin" // Caller claims never replace the writer's current role.
-				err := e.Resolve(ctx, taskID, "apply", actor)
-				if scenario.member && !scenario.existing {
+				err = e.Advance(ctx, runID, "")
+				if scenario.downgrade {
 					if !errors.Is(err, approvals.ErrForbidden) {
-						t.Fatalf("nonadmin creation resolution: %v", err)
+						t.Fatalf("downgraded creation effect: %v", err)
 					}
-					var status string
-					if err := e.DB().Read.QueryRow(`SELECT status FROM approval_tasks WHERE id=?`, taskID).Scan(&status); err != nil {
-						t.Fatal(err)
-					}
-					var queued int
-					if err := e.DB().Read.QueryRow(`SELECT COUNT(*) FROM jobs WHERE kind='approval:advance' AND json_extract(payload,'$.run_id')=? AND json_extract(payload,'$.trigger')='apply'`, runID).Scan(&queued); err != nil {
-						t.Fatal(err)
-					}
-					if status != "open" || queued != 0 {
-						t.Fatalf("denied review status=%q queued apply jobs=%d", status, queued)
-					}
-				} else {
-					if err != nil {
-						t.Fatal(err)
-					}
-					var count int
-					if err := e.DB().Read.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil {
-						t.Fatal(err)
-					}
-					if !scenario.existing && count != 0 {
-						t.Fatal("resolution created vocabulary before the queued effect")
-					}
-					if err := e.Advance(ctx, runID, "apply"); err != nil {
-						t.Fatal(err)
-					}
-					if scenario.downgrade {
-						if _, err := e.DB().Write.Exec(`UPDATE users SET role='member' WHERE id=1`); err != nil {
-							t.Fatal(err)
-						}
-					}
-					err = e.Advance(ctx, runID, "")
-					if scenario.downgrade {
-						if !errors.Is(err, approvals.ErrForbidden) {
-							t.Fatalf("downgraded creation effect: %v", err)
-						}
-					} else if err != nil {
-						t.Fatal(err)
-					}
-				}
-				var count, applied, audits int
-				if err := e.DB().Read.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil {
+				} else if err != nil {
 					t.Fatal(err)
 				}
-				query := `SELECT COUNT(*) FROM document_tags WHERE document_id=10`
-				if field == "document_type" {
-					query = `SELECT COUNT(*) FROM documents WHERE id=10 AND document_type_id IS NOT NULL`
-				}
-				if err := e.DB().Read.QueryRow(query).Scan(&applied); err != nil {
+			}
+			var count, applied, audits int
+			if err := e.DB().Read.QueryRow("SELECT COUNT(*) FROM tags").Scan(&count); err != nil {
+				t.Fatal(err)
+			}
+			if err := e.DB().Read.QueryRow(`SELECT COUNT(*) FROM document_tags WHERE document_id=10`).Scan(&applied); err != nil {
+				t.Fatal(err)
+			}
+			if err := e.DB().Read.QueryRow(`SELECT COUNT(*) FROM audit_events WHERE action='document.suggestion_apply' AND object_id=10`).Scan(&audits); err != nil {
+				t.Fatal(err)
+			}
+			denied := scenario.downgrade || (scenario.member && !scenario.existing)
+			want := 1
+			if denied {
+				want = 0
+			}
+			if count != want || applied != want || audits != want {
+				t.Fatalf("vocabulary=%d applied=%d audits=%d, want %d", count, applied, audits, want)
+			}
+			if scenario.existing {
+				var linkedID int64
+				var canonicalName string
+				if err := e.DB().Read.QueryRow(`SELECT tag_id FROM document_tags WHERE document_id=10`).Scan(&linkedID); err != nil {
 					t.Fatal(err)
 				}
-				if err := e.DB().Read.QueryRow(`SELECT COUNT(*) FROM audit_events WHERE action='document.suggestion_apply' AND object_id=10`).Scan(&audits); err != nil {
+				if err := e.DB().Read.QueryRow("SELECT name FROM tags WHERE id=?", linkedID).Scan(&canonicalName); err != nil {
 					t.Fatal(err)
 				}
-				denied := scenario.downgrade || (scenario.member && !scenario.existing)
-				want := 1
-				if denied {
-					want = 0
+				if linkedID != 99 || canonicalName != "Reviewed term" {
+					t.Fatalf("existing vocabulary changed: id=%d name=%q", linkedID, canonicalName)
 				}
-				if count != want || applied != want || audits != want {
-					t.Fatalf("vocabulary=%d applied=%d audits=%d, want %d", count, applied, audits, want)
-				}
-				if scenario.existing {
-					var linkedID int64
-					var canonicalName string
-					query := `SELECT tag_id FROM document_tags WHERE document_id=10`
-					if field == "document_type" {
-						query = `SELECT document_type_id FROM documents WHERE id=10`
-					}
-					if err := e.DB().Read.QueryRow(query).Scan(&linkedID); err != nil {
-						t.Fatal(err)
-					}
-					if err := e.DB().Read.QueryRow("SELECT name FROM "+table+" WHERE id=?", linkedID).Scan(&canonicalName); err != nil {
-						t.Fatal(err)
-					}
-					if linkedID != 99 || canonicalName != "Reviewed term" {
-						t.Fatalf("existing vocabulary changed: id=%d name=%q", linkedID, canonicalName)
-					}
-				}
-			})
-		}
+			}
+		})
 	}
 }

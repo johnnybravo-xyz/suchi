@@ -144,14 +144,18 @@ The importer:
 
 1. Loads every manifest object (top-level `manifest.json` plus any
    per-document sidecar files under `<root>/` or `<root>/documents/`).
-2. Upserts tags, correspondents, document types, storage paths, and custom-field
-   definitions **verbatim** within the selected system. Names are local identities —
-   re-running there against a modified export updates that system's row only.
-3. For each document, streams the original (and optional archive)
-   file into the CAS by SHA-256, then inserts one `documents` row
-   plus tag junctions and custom-field values in a single
-   transaction. `legacy_id` is preserved for round-tripping
-   and dedup.
+2. Upserts source tags, correspondents, storage paths, and custom-field
+   definitions within the selected system. Each Paperless document type becomes
+   an ordinary `type:<name>` tag with its source matching settings.
+3. For each document, streams the original (and optional archive) file into the
+   CAS by SHA-256, then inserts one `documents` row plus tag junctions and
+   custom-field values in a single transaction. `legacy_id` is preserved for
+   round-tripping and dedup.
+
+Document-type assignments therefore remain searchable without creating a
+second metadata vocabulary. Storage templates using `{{document_type}}` become
+`{{tag_list}}`; unsupported document-type expressions are skipped and reported
+instead of producing an invalid path.
 
 ## Dedup
 
@@ -198,7 +202,9 @@ visible, bulk-reassignable, never lost. Three flags override:
     ```
 
     `if` is `<kind>:<name>` where kind is `tag`, `correspondent`,
-    `document_type`, or `storage_path`. `category` is the JD code.
+    `document_type`, or `storage_path`. `document_type` reads the Paperless
+    source field during category resolution; it does not create a native Suchi
+    metadata kind. `category` is the JD code.
 
     ```bash
     suchi import --from ./export --owner-email you@ex.com \
@@ -257,39 +263,42 @@ table.
 
 **Action type mapping** (source `workflowaction.type`):
 
-| Source             | Target action(s)                                                                                                                                                                                             | Outcome                                                                             |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
-| 1 ASSIGNMENT       | fan-out to `assign_title` / `assign_tags` / `assign_correspondent` / `assign_document_type` / `assign_storage_path` / `assign_owner` / `assign_custom_field` per non-null field                              | Full                                                                                |
-| 2 REMOVAL          | fan-out to `remove_tags` / `remove_correspondents` / `remove_document_type` / `remove_storage_path` / `remove_custom_field`; `remove_owner` is reported and dropped because Suchi documents require an owner | Full except reported partial mappings and truncated multi-value inputs              |
-| 3 EMAIL            | —                                                                                                                                                                                                            | Partial — suchi has no `notify_email` verb yet; the report queues it as a follow-up |
-| 4 WEBHOOK          | —                                                                                                                                                                                                            | Partial — no `webhook` verb yet                                                     |
-| 5 PASSWORD_REMOVAL | —                                                                                                                                                                                                            | Partial — no analog                                                                 |
-| 6 MOVE_TO_TRASH    | `discard`                                                                                                                                                                                                    | Partial — `discard` skips the doc rather than soft-deleting                         |
+| Source             | Target action(s)                                                                                                                                                                              | Outcome                                                                             |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| 1 ASSIGNMENT       | fan-out to `assign_title` / `assign_tags` / `assign_correspondent` / `assign_storage_path` / `assign_owner` / `assign_custom_field`; a source document type is one `assign_tags` action         | Full                                                                                |
+| 2 REMOVAL          | fan-out to `remove_tags` / `remove_correspondents` / `remove_storage_path` / `remove_custom_field`; source document types are included in `remove_tags`; `remove_owner` is reported and dropped | Full except reported partial mappings and truncated multi-value inputs              |
+| 3 EMAIL            | —                                                                                                                                                                                             | Partial — suchi has no `notify_email` verb yet; the report queues it as a follow-up |
+| 4 WEBHOOK          | —                                                                                                                                                                                             | Partial — no `webhook` verb yet                                                     |
+| 5 PASSWORD_REMOVAL | —                                                                                                                                                                                             | Partial — no analog                                                                 |
+| 6 MOVE_TO_TRASH    | `discard`                                                                                                                                                                                     | Partial — `discard` skips the doc rather than soft-deleting                         |
 
 **Trigger filter mapping**:
 
-| Source field                                 | Target        | Outcome                                         |
-| -------------------------------------------- | ------------- | ----------------------------------------------- |
-| `filter_filename`                            | `filename`    | Full                                            |
-| `filter_path`                                | `path`        | Full                                            |
-| `filter_mailrule`                            | `mailrule_id` | Full                                            |
-| `filter_has_tags` (first)                    | `tag_id`      | Full                                            |
-| `filter_has_tags` (>1)                       | first only    | Partial — "any-of tags list truncated to first" |
-| `filter_has_correspondent`                   | `corr_id`     | Full                                            |
-| `filter_has_document_type`                   | `doctype_id`  | Full                                            |
-| `filter_has_storage_path`                    | —             | Partial — no storage-path trigger filter        |
-| `filter_has_all_tags`, `filter_has_not_tags` | —             | Partial — no negation / all-of semantics        |
-| `filter_custom_field_query`                  | —             | Partial                                         |
-| `matching_algorithm` (LITERAL/REGEX/FUZZY)   | —             | `match` dropped, Partial                        |
+| Source field                                 | Target        | Outcome                                                                                                  |
+| -------------------------------------------- | ------------- | -------------------------------------------------------------------------------------------------------- |
+| `filter_filename`                            | `filename`    | Full                                                                                                     |
+| `filter_path`                                | `path`        | Full                                                                                                     |
+| `filter_mailrule`                            | `mailrule_id` | Full                                                                                                     |
+| `filter_has_tags` (first)                    | `tag_id`      | Full                                                                                                     |
+| `filter_has_tags` (>1)                       | first only    | Partial — "any-of tags list truncated to first"                                                          |
+| `filter_has_correspondent`                   | `corr_id`     | Full                                                                                                     |
+| `filter_has_document_type`                   | `tag_id`      | Full alone; a different existing tag filter requires AND semantics, so the imported automation suspends |
+| `filter_has_storage_path`                    | —             | Partial — no storage-path trigger filter                                                                 |
+| `filter_has_all_tags`, `filter_has_not_tags` | —             | Partial — no negation / all-of semantics                                                                 |
+| `filter_custom_field_query`                  | —             | Partial                                                                                                  |
+| `matching_algorithm` (LITERAL/REGEX/FUZZY)   | —             | `match` dropped, Partial                                                                                 |
+
+Paperless title placeholders `{{document_type}}` and
+`{{ document_type }}` become Suchi's `{{tags}}`. A more complex source
+document-type expression is dropped and reported.
 
 ## Saved views
 
 Paperless saved views migrate into suchi's `saved_views` — with a
 lossy translation from paperless's 50-way `filter_rules.rule_type`
 enum onto suchi's allow-listed `filter_json` keys (`q`, `tags__id__in`,
-`correspondents__id__in`, `document_type__id`, `jd_category_id`,
-`sensitivity`, `ordering`). Suchi still reads these flat imported filters; the
-importer does not yet rewrite source rules into rich-query equivalents.
+`correspondents__id__in`, `jd_category_id`, `sensitivity`, `ordering`).
+Paperless type filters target the corresponding `type:<name>` tag.
 
 A view is `Full` when every rule maps 1:1; `Partial` when at least one
 rule degrades (e.g., storage-path rule → text search); `Failed` when
@@ -303,7 +312,7 @@ zero rules map — the view row is skipped and reported.
 | 1 content contains                                                   | `q`                       | Partial (q matches title+content combined)                                                                                               |
 | 2 ASN is / 18 not-has ASN / 23-24 ASN gt/lt                          | —                         | Failed — the importer does not translate ASN filters, although document ASN identity is retained within the target system                |
 | 3 correspondent is                                                   | `correspondents__id__in`  | Full                                                                                                                                     |
-| 4 document type is                                                   | `document_type__id`       | Full (multi → last wins, Partial)                                                                                                        |
+| 4 document type is                                                   | `tags__id__in`            | Full                                                                                                                                     |
 | 5 is in inbox                                                        | —                         | Partial — suchi surfaces Inbox natively                                                                                                  |
 | 6 has tag                                                            | `tags__id__in`            | Full                                                                                                                                     |
 | 7 has any tag / 22 has tags in                                       | `tags__id__in`            | Full                                                                                                                                     |
@@ -314,7 +323,7 @@ zero rules map — the view row is skipped and reported.
 | 25 storage path is / 30 has storage path in                          | `q` text search           | Partial                                                                                                                                  |
 | 26 has correspondent in                                              | `correspondents__id__in`  | Full                                                                                                                                     |
 | 27, 29, 31 negative "in" filters                                     | —                         | Failed — importer does not translate negative metadata rules                                                                             |
-| 28 has document type in                                              | `document_type__id` first | Partial                                                                                                                                  |
+| 28 has document type in                                              | `tags__id__in` first      | Partial                                                                                                                                  |
 | 32-35 owner filters                                                  | —                         | Failed                                                                                                                                   |
 | 36, 38-42 custom-field filters                                       | —                         | Failed                                                                                                                                   |
 | 37 is shared by me                                                   | —                         | Failed                                                                                                                                   |
@@ -345,7 +354,7 @@ Every non-dry-run import writes a markdown report to `--report
 - **Header** — timestamp, source bundle root, target datadir,
   duration, active JD strategy.
 - **Summary** — rows per model class (Documents / Tags /
-  Correspondents / Document types / Storage paths / Custom fields /
+  Correspondents / Document types → tags / Storage paths / Custom fields /
   Notes / Workflows / Saved views), columns Full / Partial / Failed.
 - **Partial migrations** — one row per Partial with source, target,
   reason.

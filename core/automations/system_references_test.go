@@ -14,7 +14,6 @@ func TestForeignAutomationReferencesFailConfigurationAndExecution(t *testing.T) 
 	for _, action := range []automations.Action{
 		{Kind: "assign_tags", Params: map[string]any{"tag_ids": []any{float64(900)}}},
 		{Kind: "assign_correspondent", Params: map[string]any{"correspondent_id": float64(900)}},
-		{Kind: "assign_document_type", Params: map[string]any{"document_type_id": float64(900)}},
 		{Kind: "assign_storage_path", Params: map[string]any{"storage_path_id": float64(900)}},
 		{Kind: "assign_jd_category", Params: map[string]any{"jd_category_id": float64(900)}},
 		{Kind: "assign_custom_field", Params: map[string]any{"field_id": float64(900), "value": "foreign"}},
@@ -32,7 +31,6 @@ func TestForeignAutomationReferencesFailConfigurationAndExecution(t *testing.T) 
 				INSERT INTO jd_categories(id,system_id,area_start,code,name) VALUES (900,2,10,13,'Foreign');
 				INSERT INTO tags(id,system_id,name,slug,created_at,updated_at) VALUES (900,2,'Foreign','foreign',0,0);
 				INSERT INTO correspondents(id,system_id,name,slug,created_at,updated_at) VALUES (900,2,'Foreign','foreign',0,0);
-				INSERT INTO document_types(id,system_id,name,slug,created_at,updated_at) VALUES (900,2,'Foreign','foreign',0,0);
 				INSERT INTO storage_paths(id,system_id,name,slug,path,created_at,updated_at) VALUES (900,2,'Foreign','foreign','foreign',0,0);
 				INSERT INTO custom_fields(id,system_id,name,data_type,created_at,updated_at) VALUES (900,2,'Foreign','text',0,0);
 				INSERT INTO users(id,email,display_name,role,created_at,updated_at) VALUES (900,'foreign@test','Foreign','member',0,0);

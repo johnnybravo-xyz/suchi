@@ -154,7 +154,6 @@ func appendExportAutomations(ctx context.Context, tx *sql.Tx, systemID int64, pf
 		}{
 			{t.FilterTagID, "tags", &seed.Trigger.FilterTag},
 			{t.FilterCorrID, "correspondents", &seed.Trigger.FilterCorrespondent},
-			{t.FilterDocTypeID, "document_types", &seed.Trigger.FilterDocumentType},
 		} {
 			if ref.id == 0 {
 				continue
@@ -221,7 +220,6 @@ func exportActionParams(ctx context.Context, tx *sql.Tx, systemID int64, action 
 		out["tags"] = names
 	}
 	for _, ref := range []struct{ key, name, table string }{
-		{"document_type_id", "document_type", "document_types"},
 		{"correspondent_id", "correspondent", "correspondents"},
 	} {
 		value, exists := out[ref.key]

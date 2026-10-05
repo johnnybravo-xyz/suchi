@@ -140,8 +140,6 @@ func validateAction(a Action, cats map[int]bool) error {
 		key = "template"
 	case "assign_correspondent":
 		key = "correspondent"
-	case "assign_document_type":
-		key = "document_type"
 	case "assign_jd_category":
 		key = "jd_category_code"
 	case "assign_tags":

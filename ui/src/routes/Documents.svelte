@@ -2,7 +2,7 @@
 <script>
   import { scopedHash as filingHref, systems, captureScope, scopeCurrent } from '../lib/systems.svelte.js'
   import { onDestroy } from 'svelte'
-  import { listDocuments, listTags, listAllTags, listCorrespondents, listDocumentTypes, patchDocument, deleteDocument, bulkEdit, createShareLink, thumbPath, decryptDocument, decryptBatch, extractIntelligence } from '../lib/api.js'
+  import { listDocuments, listTags, listAllTags, listCorrespondents, patchDocument, deleteDocument, bulkEdit, createShareLink, thumbPath, decryptDocument, decryptBatch, extractIntelligence } from '../lib/api.js'
   import { route, go } from '../lib/router.svelte.js'
   import { uploadBus } from '../lib/upload_bus.svelte.js'
   import { SENSITIVITY_OPTIONS, fmtDate, isHighSensitivity, sensDot } from '../lib/format.js'
@@ -26,16 +26,14 @@
   const page = $derived(Number.isSafeInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1)
   let loading = $state(true)
   let err = $state('')
-  let tags = $state([]), correspondents = $state([]), types = $state([])
+  let tags = $state([]), correspondents = $state([])
   let facetError = $state('')
   const fQuery = $derived(route.query.get('q') || '')
   const fTag = $derived(route.query.get('tags__id__in') || '')
   const fCorr = $derived(route.query.get('correspondents__id__in') || '')
-  const fType = $derived(route.query.get('document_type__id') || '')
   const fSens = $derived(route.query.get('sensitivity') || '')
   const fDocumentIDs = $derived(route.query.get('document_ids') || '')
   const fShareLink = $derived(route.query.get('share_link') || '')
-  const typeOrShare = $derived(fShareLink === 'active' ? 'active' : fType)
   const ordering = $derived(route.query.get('ordering') || '-created_at')
   const dateFrom = $derived(dateFilterValue('created_at__gte'))
   const dateTo = $derived(dateFilterValue('created_at__lte'))
@@ -78,17 +76,8 @@
     go(`#${route.path}${query ? `?${query}` : ''}`)
   }
 
-  function setTypeOrShare(value) {
-    queryAssistant.clear()
-    const params = new URLSearchParams(route.query)
-    params.delete('document_type__id')
-    params.delete('share_link')
-    const normalized = String(value ?? '').trim()
-    if (normalized === 'active') params.set('share_link', 'active')
-    else if (normalized) params.set('document_type__id', normalized)
-    params.delete('page')
-    const query = params.toString()
-    go(`#${route.path}${query ? `?${query}` : ''}`)
+  function toggleSharedByMe() {
+    setRouteFilter('share_link', fShareLink === 'active' ? '' : 'active')
   }
 
   function pageHash(target) {
@@ -136,8 +125,8 @@
   async function loadFacets() {
     facetError = ''
     try {
-      const [t, c, d] = await Promise.all([listTags(), listCorrespondents(), listDocumentTypes()])
-      tags = t?.results || []; correspondents = c?.results || []; types = d?.results || []
+      const [t, c] = await Promise.all([listTags(), listCorrespondents()])
+      tags = t?.results || []; correspondents = c?.results || []
     } catch (ex) { facetError = ex.message || 'Some document filters could not be loaded.' }
   }
 
@@ -161,8 +150,7 @@
         page, page_size: pageSize, ordering,
         q: fQuery, document_ids: fDocumentIDs,
         tags__id__in: fTag, correspondents__id__in: fCorr,
-        document_type__id: fType, sensitivity: fSens,
-        jd_category_id: isInbox ? inbox?.id : jdFilter,
+        sensitivity: fSens, jd_category_id: isInbox ? inbox?.id : jdFilter,
         created_at__gte: dateFrom ? Math.floor(new Date(dateFrom) / 1000) : '',
         created_at__lte: dateTo ? Math.floor(new Date(dateTo) / 1000) + 86399 : '',
         share_link: fShareLink,
@@ -175,7 +163,6 @@
         document_ids: csvIDs(params.document_ids),
         jd_category_id: Number(params.jd_category_id) || 0,
         sensitivity: params.sensitivity || '',
-        document_type_id: Number(params.document_type__id) || 0,
         tag_ids: csvIDs(params.tags__id__in),
         correspondent_ids: csvIDs(params.correspondents__id__in),
         created_at_gte: params.created_at__gte === '' ? null : params.created_at__gte,
@@ -574,12 +561,10 @@
         <option value="">All correspondents</option>
         {#each correspondents as c}<option value={c.id}>{c.name}</option>{/each}
       </select>
-      <select class="input" aria-label="Type or sharing" value={typeOrShare}
-              onchange={(e) => setTypeOrShare(e.target.value)}>
-        <option value="">All types</option>
-        <option value="active">My active shares</option>
-        {#each types as t}<option value={t.id}>{t.name}</option>{/each}
-      </select>
+      <button type="button" class="btn sm document-share-filter" class:primary={fShareLink === 'active'}
+              aria-pressed={fShareLink === 'active'} onclick={toggleSharedByMe}>
+        <Icon name="link" size={14} /> Shared by me
+      </button>
       <select class="input" value={fSens} onchange={(e) => setRouteFilter('sensitivity', e.target.value)}>
         <option value="">Any sensitivity</option>
         {#each SENSITIVITY_OPTIONS as option (option.value)}

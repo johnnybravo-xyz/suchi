@@ -71,7 +71,6 @@
     if (f.q) parts.push(`“${f.q}”`)
     if (f.tags__id__in) parts.push('tag')
     if (f.correspondents__id__in) parts.push('correspondent')
-    if (f.document_type__id) parts.push('type')
     if (f.jd_category_id) parts.push('filing category')
     if (f.sensitivity) parts.push(f.sensitivity)
     return parts.join(' · ') || 'all documents'

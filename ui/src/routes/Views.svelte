@@ -2,7 +2,7 @@
 <script>
   import { scopedHash as filingHref } from '../lib/systems.svelte.js'
   import { listSavedViews, createSavedView, patchSavedView, deleteSavedView,
-           listTags, listCorrespondents, listDocumentTypes, listCustomFields } from '../lib/api.js'
+           listTags, listCorrespondents, listCustomFields } from '../lib/api.js'
   import {
     canonicalSavedViewQuery,
     documentListHash,
@@ -27,7 +27,7 @@
   let editing = $state(null)
   let startCreateHandled = $state(false)
   let nameInput = $state()
-  let tags = $state([]), corrs = $state([]), types = $state([]), customFields = $state([])
+  let tags = $state([]), corrs = $state([]), customFields = $state([])
   const filingCategories = $derived(jdCategories.filter((category) => !category.is_area))
   let facetsPromise
   let facetsError = $state('')
@@ -36,13 +36,12 @@
   const filterFields = {
     tag: 'tags__id__in',
     corr: 'correspondents__id__in',
-    type: 'document_type__id',
     jd: 'jd_category_id',
     sens: 'sensitivity',
   }
 
   function emptyView() {
-    return { name: '', q: '', tag: '', corr: '', type: '', jd: '', sens: '', dateFrom: '', dateTo: '', dateRole: '', fieldPresence: '', ids: [], shared: false }
+    return { name: '', q: '', tag: '', corr: '', jd: '', sens: '', dateFrom: '', dateTo: '', dateRole: '', fieldPresence: '', ids: [], shared: false }
   }
 
   function parseDocumentIDs(value) {
@@ -86,7 +85,6 @@
     if (filters.jd_category_id) summary.push(nameFor(filingCategories, filters.jd_category_id, 'Category', (c) => `${c.code} ${c.name}`))
     if (filters.tags__id__in) summary.push(`Tag: ${nameFor(tags, filters.tags__id__in, 'Selected tag')}`)
     if (filters.correspondents__id__in) summary.push(nameFor(corrs, filters.correspondents__id__in, 'Selected correspondent'))
-    if (filters.document_type__id) summary.push(nameFor(types, filters.document_type__id, 'Selected type'))
     if (filters.sensitivity) summary.push(sensitivityLabel(filters.sensitivity))
     if (filters.ordering) summary.push(filters.ordering === 'title' ? 'Title order' : filters.ordering === '-created_at' ? 'Newest first' : 'Custom order')
     return summary.length ? summary : ['All documents']
@@ -141,7 +139,6 @@
     facetsPromise = Promise.allSettled([
       listTags().then((r) => (tags = r?.results || r || [])),
       listCorrespondents().then((r) => (corrs = r?.results || r || [])),
-      listDocumentTypes().then((r) => (types = r?.results || r || [])),
       listCustomFields().then((r) => (customFields = r?.results || r || [])),
     ]).then((results) => {
       if (results.some((result) => result.status === 'rejected')) {
@@ -182,7 +179,6 @@
       const query = canonicalSavedViewQuery(draft, {
         tags,
         correspondents: corrs,
-        types,
         categories: filingCategories,
       })
       if (query) filters.q = query
@@ -381,16 +377,6 @@
               {#each corrs as c}<option value={c.id}>{c.name}</option>{/each}
               {#if nv.corr && !corrs.some(c => String(c.id) === String(nv.corr))}
                 <option value={nv.corr}>Saved correspondents: {nv.corr}</option>
-              {/if}
-            </select>
-          </div>
-          <div class="field">
-            <label for="view-type">Document type</label>
-            <select id="view-type" class="input" bind:value={nv.type}>
-              <option value="">Any type</option>
-              {#each types as t}<option value={t.id}>{t.name}</option>{/each}
-              {#if nv.type && !types.some(t => String(t.id) === String(nv.type))}
-                <option value={nv.type}>Saved type: {nv.type}</option>
               {/if}
             </select>
           </div>

@@ -88,7 +88,6 @@ func TestAutomationSchema_HasEveryActionKind(t *testing.T) {
 		"assign_title":         true,
 		"assign_tags":          true,
 		"assign_correspondent": true,
-		"assign_document_type": true,
 		"assign_jd_category":   true,
 		"assign_storage_path":  true,
 		"assign_owner":         true,

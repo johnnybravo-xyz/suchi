@@ -132,11 +132,9 @@ func runDemo(args []string) int {
 	}
 
 	// Manifest-driven corpus seed. For every fixture in the manifest:
-	//   - stream the file into the CAS (dedup is automatic on hash)
-	//   - upsert its correspondent + document_type into taxonomy
-	//   - insert the document row (idempotent via ON CONFLICT DO NOTHING
-	//     on the (owner_id, original_blob) partial index)
-	//   - link tags via document_tags
+	//   - stream the file into the CAS
+	//   - upsert its correspondent and tags
+	//   - insert the document row
 	//   - enqueue a post-ingest job so content extraction + FTS happen
 	//     in the background once serve starts
 	if corpusDir != "" {
@@ -187,8 +185,7 @@ func runDemo(args []string) int {
 //   - one post-ingest job so content extraction + FTS + thumb happen
 //     in the background when serve starts
 //
-// Correspondents / document_types named by the manifest are upserted
-// on demand; the fixture author doesn't have to pre-populate taxonomy.
+// Correspondents and tags named by the manifest are upserted on demand.
 // JD categories are looked up by code and fall back to the JD inbox
 // (code=10) if the manifest names something outside the seeded tree.
 func makeFixtureIngest(d *db.DB, cas *blob.CAS, ownerID int64, now int64) func(context.Context, demo.ManifestFixture, io.Reader) (bool, error) {
@@ -249,22 +246,17 @@ func makeFixtureIngest(d *db.DB, cas *blob.CAS, ownerID int64, now int64) func(c
 			if err != nil {
 				return err
 			}
-			dtID, err := upsertDocumentType(ctx, tx, f.DocumentType, now)
-			if err != nil {
-				return err
-			}
+			tagNames := append([]string(nil), f.Tags...)
 
 			var docID int64
 			err = tx.QueryRowContext(ctx, `
 				INSERT INTO documents(
 					system_id, owner_id, original_blob, original_size, title, mime_type,
-					jd_category_id, document_type_id, sensitivity, languages,
-					added_at, created_at, updated_at
-				) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+					jd_category_id, sensitivity, languages, added_at, created_at, updated_at
+				) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT DO NOTHING RETURNING id
 			`, ownerID, ref.SHA256, ref.Size, title, mimeType,
-				jdCatID, dtID, nullString(f.Sensitivity), f.Language,
-				now, now, now).Scan(&docID)
+				jdCatID, nullString(f.Sensitivity), f.Language, now, now, now).Scan(&docID)
 			if errors.Is(err, sql.ErrNoRows) {
 				return nil
 			}
@@ -278,7 +270,7 @@ func makeFixtureIngest(d *db.DB, cas *blob.CAS, ownerID int64, now int64) func(c
 				}
 			}
 
-			for _, name := range f.Tags {
+			for _, name := range tagNames {
 				tagID, err := upsertTag(ctx, tx, name, now)
 				if err != nil {
 					return err
@@ -328,18 +320,6 @@ func upsertCorrespondent(ctx context.Context, tx *sql.Tx, name string, now int64
 		return sql.NullInt64{}, nil
 	}
 	id, err := taxonomy.UpsertByName(ctx, tx, 1, taxonomy.TableCorrespondents, name, now)
-	if err != nil {
-		return sql.NullInt64{}, err
-	}
-	return sql.NullInt64{Int64: id, Valid: true}, nil
-}
-
-func upsertDocumentType(ctx context.Context, tx *sql.Tx, name string, now int64) (sql.NullInt64, error) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return sql.NullInt64{}, nil
-	}
-	id, err := taxonomy.UpsertByName(ctx, tx, 1, taxonomy.TableDocumentTypes, name, now)
 	if err != nil {
 		return sql.NullInt64{}, err
 	}
@@ -441,20 +421,16 @@ func makeAutomationIngest(d *db.DB, now int64) func(context.Context, int, preset
 			if err != nil {
 				return err
 			}
-			filterDocTypeID, err := upsertDocumentType(ctx, tx, seed.Trigger.FilterDocumentType, now)
-			if err != nil {
-				return err
-			}
 			triggerType := map[int]string{1: "consumption", 2: "document_added", 3: "document_updated"}[seed.Trigger.Type]
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO automation_triggers(
 					automation_id, type, filter_path, filter_filename,
-					filter_tag_id, filter_corr_id, filter_doctype_id,
+					filter_tag_id, filter_corr_id,
 					filter_title_re, filter_content_re, created_at
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 			`, automationID, triggerType,
 				nullIfEmpty(seed.Trigger.FilterPath), nullIfEmpty(seed.Trigger.FilterFilename),
-				nullIfZero(filterTagID), nullableInt64(filterCorrID), nullableInt64(filterDocTypeID),
+				nullIfZero(filterTagID), nullableInt64(filterCorrID),
 				nullIfEmpty(seed.Trigger.FilterTitleMatching), nullIfEmpty(seed.Trigger.FilterContentMatching), now); err != nil {
 				return err
 			}
@@ -505,14 +481,6 @@ func resolveDemoActionParams(ctx context.Context, tx *sql.Tx, params map[string]
 		}
 		delete(out, "tag")
 		out["tag_ids"] = []int64{id}
-	}
-	if name, ok := out["document_type"].(string); ok && name != "" {
-		id, err := upsertDocumentType(ctx, tx, name, now)
-		if err != nil {
-			return nil, err
-		}
-		delete(out, "document_type")
-		out["document_type_id"] = id.Int64
 	}
 	if name, ok := out["correspondent"].(string); ok && name != "" {
 		id, err := upsertCorrespondent(ctx, tx, name, now)

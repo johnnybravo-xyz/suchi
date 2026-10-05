@@ -495,8 +495,6 @@ func objectTableFor(kind Kind) (string, bool) {
 		return "tags", true
 	case KindCorrespondent:
 		return "correspondents", true
-	case KindDocumentType:
-		return "document_types", true
 	case KindStoragePath:
 		return "storage_paths", true
 	default:

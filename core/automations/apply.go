@@ -55,7 +55,6 @@ type docSnapshot struct {
 	Content         string
 	TagIDs          map[int64]bool
 	CorrespondentID sql.NullInt64
-	DocumentTypeID  sql.NullInt64
 }
 
 // ApplyOnDocumentAdded is the postingest hook. Every enabled automation
@@ -216,11 +215,6 @@ func matchesTrigger(tr Trigger, snap *docSnapshot, evCtx Context) bool {
 			return false
 		}
 	}
-	if tr.FilterDocTypeID != 0 {
-		if !snap.DocumentTypeID.Valid || snap.DocumentTypeID.Int64 != tr.FilterDocTypeID {
-			return false
-		}
-	}
 	if tr.FilterTitleRE != "" {
 		re, err := regexp.Compile("(?i)" + tr.FilterTitleRE)
 		if err != nil || !re.MatchString(snap.Title) {
@@ -286,10 +280,9 @@ func loadSnapshot(ctx context.Context, d *db.DB, docID int64) (*docSnapshot, err
 		       (SELECT dc.correspondent_id
 		        FROM document_correspondents dc
 		        WHERE dc.document_id=d.id AND dc.role='sender'
-		        ORDER BY dc.position,dc.correspondent_id LIMIT 1),
-		       d.document_type_id
+		        ORDER BY dc.position,dc.correspondent_id LIMIT 1)
 		FROM documents d WHERE d.id = ?
-	`, docID).Scan(&s.Title, &content, &s.CorrespondentID, &s.DocumentTypeID)
+	`, docID).Scan(&s.Title, &content, &s.CorrespondentID)
 	if err != nil {
 		return nil, err
 	}
@@ -334,21 +327,13 @@ func upsertCustomField(ctx context.Context, tx *sql.Tx, docID, fieldID int64, va
 	return handler.Write(ctx, tx, docID, fieldID, typed)
 }
 
-// expandTitle is a tiny template resolver — enough for the mobile
-// apps' common cases. Placeholders:
-//
-//	{{title}}          current title
-//	{{correspondent}}  correspondent name or ""
-//	{{document_type}}  document_type name or ""
-//	{{date}}           YYYY-MM-DD of documents.created_at
-//
-// Missing values render empty. Anything else is passed through
-// verbatim so `{{unknown}}` is visible in the result — surfacing the
-// typo rather than silently swallowing it.
+// expandTitle is a tiny template resolver for common automation cases:
+// {{title}}, {{correspondent}}, {{tags}}, and {{date}}. Missing values render
+// empty. Unknown placeholders remain visible so configuration mistakes surface.
 func expandTitle(ctx context.Context, tx *sql.Tx, docID int64, tpl string) (string, error) {
 	var (
-		title, corrName, typeName sql.NullString
-		createdAt                 int64
+		title, corrName, tags sql.NullString
+		createdAt             int64
 	)
 	if err := tx.QueryRowContext(ctx, `
 		SELECT d.title,
@@ -357,17 +342,22 @@ func expandTitle(ctx context.Context, tx *sql.Tx, docID int64, tpl string) (stri
 		        JOIN correspondents c ON c.id=dc.correspondent_id
 		        WHERE dc.document_id=d.id AND dc.role='sender'
 		        ORDER BY dc.position,dc.correspondent_id LIMIT 1),
-		       t.name, d.created_at
+		       (SELECT group_concat(name, ',') FROM (
+		            SELECT t.name
+		            FROM document_tags dt
+		            JOIN tags t ON t.id=dt.tag_id
+		            WHERE dt.document_id=d.id
+		            ORDER BY t.name
+		       )), d.created_at
 		FROM documents d
-		LEFT JOIN document_types t ON t.id = d.document_type_id
-		WHERE d.id = ?`, docID).Scan(&title, &corrName, &typeName, &createdAt); err != nil {
+		WHERE d.id = ?`, docID).Scan(&title, &corrName, &tags, &createdAt); err != nil {
 		return "", fmt.Errorf("assign_title: load document: %w", err)
 	}
 
 	repl := map[string]string{
 		"{{title}}":         nullStr(title),
 		"{{correspondent}}": nullStr(corrName),
-		"{{document_type}}": nullStr(typeName),
+		"{{tags}}":          nullStr(tags),
 		"{{date}}":          time.Unix(createdAt, 0).UTC().Format("2006-01-02"),
 	}
 	out := tpl

@@ -1,12 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Package taxonomy is admin tooling over the reference tables — tags,
-// correspondents, document_types.
+// Package taxonomy is admin tooling over tags and correspondents.
 //
-// Merge rewrites every reference from a source row to the target
-// and deletes the source. Idempotent when target and source names
-// differ only by case ("BESCOM" vs "Bescom") — a recurring source of
-// admin pain in DMS deployments.
+// Merge rewrites every reference from a source row to the target and deletes
+// the source. It is useful for case-only duplicates such as BESCOM and Bescom.
 package taxonomy
 
 import (
@@ -29,8 +26,6 @@ func affectedDocs(ctx context.Context, tx *sql.Tx, kind string, fromID int64) ([
 		q = `SELECT document_id FROM document_tags WHERE tag_id = ?`
 	case KindCorrespondent:
 		q = `SELECT DISTINCT document_id FROM document_correspondents WHERE correspondent_id = ?`
-	case KindDocumentType:
-		q = `SELECT id FROM documents WHERE document_type_id = ?`
 	default:
 		return nil, fmt.Errorf("taxonomy: affectedDocs kind %q", kind)
 	}
@@ -55,7 +50,6 @@ func affectedDocs(ctx context.Context, tx *sql.Tx, kind string, fromID int64) ([
 const (
 	KindTag           = "tag"
 	KindCorrespondent = "correspondent"
-	KindDocumentType  = "document_type"
 )
 
 // Result carries what a merge would do (or did).
@@ -121,13 +115,6 @@ func Merge(ctx context.Context, d *db.DB, opts Options) (*Result, error) {
 		).Scan(&docsMoved); err != nil {
 			return nil, err
 		}
-	default:
-		col := fkColFor(opts.Kind)
-		if err := d.Read.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM documents WHERE `+col+` = ?`, fromID,
-		).Scan(&docsMoved); err != nil {
-			return nil, err
-		}
 	}
 
 	res := &Result{
@@ -180,13 +167,6 @@ func Merge(ctx context.Context, d *db.DB, opts Options) (*Result, error) {
 					return err
 				}
 			}
-		} else {
-			col := fkColFor(opts.Kind)
-			if _, err := tx.ExecContext(ctx,
-				`UPDATE documents SET `+col+` = ? WHERE `+col+` = ?`,
-				intoID, fromID); err != nil {
-				return err
-			}
 		}
 
 		// Storage-path re-render for every affected doc. Same tx, so a
@@ -213,7 +193,6 @@ func rewriteAutomationReferences(ctx context.Context, tx *sql.Tx, systemID int64
 	triggerColumn := map[string]string{
 		KindTag:           "filter_tag_id",
 		KindCorrespondent: "filter_corr_id",
-		KindDocumentType:  "filter_doctype_id",
 	}[kind]
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE automation_triggers SET `+triggerColumn+` = ? WHERE `+triggerColumn+` = ? AND automation_id IN (SELECT id FROM automations WHERE system_id=?)`,
@@ -259,8 +238,6 @@ func rewriteAutomationReferences(ctx context.Context, tx *sql.Tx, systemID int64
 		case KindCorrespondent:
 			changed = replaceID(params, "correspondent_id", fromID, intoID) ||
 				replaceIDList(params, "correspondent_ids", fromID, intoID)
-		case KindDocumentType:
-			changed = replaceID(params, "document_type_id", fromID, intoID)
 		}
 		if !changed {
 			continue
@@ -308,17 +285,8 @@ func tableFor(kind string) (table NamedTable, junction string, err error) {
 		return TableTags, "document_tags", nil
 	case KindCorrespondent:
 		return TableCorrespondents, "", nil
-	case KindDocumentType:
-		return TableDocumentTypes, "", nil
 	}
-	return 0, "", fmt.Errorf("taxonomy: unknown kind %q (want tag|correspondent|document_type)", kind)
-}
-
-func fkColFor(kind string) string {
-	if kind == KindDocumentType {
-		return "document_type_id"
-	}
-	return ""
+	return 0, "", fmt.Errorf("taxonomy: unknown kind %q (want tag|correspondent)", kind)
 }
 
 func lookupByName(ctx context.Context, d *db.DB, systemID int64, table NamedTable, name string) (int64, error) {

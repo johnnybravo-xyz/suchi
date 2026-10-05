@@ -127,7 +127,7 @@ func runImport(args []string) int {
 Import complete (dry_run=%v).
   Tags:            %d
   Correspondents:  %d
-  Document types:  %d
+  Type tags:       %d
   Storage paths:   %d
   Custom fields:   %d
   Documents:       %d

@@ -24,7 +24,7 @@ carry it into bug reports. See [Errors](#errors) for the JSON error contract.
 | Auth and account JSON   | `POST /api/login`, `POST /api/logout`, `POST /api/token/`, `GET/POST/DELETE /api/tokens/`, `GET /api/whoami`, `PATCH /api/users/me`, `POST /api/users/me/email`                          |
 | Documents               | `POST /api/documents/`, `GET/PATCH/DELETE /api/documents/{id}`, `POST /api/documents/{id}/restore`, `GET/DELETE /api/trash/`, `DELETE /api/trash/{id}`                                      |
 | Doc extras              | `/correspondents/`, `/versions/`, `/referenced-by/`, `/custom_fields/{field}`, `/decrypt`, `/decrypt-batch`, `/pending-decryption`                                                     |
-| Taxonomy                | `/api/correspondents/`, `/api/document_types/`, `/api/storage_paths/`, `/api/tags/`, `/api/tags/{id}/parent`, `/api/custom_fields/`, `/api/jd/categories/`                            |
+| Taxonomy                | `/api/correspondents/`, `/api/storage_paths/`, `/api/tags/`, `/api/tags/{id}/parent`, `/api/custom_fields/`, `/api/jd/categories/`                                                    |
 | Search + autocomplete   | `/api/search/`, `/api/autocomplete/`, `/api/languages/`                                                                                                                               |
 | Mail intake | `/api/email-accounts/*` (requires `mailboxes`; within the selected system, admins see all rows and members see their own) |
 | Saved views             | `/api/saved_views/` (setting `shared: true` requires `share_views`; GET `?include=shared` also returns other users' shared views)                                                     |
@@ -648,7 +648,6 @@ Query params (all optional):
 | `jd_category_id`                     | Exact filing-chip match.                                                                                                    |
 | `sensitivity`                        | One of `public`, `internal`, `confidential`, `restricted`.                                                                  |
 | `split_origin_id`                    | Positive upload document id; returns its live QR-split children after ACL filtering.                                              |
-| `document_type__id`                  | Exact document type.                                                                                                        |
 | `tags__id__in`                       | Up to 100 positive tag-ID tokens; duplicates are removed in first-seen order. Result must carry **every** unique ID (AND).   |
 | `correspondents__id__in`             | Up to 100 positive correspondent-ID tokens; duplicates are removed in first-seen order. Result matches **any** (OR).         |
 | `document_ids`                       | CSV of at most 100 positive document IDs; useful for exact snapshots. ACLs still apply.                                     |
@@ -999,7 +998,6 @@ Scope: `documents:write`. Cap: 500 documents per call.
 | method                   | parameters                                                                                                                                                                                                                   |
 | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `set_correspondent`      | `{correspondent_id}`                                                                                                                                                                                                         |
-| `set_document_type`      | `{document_type_id}`                                                                                                                                                                                                         |
 | `set_storage_path`       | `{storage_path_id}`                                                                                                                                                                                                          |
 | `set_jd_category`        | `{jd_category_id}`                                                                                                                                                                                                           |
 | `set_sensitivity`        | `{sensitivity}` — one of `""`, `public`, `internal`, `confidential`, `restricted`                                                                                                                                            |
@@ -1179,7 +1177,7 @@ Metadata filters cannot expose foreign names or a document the caller cannot vie
 | `page`, `page_size`                                  | Standard pagination (default 25, max 100).                                                                                       |
 | `recency`                                            | `off` disables the recency-decay term in ranking.                                                                                |
 | `tags__id__in`, `correspondents__id__in`             | Up to 100 positive ID tokens per field, deduplicated in first-seen order; doc matches ANY.                                         |
-| `document_type__id`, `jd_category_id`, `sensitivity` | Single-value filters.                                                                                                            |
+| `jd_category_id`, `sensitivity`                     | Single-value filters.                                                                                                            |
 | `lang`                                               | Two- or three-letter language token (`de`, `kn`, `hin`). Narrows to docs whose `languages` includes the token; input is trimmed and lowercased. Invalid values return `400 bad_lang`. |
 
 Ranking uses title-weighted BM25 plus an optional bounded recency term.
@@ -1215,9 +1213,8 @@ back to bounded taxonomy-prefix suggestions. See
 
 `POST /api/saved_views/` and `PATCH /api/saved_views/{id}` accept
 `filter_json` as a JSON-encoded object string up to 2 KiB. Supported keys are
-`q`,
-`tags__id__in`, `correspondents__id__in`, `document_type__id`,
-`jd_category_id`, `sensitivity`, `ordering`, and `document_ids`.
+`q`, `tags__id__in`, `correspondents__id__in`, `jd_category_id`,
+`sensitivity`, `ordering`, and `document_ids`.
 Each user's name uniqueness and 50-view limit apply within the selected system.
 Sharing a View does not share system membership or bypass document ACLs.
 
@@ -1232,7 +1229,7 @@ Saved-view tag and correspondent lists accept at most 100 unique positive IDs.
 The server removes duplicates in first-seen order during normalization.
 
 When `q` is present, the server normalizes its spelling and resolves referenced
-categories, tags, correspondents, and document types before writing the row.
+categories, tags, and correspondents before writing the row.
 Syntax errors, unknown values, and ambiguous values return `400 invalid_filter`;
 an update that fails validation leaves the stored view unchanged. Existing
 flat filter objects remain readable, while newly created web-app views use `q`
@@ -1955,7 +1952,7 @@ receiving a grant does not confer delegation rights. Full guide at
 | PUT    | `/api/acls/{kind}/{id}`                             | owner or admin                     |
 | DELETE | `/api/acls/{kind}/{id}?principal_kind&principal_id` | owner or admin                     |
 
-`{kind}` is one of `document|tag|correspondent|document_type|storage_path`.
+`{kind}` is one of `document|tag|correspondent|storage_path`.
 Grant writes accept only `perm_bits=1` (View), `3` (Edit: view + change),
 or `7` (Full control: view + change + delete). Other combinations return
 `400 bad_permissions`.
@@ -2082,7 +2079,6 @@ Returns live runtime availability and a safe provider label:
     "document_ids": [],
     "jd_category_id": 0,
     "sensitivity": "internal",
-    "document_type_id": 4,
     "tag_ids": [8],
     "correspondent_ids": [12],
     "created_at_gte": 1788134400,
@@ -2096,8 +2092,8 @@ Returns live runtime availability and a safe provider label:
 History contains only the newest complete user/assistant pairs fitting four
 messages and 12 KB. `context_source_ids` contains at most three positive cited
 IDs. Scope accepts a rich query, up to 100 exact IDs, and additive category,
-sensitivity, document type, tag IDs, correspondent IDs, inclusive created-time
-bounds, and language fields. Every source and context ID is reauthorized with
+sensitivity, tag IDs, correspondent IDs, inclusive created-time bounds, and
+language fields. Every source and context ID is reauthorized with
 fresh ACL, trash, sensitivity, and scope checks.
 
 The response contains at most six sources, structurally validated citations,
@@ -2184,8 +2180,8 @@ no reviewer is backfilled.
 
 Stats responses expose the pending extracted-fact count as
 `pending_intelligence`. Browser document-list filters use
-`jd_category_id`, `document_type__id`, `tags__id__in`,
-`correspondents__id__in`, `created_at__gte`, and `created_at__lte`.
+`jd_category_id`, `tags__id__in`, `correspondents__id__in`,
+`created_at__gte`, and `created_at__lte`.
 
 `view_id` cannot be combined with `q` or `document_ids`. The server resolves
 the View rather than trusting client-reconstructed filters, including legacy

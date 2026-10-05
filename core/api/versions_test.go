@@ -4,7 +4,6 @@ package api
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -135,9 +134,8 @@ func TestUploadNewVersionPreservesSensitivity(t *testing.T) {
 func TestUploadNewVersionCopiesOnlyFilingMetadata(t *testing.T) {
 	s, d, _, principal, previousID := newVersionUploadServer(t, "filing-metadata-source")
 	if _, err := d.Write.Exec(`
-		INSERT INTO document_types(system_id,id,name,slug,created_at,updated_at)
-		VALUES(1,91,'Contract','contract',0,0);
 		INSERT INTO tags(system_id,id,name,slug,created_at,updated_at) VALUES
+			(1,91,'type:Contract','type-contract',0,0),
 			(1,92,'Manual','manual',0,0),
 			(1,93,'Suggested','suggested',0,0);
 		INSERT INTO correspondents(system_id,id,name,slug,created_at,updated_at)
@@ -145,16 +143,16 @@ func TestUploadNewVersionCopiesOnlyFilingMetadata(t *testing.T) {
 		INSERT INTO custom_fields(system_id,id,name,data_type,created_at,updated_at)
 		VALUES(1,95,'Internal note','text',0,0);
 		UPDATE documents
-		SET title='Signed contract', sensitivity='restricted', document_type_id=91,
+		SET title='Signed contract', sensitivity='restricted',
 		    languages=',fr,', content='reviewed predecessor text'
 		WHERE id=?;
 		INSERT INTO document_tags(document_id,tag_id,classifier_owned) VALUES
-			(?,92,0),(?,93,1);
+			(?,91,0),(?,92,0),(?,93,1);
 		INSERT INTO document_correspondents(document_id,correspondent_id,role,position)
 		VALUES(?,94,'recipient',7);
 		INSERT INTO document_custom_field_values(document_id,field_id,value_text)
 		VALUES(?,95,'exact revision note')
-	`, previousID, previousID, previousID, previousID, previousID); err != nil {
+	`, previousID, previousID, previousID, previousID, previousID, previousID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -173,22 +171,19 @@ func TestUploadNewVersionCopiesOnlyFilingMetadata(t *testing.T) {
 
 	var (
 		title, sensitivity, languages string
-		documentType                  sql.NullInt64
 		sourceFamily, newFamily       string
 	)
 	if err := d.Read.QueryRow(`
-		SELECT title, COALESCE(sensitivity,''), document_type_id, languages,
-		       version_family_key
+		SELECT title, COALESCE(sensitivity,''), languages, version_family_key
 		FROM documents WHERE id=?
-	`, created.ID).Scan(&title, &sensitivity, &documentType, &languages, &newFamily); err != nil {
+	`, created.ID).Scan(&title, &sensitivity, &languages, &newFamily); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.Read.QueryRow(`SELECT version_family_key FROM documents WHERE id=?`, previousID).Scan(&sourceFamily); err != nil {
 		t.Fatal(err)
 	}
-	if title != "Signed contract" || sensitivity != "restricted" ||
-		!documentType.Valid || documentType.Int64 != 91 {
-		t.Fatalf("copied filing metadata title=%q sensitivity=%q type=%v", title, sensitivity, documentType)
+	if title != "Signed contract" || sensitivity != "restricted" {
+		t.Fatalf("copied filing metadata title=%q sensitivity=%q", title, sensitivity)
 	}
 	if languages != "" {
 		t.Fatalf("replacement languages=%q, want fresh extraction state", languages)
@@ -198,6 +193,7 @@ func TestUploadNewVersionCopiesOnlyFilingMetadata(t *testing.T) {
 	}
 
 	for query, want := range map[string]int{
+		`SELECT count(*) FROM document_tags WHERE document_id=` + strconv.FormatInt(created.ID, 10) + ` AND tag_id=91 AND classifier_owned=0`:                                  1,
 		`SELECT count(*) FROM document_tags WHERE document_id=` + strconv.FormatInt(created.ID, 10) + ` AND tag_id=92 AND classifier_owned=0`:                                  1,
 		`SELECT count(*) FROM document_tags WHERE document_id=` + strconv.FormatInt(created.ID, 10) + ` AND tag_id=93`:                                                         0,
 		`SELECT count(*) FROM document_correspondents WHERE document_id=` + strconv.FormatInt(created.ID, 10) + ` AND correspondent_id=94 AND role='recipient' AND position=7`: 1,

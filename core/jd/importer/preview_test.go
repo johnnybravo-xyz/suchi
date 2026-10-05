@@ -19,10 +19,8 @@ func TestPreviewBindsTrimmedExactMetadataReferences(t *testing.T) {
 		{name: "tag action", table: "tags", kind: "assign_tags", param: "tag"},
 		{name: "tag list action", table: "tags", kind: "assign_tags", param: "tags"},
 		{name: "correspondent action", table: "correspondents", kind: "assign_correspondent", param: "correspondent"},
-		{name: "document type action", table: "document_types", kind: "assign_document_type", param: "document_type"},
 		{name: "tag trigger", table: "tags", trigger: true},
 		{name: "correspondent trigger", table: "correspondents", trigger: true},
-		{name: "document type trigger", table: "document_types", trigger: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := openTestDB(t)
@@ -41,8 +39,6 @@ func TestPreviewBindsTrimmedExactMetadataReferences(t *testing.T) {
 					rule.Trigger.FilterTag = reference
 				case "correspondents":
 					rule.Trigger.FilterCorrespondent = reference
-				case "document_types":
-					rule.Trigger.FilterDocumentType = reference
 				}
 			} else {
 				var value any = reference

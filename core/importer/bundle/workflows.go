@@ -150,7 +150,6 @@ type suchiTrigger struct {
 	filterMailrule int64
 	filterTagID    int64
 	filterCorrID   int64
-	filterDocType  int64
 	filterContent  string
 }
 
@@ -239,6 +238,7 @@ func importOneWorkflow(
 	// Build triggers. A single SCHEDULED trigger fails the whole workflow.
 	var suchiTriggers []suchiTrigger
 	partialReasons := []string{}
+	suspend := false
 
 	for _, tPK := range wf.Triggers {
 		tf, ok := triggers[tPK]
@@ -284,7 +284,13 @@ func importOneWorkflow(
 		}
 		if tf.FilterHasDocumentType != nil {
 			if id, ok := dtMap[*tf.FilterHasDocumentType]; ok {
-				st.filterDocType = id
+				if st.filterTagID == 0 || st.filterTagID == id {
+					st.filterTagID = id
+				} else {
+					suspend = true
+					partialReasons = append(partialReasons,
+						"document type and tag filters require an AND predicate; imported workflow suspended")
+				}
 			}
 		}
 		if tf.FilterHasStoragePath != nil {
@@ -342,7 +348,7 @@ func importOneWorkflow(
 
 	// Write.
 	if !dry {
-		if err := writeWorkflow(ctx, d, systemID, wf, suchiTriggers, suchiActions); err != nil {
+		if err := writeWorkflow(ctx, d, systemID, wf, suspend, suchiTriggers, suchiActions); err != nil {
 			return fmt.Errorf("write workflow %q: %w", wf.Name, err)
 		}
 	}
@@ -373,10 +379,18 @@ func mapAction(
 	switch af.Type {
 	case srcActionAssign:
 		if af.AssignTitle != "" {
-			out = append(out, mappedAction{
-				kind:   "assign_title",
-				params: map[string]any{"template": af.AssignTitle},
-			})
+			template, changed, unsupported := rewriteDocumentTypeTitle(af.AssignTitle)
+			if unsupported {
+				reasons = append(reasons, "assign_title uses an unsupported document_type expression and was dropped")
+			} else {
+				if changed {
+					reasons = append(reasons, "assign_title document_type variable rewritten to tags")
+				}
+				out = append(out, mappedAction{
+					kind:   "assign_title",
+					params: map[string]any{"template": template},
+				})
+			}
 		}
 		if len(af.AssignTags) > 0 {
 			ids := remapIDs(af.AssignTags, tagMap)
@@ -398,8 +412,8 @@ func mapAction(
 		if af.AssignDocumentType != nil {
 			if id, ok := dtMap[*af.AssignDocumentType]; ok {
 				out = append(out, mappedAction{
-					kind:   "assign_document_type",
-					params: map[string]any{"document_type_id": id},
+					kind:   "assign_tags",
+					params: map[string]any{"tag_ids": []int64{id}},
 				})
 			}
 		}
@@ -478,16 +492,12 @@ func mapAction(
 			}
 		}
 		if len(af.RemoveDocumentTypes) > 0 {
-			// suchi's remove_document_type takes no params — target has
-			// a single doctype. Emit one such action; the multi-value
-			// intent is a partial.
-			out = append(out, mappedAction{
-				kind:   "remove_document_type",
-				params: map[string]any{},
-			})
-			if len(af.RemoveDocumentTypes) > 1 {
-				reasons = append(reasons,
-					"remove_document_types list collapsed to single remove")
+			ids := remapIDs(af.RemoveDocumentTypes, dtMap)
+			if len(ids) > 0 {
+				out = append(out, mappedAction{
+					kind:   "remove_tags",
+					params: map[string]any{"tag_ids": ids},
+				})
 			}
 		}
 		if len(af.RemoveStoragePaths) > 0 {
@@ -556,16 +566,17 @@ func writeWorkflow(
 	d *db.DB,
 	systemID int64,
 	wf WorkflowFields,
+	suspended bool,
 	triggers []suchiTrigger,
 	actions []mappedAction,
 ) error {
 	now := time.Now().Unix()
 	return d.WriteTx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `
-			INSERT INTO automations(system_id, name, order_index, enabled, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?)
+			INSERT INTO automations(system_id, name, order_index, enabled, suspended, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(system_id, name) DO NOTHING
-		`, systemID, wf.Name, wf.Order, boolInt(wf.Enabled), now, now)
+		`, systemID, wf.Name, wf.Order, boolInt(wf.Enabled), boolInt(suspended), now, now)
 		if err != nil {
 			return fmt.Errorf("insert automation: %w", err)
 		}
@@ -588,13 +599,13 @@ func writeWorkflow(
 				INSERT INTO automation_triggers(
 					automation_id, type,
 					filter_path, filter_filename, filter_mailrule_id,
-					filter_tag_id, filter_corr_id, filter_doctype_id,
+					filter_tag_id, filter_corr_id,
 					filter_content_re, created_at
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 			`,
 				autoID, t.typ,
 				nullIfEmpty(t.filterPath), nullIfEmpty(t.filterFilename), nullIfZero(t.filterMailrule),
-				nullIfZero(t.filterTagID), nullIfZero(t.filterCorrID), nullIfZero(t.filterDocType),
+				nullIfZero(t.filterTagID), nullIfZero(t.filterCorrID),
 				nullIfEmpty(t.filterContent), now,
 			); err != nil {
 				return fmt.Errorf("insert trigger: %w", err)
@@ -616,6 +627,14 @@ func writeWorkflow(
 		}
 		return nil
 	})
+}
+
+func rewriteDocumentTypeTitle(template string) (rewritten string, changed, unsupported bool) {
+	rewritten = strings.ReplaceAll(template, "{{document_type}}", "{{tags}}")
+	rewritten = strings.ReplaceAll(rewritten, "{{ document_type }}", "{{tags}}")
+	changed = rewritten != template
+	unsupported = strings.Contains(rewritten, "document_type")
+	return rewritten, changed, unsupported
 }
 
 // remapIDs translates source PKs through m, dropping unknowns.

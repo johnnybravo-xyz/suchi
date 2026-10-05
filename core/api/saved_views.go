@@ -407,7 +407,6 @@ var savedViewAllowedKeys = map[string]bool{
 	"q":                      true,
 	"tags__id__in":           true,
 	"correspondents__id__in": true,
-	"document_type__id":      true,
 	"jd_category_id":         true,
 	"sensitivity":            true,
 	"ordering":               true,

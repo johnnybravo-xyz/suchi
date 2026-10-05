@@ -96,7 +96,6 @@ var filterNames = []string{
 	"jd",
 	"tag",
 	"from",
-	"type",
 	"sensitivity",
 	"lang",
 	"title",

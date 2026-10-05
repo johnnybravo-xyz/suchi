@@ -53,7 +53,9 @@ sharing, phone, and Trash actions on the right. Live documents show **Similar
 documents**, **Linked documents**, and **Versions** in one tabbed card; the first
 tab is selected whenever a document opens. **Linked documents** separates links
 added on the open document from links added elsewhere, while ordinary typed
-custom fields remain in the metadata card.
+custom fields remain in the metadata card. On wide screens the preview and
+detail column keep one viewport-filling height; longer metadata and extracted
+text scroll inside the detail column instead of resizing the document view.
 
 The top bar provides search, **Upload** and theme controls. The search menu matches
 **Commands** and **Pages**; **Search everything for** submits its complete text.
@@ -128,7 +130,6 @@ failures show **Retry** rather than an empty archive.
 | Filing category database ID              | `jd`                     | `#/documents?jd=6`                       |
 | Tag                                      | `tags__id__in`           | `#/documents?tags__id__in=4`             |
 | Correspondent                            | `correspondents__id__in` | `#/documents?correspondents__id__in=3`   |
-| Document type                            | `document_type__id`      | `#/documents?document_type__id=2`        |
 | Sensitivity                              | `sensitivity`            | `#/documents?sensitivity=confidential`   |
 | Active links created by the user         | `share_link`             | `#/documents?share_link=active`           |
 | Sort order                               | `ordering`               | `#/documents?ordering=title`             |
@@ -155,9 +156,9 @@ revision visible to the caller by default. The `version:` query selector can
 show all or only older revisions; direct document URLs and exact saved snapshots
 continue to address the selected row.
 
-The **Type or sharing** filter includes **My active shares** alongside document types.
-It includes each document once while at least one link created by the current
-user is unexpired, unrevoked, and still permitted by current ownership and ACLs.
+The dedicated **Shared by me** toggle includes each document once while at
+least one link created by the current user is unexpired, unrevoked, and still
+permitted by current ownership and ACLs.
 
 Mouse/trackpad devices have hover quick actions; on touchscreens open the document
 for filing/Trash actions. Search and Documents share the [query language](/query-language):
@@ -213,12 +214,12 @@ removes incoming links to that exact row. Restore keeps the document open;
 ## Saved views
 
 **New view** opens **Create a view** with optional Query, category, tag,
-correspondent, document type, one **Custom field value** presence choice,
-sensitivity and date filters. The custom-field choice can require **Has value**
-or **Missing value** and serializes to the same `has-field:` query used by
-Search/Documents. Empty choices mean all values. Date ranges use `yyyy-mm-dd`.
-Select a view's name to open its documents; **Edit** is available only for your
-views. **Save changes** updates in place; **Cancel**/Escape discards the draft.
+correspondent, one **Custom field value** presence choice, sensitivity and date
+filters. The custom-field choice can require **Has value** or **Missing value**
+and serializes to the same `has-field:` query used by Search/Documents. Empty
+choices mean all values. Date ranges use `yyyy-mm-dd`. Select a view's name to
+open its documents; **Edit** is available only for your views. **Save changes**
+updates in place; **Cancel**/Escape discards the draft.
 
 Rich filters appear in **Query** for editing/removal. The custom-field presence
 token reopens in its dedicated control. Older flat filters retain selections,
@@ -305,11 +306,10 @@ When OIDC is configured, People cannot create password accounts: users
 self-provision through browser sign-in only when their verified provider email
 is unused. `ADMIN_EMAIL` can grant the first matching provisioned identity the
 administrator role; it does not find or merge a returning account.
-
-**Metadata** manages tags, correspondents, document types, storage paths and
-custom fields through one type selector. Metadata types have navigable URLs, so
-reload and Back/Forward restore the selected catalog. Metadata is scoped to the
-current filing system; People is server-wide.
+**Metadata** manages tags, correspondents, storage paths and custom fields
+through one type selector. Metadata types have navigable URLs, so reload and
+Back/Forward restore the selected catalog. Metadata is scoped to the current
+filing system; People is server-wide.
 
 **Filing tree** imports and exports HuML or TOML taxonomy files. Preview precedes
 Apply; export explicitly offers starter rules or tree only. **What is included?**

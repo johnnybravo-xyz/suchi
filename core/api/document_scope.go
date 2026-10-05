@@ -24,7 +24,6 @@ type documentScope struct {
 	DocumentIDs      []int64
 	JDCategoryID     int64
 	Sensitivity      string
-	DocumentTypeID   int64
 	TagIDs           []int64
 	CorrespondentIDs []int64
 	CreatedAtGTE     *int64
@@ -63,9 +62,6 @@ func documentScopeFromQuery(values url.Values) (documentScope, error) {
 	scope.Sensitivity = values.Get("sensitivity")
 	if scope.Sensitivity != "" && !SensitivityLevels[scope.Sensitivity] {
 		return documentScope{}, &documentScopeError{Code: "bad_sensitivity", Message: "sensitivity must be one of \"\", public, internal, confidential, restricted"}
-	}
-	if scope.DocumentTypeID, err = optionalPositiveID(values.Get("document_type__id")); err != nil {
-		return documentScope{}, &documentScopeError{Code: "bad_document_type_id", Message: "document_type__id must be a positive integer"}
 	}
 	if scope.TagIDs, err = parseBoundedCSVIDs(values.Get("tags__id__in"), maxDocumentScopeIDs); err != nil {
 		return documentScope{}, &documentScopeError{Code: "bad_tags", Message: "tags__id__in " + err.Error()}
@@ -127,9 +123,6 @@ func documentScopeFromSavedViewJSON(raw string) (documentScope, error) {
 			return documentScope{}, &savedViewFilterError{message: "filter key sensitivity is invalid"}
 		}
 	}
-	if scope.DocumentTypeID, err = scopeID(values["document_type__id"]); err != nil {
-		return documentScope{}, &savedViewFilterError{message: "filter key document_type__id must be a positive integer"}
-	}
 	if scope.TagIDs, err = scopeIDs(values["tags__id__in"]); err != nil || len(scope.TagIDs) > maxDocumentScopeIDs {
 		return documentScope{}, &savedViewFilterError{message: "filter key tags__id__in must contain at most 100 unique positive integers"}
 	}
@@ -153,10 +146,6 @@ func appendDocumentScopePredicates(ctx context.Context, where []string, args []a
 	if scope.Sensitivity != "" {
 		where = append(where, "d.sensitivity = ?")
 		args = append(args, scope.Sensitivity)
-	}
-	if scope.DocumentTypeID > 0 {
-		where = append(where, "d.document_type_id = ?")
-		args = append(args, scope.DocumentTypeID)
 	}
 	if len(scope.TagIDs) > 0 {
 		where = append(where, `(

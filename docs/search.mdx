@@ -178,7 +178,6 @@ recognized query qualifier, the endpoint returns full replacement queries for:
 - Johnny.Decimal categories;
 - tags;
 - correspondents;
-- document types;
 - custom fields for `has-field:`;
 - sensitivity values;
 - Calendar date roles;
@@ -189,8 +188,8 @@ The browser debounces requests by 160 ms and discards stale responses. Selecting
 a completion changes the query text; it does not run the query.
 
 When the input is not query-language completion, the endpoint retains its
-bounded taxonomy-prefix behavior for tags, correspondents, and document types.
-It caps combined suggestions at 20 by default and 50 explicitly.
+bounded taxonomy-prefix behavior for tags and correspondents. It caps combined
+suggestions at 20 by default and 50 explicitly.
 
 ## Similar documents
 

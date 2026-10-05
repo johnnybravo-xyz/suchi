@@ -160,7 +160,6 @@ export async function listAllTags() {
   }
 }
 export const listCorrespondents = () => api.get(`/api/correspondents/${qs({ page_size: 500 })}`)
-export const listDocumentTypes = () => api.get(`/api/document_types/${qs({ page_size: 500 })}`)
 
 export const listTasks = (params) => api.get(`/api/tasks/${qs(params)}`)
 export const resolveApprovalTask = (id, body) => api.post(`/api/approvals/tasks/${id}/resolve`, body)

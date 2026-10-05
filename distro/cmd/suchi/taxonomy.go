@@ -282,7 +282,7 @@ func preferredTaxonomyFormat(raw string) (presetfile.SerFormat, error) {
 func runTaxonomyMerge(args []string) int {
 	fs := flag.NewFlagSet("suchi taxonomy merge", flag.ContinueOnError)
 	var (
-		kind       = fs.String("kind", "", "tag | correspondent | document_type (required)")
+		kind       = fs.String("kind", "", "tag | correspondent (required)")
 		from       = fs.String("from-name", "", "source row name (required; will be deleted)")
 		into       = fs.String("into-name", "", "target row name (required; will absorb every reference)")
 		apply      = fs.Bool("apply", false, "actually merge. Default is dry-run.")

@@ -56,13 +56,13 @@ signed beta.1–beta.3 SQL, tags and release artifacts remain byte-identical.
 Stable v0.1.0 embeds frozen compatibility SQL in
 `core/db/compatibility/0002`–`0005`; its declarative baseline is active migration
 `0001_baseline.sql`, `user_version = 1`, lineage `stable-v1`. The current
-checkout adds active `0002_document_version_families.sql` and targets
-`user_version = 2` without changing that lineage.
+checkout adds active `0002_metadata_cleanup.sql` and targets `user_version = 2`
+without changing that lineage.
 
 The exact stable schema-1 fingerprint is
 `9d2a6320eae1582b0f294caa6ed518b5a73ab3dbe6597c9ca1a36cc563e03240`.
 The current schema-2 fingerprint is
-`de568054d0d480d271d6bc463ee3abdbc408f3d19ad08099087f9e82bf3f008e`.
+`7f1dd526a6d6d842599d18ef0ed3877bc458610200072e17c34bf3133b421421`.
 The one admitted pre-identity schema-4 boundary remains
 `5d6ac98308eb644b030092178792a46f36e6f8f5041411f020ed2dcf216f46c2`.
 Startup admits only these exact states:

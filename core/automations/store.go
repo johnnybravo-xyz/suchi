@@ -121,7 +121,6 @@ func listTriggers(ctx context.Context, q rowQuery, atmID int64) ([]Trigger, erro
 		       COALESCE(filter_path, ''), COALESCE(filter_filename, ''),
 		       COALESCE(filter_mailrule_id, 0),
 		       COALESCE(filter_tag_id, 0), COALESCE(filter_corr_id, 0),
-		       COALESCE(filter_doctype_id, 0),
 		       COALESCE(filter_title_re, ''),
 		       COALESCE(filter_content_re, ''),
 		       COALESCE(filter_email_from, ''),
@@ -141,8 +140,7 @@ func listTriggers(ctx context.Context, q rowQuery, atmID int64) ([]Trigger, erro
 		var hasAtt sql.NullInt64
 		if err := rows.Scan(&t.ID, &t.Type,
 			&t.FilterPath, &t.FilterFilename, &t.FilterMailRuleID,
-			&t.FilterTagID, &t.FilterCorrID, &t.FilterDocTypeID,
-			&t.FilterTitleRE,
+			&t.FilterTagID, &t.FilterCorrID, &t.FilterTitleRE,
 			&t.FilterContentRE,
 			&t.FilterEmailFrom, &t.FilterEmailSubject, &t.FilterEmailFolder,
 			&hasAtt); err != nil {
@@ -540,7 +538,7 @@ func writeTriggers(ctx context.Context, tx *sql.Tx, atmID int64, trs []Trigger, 
 		for _, ref := range []struct {
 			table string
 			id    int64
-		}{{"tags", t.FilterTagID}, {"correspondents", t.FilterCorrID}, {"document_types", t.FilterDocTypeID}} {
+		}{{"tags", t.FilterTagID}, {"correspondents", t.FilterCorrID}} {
 			if ref.id != 0 {
 				if err := validateReferences(ctx, tx, systemID, ref.table, []int64{ref.id}); err != nil {
 					return err
@@ -560,18 +558,16 @@ func writeTriggers(ctx context.Context, tx *sql.Tx, atmID int64, trs []Trigger, 
 			INSERT INTO automation_triggers(
 				automation_id, type,
 				filter_path, filter_filename, filter_mailrule_id,
-				filter_tag_id, filter_corr_id, filter_doctype_id,
-				filter_title_re,
+				filter_tag_id, filter_corr_id, filter_title_re,
 				filter_content_re,
 				filter_email_from, filter_email_subject, filter_email_folder,
 				filter_email_has_attachment,
 				created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`, atmID, string(t.Type),
 			nullIfEmpty(t.FilterPath), nullIfEmpty(t.FilterFilename),
 			nullIfZero(t.FilterMailRuleID),
 			nullIfZero(t.FilterTagID), nullIfZero(t.FilterCorrID),
-			nullIfZero(t.FilterDocTypeID),
 			nullIfEmpty(t.FilterTitleRE),
 			nullIfEmpty(t.FilterContentRE),
 			nullIfEmpty(t.FilterEmailFrom), nullIfEmpty(t.FilterEmailSubject),

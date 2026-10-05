@@ -252,14 +252,10 @@ type AutocompleteSuggestion struct {
 	Query string `json:"query,omitempty"`
 }
 
-// Autocomplete — GET /api/autocomplete/?q=<prefix>&kind=<tag|corr|type>.
+// Autocomplete — GET /api/autocomplete/?q=<prefix>&kind=<tag|correspondent>.
 //
-// Aggregates suggestions across tags, correspondents, and
-// document_types by prefix (case-insensitive). Limit 20 total per
-// call (across kinds) — this is a keystroke-triggered endpoint, not
-// pagination territory.
-//
-// `?kind` narrows to one facet ("tag", "correspondent", "document_type").
+// Aggregates suggestions across tags and correspondents by prefix
+// (case-insensitive). Limit 20 total per call. `?kind` narrows to one facet.
 // Empty q returns [] without hitting the DB.
 func (s *Server) Autocomplete(w http.ResponseWriter, r *http.Request) {
 	principal := s.requireAuth(w, r)
@@ -309,12 +305,6 @@ func (s *Server) Autocomplete(w http.ResponseWriter, r *http.Request) {
 		remaining := limit - len(out)
 		if remaining > 0 {
 			out = append(out, s.autoQueryOne(r, "correspondents", "name", "correspondent", needle, remaining)...)
-		}
-	}
-	if kind == "" || kind == "document_type" {
-		remaining := limit - len(out)
-		if remaining > 0 {
-			out = append(out, s.autoQueryOne(r, "document_types", "name", "document_type", needle, remaining)...)
 		}
 	}
 	s.writeJSON(w, http.StatusOK,
@@ -381,12 +371,6 @@ func buildSearchFilters(r *http.Request, language string) (string, []any, error)
 		frag.WriteString(placeholders(len(correspondentIDs)))
 		frag.WriteString("))")
 		for _, id := range correspondentIDs {
-			args = append(args, id)
-		}
-	}
-	if v := r.URL.Query().Get("document_type__id"); v != "" {
-		if id, err := strconv.ParseInt(v, 10, 64); err == nil && id > 0 {
-			frag.WriteString(" AND d.document_type_id = ?")
 			args = append(args, id)
 		}
 	}

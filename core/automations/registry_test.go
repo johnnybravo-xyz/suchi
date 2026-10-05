@@ -173,7 +173,6 @@ func TestRegistryBuiltinActionParity(t *testing.T) {
 	corrID := seedCorrespondent(t, ctx, d, "Sender")
 	fieldID := seedCustomField(t, ctx, d, "Note", "text")
 	_, err := d.ExecWrite(ctx, `INSERT INTO users(id,email,display_name,role,created_at,updated_at) VALUES(2,'second@test','Second','admin',0,0);
- INSERT INTO document_types(id,system_id,name,slug,created_at,updated_at) VALUES(800,1,'Receipt','receipt',0,0);
  INSERT INTO storage_paths(id,system_id,name,slug,path,created_at,updated_at) VALUES(800,1,'Path','path','{{title}}',0,0);`)
 	must(t, err)
 	var categoryID int64
@@ -191,14 +190,12 @@ func TestRegistryBuiltinActionParity(t *testing.T) {
 		{"assign_title", map[string]any{"template": "Filed"}, `SELECT title FROM documents WHERE id=?`, "Filed"},
 		{"assign_tags", map[string]any{"tag_ids": []any{tagID}}, `SELECT count(*) FROM document_tags WHERE document_id=?`, int64(1)},
 		{"assign_correspondent", map[string]any{"correspondent_id": corrID}, `SELECT correspondent_id FROM document_correspondents WHERE document_id=? AND role='sender' ORDER BY position,correspondent_id LIMIT 1`, corrID},
-		{"assign_document_type", map[string]any{"document_type_id": 800}, `SELECT document_type_id FROM documents WHERE id=?`, int64(800)},
 		{"assign_jd_category", map[string]any{"jd_category_id": categoryID}, `SELECT jd_category_id FROM documents WHERE id=?`, categoryID},
 		{"assign_storage_path", map[string]any{"storage_path_id": 800}, `SELECT storage_path_id FROM documents WHERE id=?`, int64(800)},
 		{"assign_owner", map[string]any{"owner_id": 2}, `SELECT owner_id FROM documents WHERE id=?`, int64(2)},
 		{"assign_custom_field", map[string]any{"field_id": fieldID, "value": "note"}, `SELECT value_text FROM document_custom_field_values WHERE document_id=?`, "note"},
 		{"remove_tags", map[string]any{"tag_ids": []any{tagID}}, `SELECT count(*) FROM document_tags WHERE document_id=?`, int64(0)},
 		{"remove_correspondents", nil, `SELECT count(*)=0 FROM document_correspondents WHERE document_id=?`, int64(1)},
-		{"remove_document_type", nil, `SELECT document_type_id IS NULL FROM documents WHERE id=?`, int64(1)},
 		{"remove_storage_path", nil, `SELECT storage_path_id IS NULL FROM documents WHERE id=?`, int64(1)},
 		{"remove_custom_field", map[string]any{"field_id": fieldID}, `SELECT count(*) FROM document_custom_field_values WHERE document_id=?`, int64(0)},
 		{"discard", nil, `SELECT trashed_at IS NOT NULL FROM documents WHERE id=?`, int64(1)},

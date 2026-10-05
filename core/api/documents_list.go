@@ -10,7 +10,6 @@
 //   jd_category_id            — exact match on the JD filing chip.
 //   sensitivity               — one of the SensitivityLevels keys.
 //   split_origin_id          — live QR-split children for an accepted upload.
-//   document_type__id         — exact match.
 //   tags__id__in              — CSV of tag ids; document must carry
 //                               EVERY id (AND semantics).
 //   correspondents__id__in    — CSV of correspondent ids; document

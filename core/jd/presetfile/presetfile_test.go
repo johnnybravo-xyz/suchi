@@ -107,8 +107,8 @@ func TestStrictHuMLAndFormatFirst(t *testing.T) {
 		valid + "inbox: 49\n",
 		valid + "system: null\n",
 		strings.Replace(valid, "code: 11", "code: 11\n        code: 12", 1),
-		strings.Replace(valid, "document_type: \"certificate\"", "document_type: \"certificate\"\n            document_type: \"invoice\"", 1),
-		strings.Replace(valid, "document_type: \"certificate\"", "owner_id: 1", 1),
+		strings.Replace(valid, "tag: \"certificate\"", "tag: \"certificate\"\n            tag: \"invoice\"", 1),
+		strings.Replace(valid, "tag: \"certificate\"", "owner_id: 1", 1),
 		strings.Replace(valid, "version: 1", "version: 1.5", 1),
 		strings.Replace(valid, "name: \"UK landlord\"", "name: null", 1),
 		strings.Replace(valid, "filter_content_matching: \"gas safety\"", "filter_future: \"gas safety\"", 1),
@@ -136,7 +136,6 @@ func TestPortableActionsAreExactAndTyped(t *testing.T) {
 		"{kind='assign_tags',params={tags=['a','b']}}",
 		"{kind='assign_tags',params={tag='a'}}",
 		"{kind='assign_correspondent',params={correspondent='Example'}}",
-		"{kind='assign_document_type',params={document_type='Invoice'}}",
 		"{kind='assign_jd_category',params={jd_category_code=11}}",
 	}
 	for _, action := range good {
@@ -161,7 +160,7 @@ func TestPortableActionsAreExactAndTyped(t *testing.T) {
 		"{kind='assign_jd_category',params={jd_category_code=11,system='S02'}}",
 		"{kind='assign_jd_category',params={jd_category_code=11,system_id=2}}",
 		"{kind='assign_owner',params={owner_id=1}}",
-		"{kind='assign_document_type',params={document_type_id=1}}",
+		"{kind='assign_document_type',params={document_type='Invoice'}}",
 		"{kind='assign_title',params={template=' '}}",
 	}
 	for _, action := range bad {

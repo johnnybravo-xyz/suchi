@@ -70,7 +70,6 @@ func seedSystemsBoundary(t *testing.T, s *Server) {
 		UPDATE jd_systems SET inbox_category_id=CASE id WHEN 1 THEN 101 ELSE 201 END;
 		INSERT INTO tags(id,system_id,name,slug,created_at,updated_at) VALUES (101,1,'Needle local tag','needle',0,0),(201,2,'Needle foreign tag','needle',0,0);
 		INSERT INTO correspondents(id,system_id,name,slug,created_at,updated_at) VALUES (101,1,'Needle local correspondent','needle',0,0),(201,2,'Needle foreign correspondent','needle',0,0);
-		INSERT INTO document_types(id,system_id,name,slug,created_at,updated_at) VALUES (101,1,'Needle local type','needle',0,0),(201,2,'Needle foreign type','needle',0,0);
 		INSERT INTO storage_paths(id,system_id,name,slug,path,created_at,updated_at) VALUES (101,1,'Local path','path','local',0,0),(201,2,'Foreign path','path','foreign',0,0);
 		INSERT INTO custom_fields(id,system_id,name,data_type,created_at,updated_at) VALUES (101,1,'Local field','text',0,0),(201,2,'Foreign field','text',0,0);
 		INSERT INTO groups(id,name,created_at,updated_at) VALUES (51,'Reviewers',0,0);
@@ -306,7 +305,6 @@ func TestSystemsCollectionsFilterBeforeCountsPagesAndHydration(t *testing.T) {
 		{"/api/intelligence/?system=S01&type=date&status=pending", 101, 1},
 		{"/api/tags/?system=S01", 101, 1},
 		{"/api/correspondents/?system=S01", 101, 1},
-		{"/api/document_types/?system=S01", 101, 1},
 		{"/api/storage_paths/?system=S01", 101, 1},
 		{"/api/custom_fields/?system=S01", 101, 1},
 	} {
@@ -326,7 +324,7 @@ func TestSystemsCollectionsFilterBeforeCountsPagesAndHydration(t *testing.T) {
 	var suggestions struct {
 		Results []AutocompleteSuggestion `json:"results"`
 	}
-	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &suggestions) != nil || !reflect.DeepEqual(suggestions.Results, []AutocompleteSuggestion{{ID: 101, Kind: "tag", Value: "Needle local tag"}, {ID: 101, Kind: "correspondent", Value: "Needle local correspondent"}, {ID: 101, Kind: "document_type", Value: "Needle local type"}}) {
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &suggestions) != nil || !reflect.DeepEqual(suggestions.Results, []AutocompleteSuggestion{{ID: 101, Kind: "tag", Value: "Needle local tag"}, {ID: 101, Kind: "correspondent", Value: "Needle local correspondent"}}) {
 		t.Fatalf("autocomplete: %d %s", w.Code, w.Body.String())
 	}
 	w = systemsBoundaryRequest(mux, "GET", "/api/events/?system=S01&limit=1", "", p)
@@ -495,7 +493,6 @@ func TestSystemsForeignMetadataRejectsWithoutPartialWritesOrOutbox(t *testing.T)
 	}{
 		{"POST", "/api/documents/bulk_edit?system=S01", `{"documents":[101,103],"method":"set_jd_category","parameters":{"jd_category_id":201}}`, 400},
 		{"POST", "/api/documents/bulk_edit?system=S01", `{"documents":[101,103],"method":"set_correspondent","parameters":{"correspondent_id":201}}`, 400},
-		{"POST", "/api/documents/bulk_edit?system=S01", `{"documents":[101,103],"method":"set_document_type","parameters":{"document_type_id":201}}`, 400},
 		{"POST", "/api/documents/bulk_edit?system=S01", `{"documents":[101,103],"method":"set_storage_path","parameters":{"storage_path_id":201}}`, 400},
 		{"POST", "/api/documents/bulk_edit?system=S01", `{"documents":[101,103],"method":"add_tag","parameters":{"tag_id":201}}`, 400},
 		{"POST", "/api/documents/201/correspondents/?system=S01", `{"name":"Must not be created","role":"sender"}`, 404},
@@ -511,7 +508,7 @@ func TestSystemsForeignMetadataRejectsWithoutPartialWritesOrOutbox(t *testing.T)
 				t.Fatalf("rejection: %d %s", w.Code, w.Body.String())
 			}
 			var unchanged int
-			if err := s.DB.Read.QueryRow(`SELECT COUNT(*) FROM documents WHERE id IN (101,103) AND jd_category_id=101 AND document_type_id IS NULL AND storage_path_id IS NULL AND updated_at=0`).Scan(&unchanged); err != nil || unchanged != 2 {
+			if err := s.DB.Read.QueryRow(`SELECT COUNT(*) FROM documents WHERE id IN (101,103) AND jd_category_id=101 AND storage_path_id IS NULL AND updated_at=0`).Scan(&unchanged); err != nil || unchanged != 2 {
 				t.Fatalf("partial document mutation: count=%d err=%v", unchanged, err)
 			}
 			for _, table := range []string{"document_tags", "document_correspondents", "document_custom_field_values", "jobs", "render_moves"} {

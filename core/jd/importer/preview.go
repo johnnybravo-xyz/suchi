@@ -350,7 +350,6 @@ func referenceState(ctx context.Context, tx *sql.Tx, systemID int64, rules []pla
 		t := rule.seed.Trigger
 		add("tags", t.FilterTag)
 		add("correspondents", t.FilterCorrespondent)
-		add("document_types", t.FilterDocumentType)
 		for _, a := range rule.seed.Actions {
 			if name, ok := stringField(a.Params, "tag"); ok {
 				add("tags", name)
@@ -362,9 +361,6 @@ func referenceState(ctx context.Context, tx *sql.Tx, systemID int64, rules []pla
 			}
 			if name, ok := stringField(a.Params, "correspondent"); ok {
 				add("correspondents", name)
-			}
-			if name, ok := stringField(a.Params, "document_type"); ok {
-				add("document_types", name)
 			}
 		}
 	}

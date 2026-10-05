@@ -51,7 +51,7 @@ export function extractFieldPresence(query = '') {
   }
 }
 
-export function canonicalSavedViewQuery(draft, { tags = [], correspondents = [], types = [], categories = [] } = {}) {
+export function canonicalSavedViewQuery(draft, { tags = [], correspondents = [], categories = [] } = {}) {
   const parts = []
   const text = String(draft?.q || '').trim()
   if (text) parts.push(text)
@@ -60,8 +60,6 @@ export function canonicalSavedViewQuery(draft, { tags = [], correspondents = [],
   if (tag) parts.push(`tag:${quotedQueryValue(tag.name)}`)
   const correspondent = correspondents.find((item) => String(item.id) === String(draft?.corr))
   if (correspondent) parts.push(`from:${quotedQueryValue(correspondent.name)}`)
-  const type = types.find((item) => String(item.id) === String(draft?.type))
-  if (type) parts.push(`type:${quotedQueryValue(type.name)}`)
   const category = categories.find((item) => String(item.id) === String(draft?.jd))
   if (category) parts.push(`jd:${category.code}`)
   const fieldPresence = parseFieldPresenceSelection(draft?.fieldPresence)

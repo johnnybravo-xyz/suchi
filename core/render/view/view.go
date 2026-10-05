@@ -381,7 +381,6 @@ func (r *Renderer) buildContext(ctx context.Context, docID int64) (string, paths
 	var (
 		title                        string
 		correspondent                sql.NullString
-		documentType                 sql.NullString
 		storagePathTpl               sql.NullString
 		storagePathName              sql.NullString
 		archiveBlob                  sql.NullString
@@ -403,7 +402,6 @@ func (r *Renderer) buildContext(ctx context.Context, docID int64) (string, paths
 			 JOIN correspondents c ON c.id=dc.correspondent_id
 			 WHERE dc.document_id=d.id AND dc.role='sender'
 			 ORDER BY dc.position,dc.correspondent_id LIMIT 1),
-			dt.name,
 			sp.path, sp.name,
 			d.archive_blob, d.original_blob,
 			d.created_at, d.added_at, d.archive_serial_number,
@@ -411,14 +409,13 @@ func (r *Renderer) buildContext(ctx context.Context, docID int64) (string, paths
 			jc.code, jc.name,
 			ja.code_start, ja.code_end, ja.name, js.code, js.name, js.taxonomy
 		FROM documents d
-		LEFT JOIN document_types  dt ON dt.id = d.document_type_id
 		LEFT JOIN storage_paths   sp ON sp.id = d.storage_path_id
 		LEFT JOIN users           u  ON u.id  = d.owner_id
 		JOIN jd_categories        jc ON jc.id = d.jd_category_id
 		JOIN jd_areas             ja ON ja.code_start = jc.area_start AND ja.system_id = d.system_id
 		JOIN jd_systems           js ON js.id = d.system_id
 		WHERE d.id = ? AND d.trashed_at IS NULL
-	`, docID).Scan(&title, &correspondent, &documentType,
+	`, docID).Scan(&title, &correspondent,
 		&storagePathTpl, &storagePathName,
 		&archiveBlob, &originalBlob, &created, &added, &asn,
 		&ownerEmail, &jdCode, &jdName, &areaStart, &areaEnd, &areaName, &systemCode, &systemName, &mode)
@@ -455,7 +452,6 @@ func (r *Renderer) buildContext(ctx context.Context, docID int64) (string, paths
 		Title:           title,
 		DocPK:           docID,
 		Correspondent:   nsToStr(correspondent),
-		DocumentType:    nsToStr(documentType),
 		StoragePath:     nsToStr(storagePathName),
 		Tags:            tags,
 		Created:         unixToISODate(created),

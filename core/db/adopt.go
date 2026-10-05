@@ -26,8 +26,9 @@ const (
 
 	stableLineage                   = "stable-v1"
 	finalBetaLineage                = "final-beta-schema-3"
+
 	stableV1Fingerprint             = "9d2a6320eae1582b0f294caa6ed518b5a73ab3dbe6597c9ca1a36cc563e03240"
-	stableFingerprint               = "57ab441cdb86f72f7e7ce51714e405b3b2c3f7abdd2c4b7d9493b83b0f30adf8"
+	stableFingerprint               = "7f1dd526a6d6d842599d18ef0ed3877bc458610200072e17c34bf3133b421421"
 	preIdentityStableFingerprint    = "5d6ac98308eb644b030092178792a46f36e6f8f5041411f020ed2dcf216f46c2"
 	betaOneFingerprint              = "68089660de648a4fcc136bcefc105edc5d29dc4de59dad482124914ea626fb2b"
 	betaTwoFingerprint              = "a341b731c93a7270e3440a18f58911df80b2289bf44cd3baeecff4a2b2b0071c"
@@ -124,6 +125,12 @@ func PrepareStable(ctx context.Context, d *DB, stable, compatibility []Migration
 	log.Info("db.stable_adoption.snapshot", "source", profile.name, "path", snapshot)
 	if err := adoptBeta(ctx, d, beta, stable[len(stable)-1], profile.nextVersion); err != nil {
 		return fmt.Errorf("adopt %s (snapshot retained at %s): %w", profile.name, snapshot, err)
+	}
+	if err := Migrate(ctx, d, stable, log); err != nil {
+		return fmt.Errorf("migrate adopted %s (snapshot retained at %s): %w", profile.name, snapshot, err)
+	}
+	if err := verifyStableSchema(ctx, d.Write); err != nil {
+		return fmt.Errorf("verify adopted %s (snapshot retained at %s): %w", profile.name, snapshot, err)
 	}
 	log.Info("db.stable_adoption.complete", "source", profile.name, "schema", stableLineage)
 	return nil

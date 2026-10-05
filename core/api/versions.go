@@ -132,18 +132,17 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var (
-		newID            int64
-		duplicateLiveID  int64
-		prevOwner        int64
-		prevTitle        string
-		prevJDCatID      int64
-		prevSensitivity  sql.NullString
-		prevDocumentType sql.NullInt64
-		familyKey        sql.NullString
-		title            string
-		response         uploadVersionResponse
-		replay           *storedUploadResponse
-		recoveredReplay  bool
+		newID           int64
+		duplicateLiveID int64
+		prevOwner       int64
+		prevTitle       string
+		prevJDCatID     int64
+		prevSensitivity sql.NullString
+		familyKey       sql.NullString
+		title           string
+		response        uploadVersionResponse
+		replay          *storedUploadResponse
+		recoveredReplay bool
 	)
 	authorizeReplayTarget := func(tx *sql.Tx, id int64) error {
 		var one int
@@ -172,12 +171,10 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 		// authorization after acquiring the write lock so ACL revocation or
 		// trashing cannot race the version insert.
 		err := tx.QueryRowContext(r.Context(), `
-			SELECT owner_id, title, jd_category_id, sensitivity,
-			       document_type_id, version_family_key
+			SELECT owner_id, title, jd_category_id, sensitivity, version_family_key
 			FROM documents WHERE id = ? AND trashed_at IS NULL
 		`, prevID).Scan(
-			&prevOwner, &prevTitle, &prevJDCatID, &prevSensitivity,
-			&prevDocumentType, &familyKey,
+			&prevOwner, &prevTitle, &prevJDCatID, &prevSensitivity, &familyKey,
 		)
 		if errors.Is(err, sql.ErrNoRows) {
 			return errVersionPredecessorChanged
@@ -298,13 +295,13 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 		res, err := tx.ExecContext(r.Context(), `
 			INSERT INTO documents(
 				system_id, owner_id, original_blob, original_size, title, mime_type,
-				jd_category_id, sensitivity, document_type_id, version_family_key,
+				jd_category_id, sensitivity, version_family_key,
 				added_at, created_at, updated_at, previous_version_id, source_mtime,
 				content, content_source, device_content_confidence,
 				device_ocr_language, device_content_received_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`, systemID, prevOwner, upload.SHA256, upload.Size, title, upload.MIME,
-			prevJDCatID, prevSensitivity, prevDocumentType, familyKey,
+			prevJDCatID, prevSensitivity, familyKey,
 			now, now, now, prevID, dbValues.SourceMTime, dbValues.Content,
 			dbValues.ContentSource, dbValues.DeviceConfidence,
 			dbValues.DeviceLanguage, dbValues.DeviceContentTime)

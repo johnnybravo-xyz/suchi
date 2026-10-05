@@ -137,11 +137,6 @@ func compileFilter(clause ResolvedClause) Predicate {
 			SQL:  "EXISTS (SELECT 1 FROM document_correspondents sq_dc WHERE sq_dc.document_id = d.id AND sq_dc.correspondent_id = ?)",
 			Args: []any{clause.ID},
 		}
-	case "type":
-		if clause.Negated {
-			return Predicate{SQL: "(d.document_type_id IS NULL OR d.document_type_id != ?)", Args: []any{clause.ID}}
-		}
-		return Predicate{SQL: "d.document_type_id = ?", Args: []any{clause.ID}}
 	case "sensitivity":
 		if clause.Negated {
 			return Predicate{SQL: "COALESCE(d.sensitivity, '') != ?", Args: []any{clause.Value}}

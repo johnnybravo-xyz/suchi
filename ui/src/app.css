@@ -273,6 +273,10 @@ textarea.input { resize: vertical; font-family: ui-monospace, monospace; font-si
 .document-options-toolbar > select {
   flex: 0 1 170px; width: 170px; height: var(--toolbar-control-height);
 }
+.document-options-toolbar > .document-share-filter {
+  flex: 0 0 auto; height: var(--toolbar-control-height); padding: 8px 12px;
+  border-radius: 9px; font-size: .9rem; white-space: nowrap;
+}
 .document-toolbar .document-refresh {
   min-width: var(--toolbar-control-height); height: var(--toolbar-control-height); padding: 8px 12px;
   border-radius: 9px; justify-content: center; font-size: .9rem;

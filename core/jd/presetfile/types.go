@@ -57,7 +57,6 @@ type Trigger struct {
 	FilterContentMatching    string `huml:"filter_content_matching,omitempty" toml:"filter_content_matching,omitempty" json:"filter_content_matching,omitempty"`
 	FilterTag                string `huml:"filter_has_tag,omitempty" toml:"filter_has_tag,omitempty" json:"filter_has_tag,omitempty"`
 	FilterCorrespondent      string `huml:"filter_has_correspondent,omitempty" toml:"filter_has_correspondent,omitempty" json:"filter_has_correspondent,omitempty"`
-	FilterDocumentType       string `huml:"filter_has_document_type,omitempty" toml:"filter_has_document_type,omitempty" json:"filter_has_document_type,omitempty"`
 	FilterEmailFrom          string `huml:"filter_email_from,omitempty" toml:"filter_email_from,omitempty" json:"filter_email_from,omitempty"`
 	FilterEmailSubject       string `huml:"filter_email_subject,omitempty" toml:"filter_email_subject,omitempty" json:"filter_email_subject,omitempty"`
 	FilterEmailFolder        string `huml:"filter_email_folder,omitempty" toml:"filter_email_folder,omitempty" json:"filter_email_folder,omitempty"`

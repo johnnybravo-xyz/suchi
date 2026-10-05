@@ -47,6 +47,9 @@ func TestImportEndToEnd(t *testing.T) {
 	if rep.Correspondents != 1 {
 		t.Errorf("correspondents = %d, want 1", rep.Correspondents)
 	}
+	if rep.DocumentTypes != 1 {
+		t.Errorf("document types converted = %d, want 1", rep.DocumentTypes)
+	}
 	if rep.Documents != 2 {
 		t.Errorf("documents = %d, want 2", rep.Documents)
 	}
@@ -73,6 +76,103 @@ func TestImportEndToEnd(t *testing.T) {
 	inbox, _ := jd.InboxCategoryID(ctx, d, 1)
 	if inCat != inbox {
 		t.Errorf("imported doc landed in category %d, want inbox %d", inCat, inbox)
+	}
+
+	// Paperless document types are imported only as namespaced tags, including
+	// every source reference that can be represented by Suchi.
+	var typeTagID int64
+	if err := d.Read.QueryRow(
+		`SELECT id FROM tags WHERE system_id=1 AND name='type:Invoice' AND slug='type-invoice'
+		   AND matching_algorithm=4 AND match='invoice-regex' AND is_insensitive=0`,
+	).Scan(&typeTagID); err != nil {
+		t.Fatalf("converted type tag: %v", err)
+	}
+	var typeAssignments int
+	if err := d.Read.QueryRow(`
+		SELECT count(*) FROM document_tags dt
+		JOIN documents d ON d.id=dt.document_id
+		WHERE d.legacy_id=100 AND dt.tag_id=? AND dt.classifier_owned=0
+	`, typeTagID).Scan(&typeAssignments); err != nil {
+		t.Fatal(err)
+	}
+	if typeAssignments != 1 {
+		t.Fatalf("converted document type assignments = %d, want 1", typeAssignments)
+	}
+	var storagePath string
+	if err := d.Read.QueryRow(`
+		SELECT sp.path FROM documents d JOIN storage_paths sp ON sp.id=d.storage_path_id
+		WHERE d.legacy_id=100
+	`).Scan(&storagePath); err != nil {
+		t.Fatal(err)
+	}
+	if storagePath != `{{ tag_list }}/{{title}}` {
+		t.Fatalf("converted storage path = %q", storagePath)
+	}
+	var savedTypeTags int
+	if err := d.Read.QueryRow(`
+		SELECT count(*) FROM saved_views sv, json_each(sv.filter_json, '$.tags__id__in')
+		WHERE sv.name='Invoices' AND json_each.value=?
+	`, typeTagID).Scan(&savedTypeTags); err != nil {
+		t.Fatal(err)
+	}
+	if savedTypeTags != 1 {
+		t.Fatalf("converted saved-view type filters = %d, want 1", savedTypeTags)
+	}
+	var workflowTypeActions int
+	if err := d.Read.QueryRow(`
+		SELECT count(*) FROM automation_actions a
+		JOIN automations owner ON owner.id=a.automation_id
+		WHERE owner.name='Type workflow'
+		  AND ((a.kind='assign_tags' OR a.kind='remove_tags')
+		       AND EXISTS (SELECT 1 FROM json_each(a.params_json, '$.tag_ids') WHERE value=?))
+	`, typeTagID).Scan(&workflowTypeActions); err != nil {
+		t.Fatal(err)
+	}
+	if workflowTypeActions != 2 {
+		t.Fatalf("converted workflow type actions = %d, want 2", workflowTypeActions)
+	}
+	var workflowTriggerTag int64
+	if err := d.Read.QueryRow(`
+		SELECT tr.filter_tag_id FROM automation_triggers tr
+		JOIN automations owner ON owner.id=tr.automation_id
+		WHERE owner.name='Type workflow'
+	`).Scan(&workflowTriggerTag); err != nil {
+		t.Fatal(err)
+	}
+	if workflowTriggerTag != typeTagID {
+		t.Fatalf("converted workflow type trigger = %d, want tag %d", workflowTriggerTag, typeTagID)
+	}
+	var workflowTitle string
+	if err := d.Read.QueryRow(`
+		SELECT json_extract(a.params_json, '$.template') FROM automation_actions a
+		JOIN automations owner ON owner.id=a.automation_id
+		WHERE owner.name='Type workflow' AND a.kind='assign_title'
+	`).Scan(&workflowTitle); err != nil {
+		t.Fatal(err)
+	}
+	if workflowTitle != `{{tags}} paid` {
+		t.Fatalf("converted workflow title = %q", workflowTitle)
+	}
+	var conflictingSuspended int
+	if err := d.Read.QueryRow(`SELECT suspended FROM automations WHERE name='Tag and type workflow'`).Scan(&conflictingSuspended); err != nil {
+		t.Fatal(err)
+	}
+	if conflictingSuspended != 1 {
+		t.Fatalf("tag-and-type workflow suspended = %d, want 1", conflictingSuspended)
+	}
+	var unsupportedPathRefs int
+	if err := d.Read.QueryRow(`
+		SELECT count(*) FROM documents WHERE legacy_id=101 AND storage_path_id IS NOT NULL
+	`).Scan(&unsupportedPathRefs); err != nil {
+		t.Fatal(err)
+	}
+	if unsupportedPathRefs != 0 {
+		t.Fatalf("unsupported type path remained on %d documents", unsupportedPathRefs)
+	}
+	if !slices.ContainsFunc(rep.Warnings, func(warning string) bool {
+		return warning == `storage path "Unsupported type expression" skipped: unsupported document_type template expression`
+	}) {
+		t.Fatalf("missing unsupported template warning: %v", rep.Warnings)
 	}
 
 	// FTS mirror should have picked up the content column via trigger.
@@ -141,6 +241,15 @@ func buildFakeBundle(t *testing.T, tmp string) string {
 
 	corPtr := int64(1)
 	arch100 := "doc-100.pdf"
+	docTypePK := int64(3)
+	storagePathPK := int64(4)
+	savedTypeValue := "3"
+	workflowTriggerPK := int64(8)
+	workflowAssignPK := int64(9)
+	workflowRemovePK := int64(10)
+	conflictingTriggerPK := int64(12)
+	conflictingActionPK := int64(13)
+	unsupportedStoragePathPK := int64(14)
 
 	mk := func(model string, pk int64, fields any) bundle.Object {
 		f, err := json.Marshal(fields)
@@ -158,6 +267,42 @@ func buildFakeBundle(t *testing.T, tmp string) string {
 		mk("documents.correspondent", 1, bundle.CorrespondentFields{
 			Name: "BESCOM", Slug: "bescom",
 		}),
+		mk(bundle.ModelDocumentType, docTypePK, bundle.DocumentTypeFields{
+			Name: "Invoice", Slug: "invoice", MatchAlg: 4, Match: "invoice-regex",
+		}),
+		mk(bundle.ModelStoragePath, storagePathPK, bundle.StoragePathFields{
+			Name: "By type", Slug: "by-type", Path: "{{ document_type }}/{{title}}",
+		}),
+		mk(bundle.ModelStoragePath, unsupportedStoragePathPK, bundle.StoragePathFields{
+			Name: "Unsupported type expression", Slug: "unsupported-type-expression", Path: "{{ document_type | lower }}/{{title}}",
+		}),
+		mk(bundle.ModelSavedView, 5, bundle.SavedViewFields{Name: "Invoices"}),
+		mk(bundle.ModelSavedViewFilterRule, 6, bundle.SavedViewFilterRuleFields{
+			SavedView: 5, RuleType: 4, Value: &savedTypeValue,
+		}),
+		mk(bundle.ModelWorkflow, 7, bundle.WorkflowFields{
+			Name: "Type workflow", Enabled: true,
+			Triggers: []int64{workflowTriggerPK}, Actions: []int64{workflowAssignPK, workflowRemovePK},
+		}),
+		mk(bundle.ModelWorkflowTrigger, workflowTriggerPK, bundle.WorkflowTriggerFields{
+			Type: 2, FilterHasDocumentType: &docTypePK,
+		}),
+		mk(bundle.ModelWorkflowAction, workflowAssignPK, bundle.WorkflowActionFields{
+			Type: 1, AssignTitle: "{{document_type}} paid", AssignDocumentType: &docTypePK,
+		}),
+		mk(bundle.ModelWorkflowAction, workflowRemovePK, bundle.WorkflowActionFields{
+			Type: 2, RemoveDocumentTypes: []int64{docTypePK},
+		}),
+		mk(bundle.ModelWorkflow, 11, bundle.WorkflowFields{
+			Name: "Tag and type workflow", Enabled: true,
+			Triggers: []int64{conflictingTriggerPK}, Actions: []int64{conflictingActionPK},
+		}),
+		mk(bundle.ModelWorkflowTrigger, conflictingTriggerPK, bundle.WorkflowTriggerFields{
+			Type: 2, FilterHasTags: []int64{2}, FilterHasDocumentType: &docTypePK,
+		}),
+		mk(bundle.ModelWorkflowAction, conflictingActionPK, bundle.WorkflowActionFields{
+			Type: 1, AssignTitle: "Needs review",
+		}),
 		mk("documents.document", 100, bundle.DocumentFields{
 			Title:            "Electricity bill March 2026",
 			Content:          "total due for the electricity supply period",
@@ -169,6 +314,8 @@ func buildFakeBundle(t *testing.T, tmp string) string {
 			Modified:         time.Now().UTC().Format(time.RFC3339),
 			Correspondent:    &corPtr,
 			Tags:             []int64{2},
+			DocumentType:     &docTypePK,
+			StoragePath:      &storagePathPK,
 		}),
 		mk("documents.document", 101, bundle.DocumentFields{
 			Title:            "Property tax 2025-26",
@@ -177,6 +324,7 @@ func buildFakeBundle(t *testing.T, tmp string) string {
 			OriginalFilename: "doc-101.pdf",
 			Created:          time.Now().UTC().Format(time.RFC3339),
 			Tags:             []int64{1, 2},
+			StoragePath:      &unsupportedStoragePathPK,
 		}),
 		mk("documents.note", 1, bundle.NoteFields{
 			Document: 100, Note: "auto-fetched from mail", Created: time.Now().UTC().Format(time.RFC3339),

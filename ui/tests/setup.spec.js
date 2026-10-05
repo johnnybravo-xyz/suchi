@@ -2052,11 +2052,11 @@ test('filters Documents by active share links', async ({ page }) => {
       url.searchParams.get('q') === 'receipt' &&
       url.searchParams.get('share_link') === 'active'
   })
-  await page.getByLabel('Type or sharing').selectOption('active')
+  await page.getByRole('button', { name: 'Shared by me' }).click()
   await filtered
   await expect(page).toHaveURL(/#\/documents\?q=receipt&share_link=active$/)
 
-  await page.getByLabel('Type or sharing').selectOption('')
+  await page.getByRole('button', { name: 'Shared by me' }).click()
   await expect(page).toHaveURL(/#\/documents\?q=receipt$/)
 })
 
@@ -2073,9 +2073,9 @@ test('keeps full-width search above one wide-screen options row', async ({ page 
   const sort = displayActions.getByRole('combobox', { name: 'Sort documents' })
   const viewToggle = displayActions.locator('.seg')
   const refresh = displayActions.getByRole('button', { name: 'Refresh documents' })
-  const typeOrShare = optionsRow.getByLabel('Type or sharing')
+  const sharedByMe = optionsRow.getByRole('button', { name: 'Shared by me' })
   const dateRange = optionsRow.getByRole('button', { name: 'Any date', exact: true })
-  const heights = await Promise.all([search, sort, viewToggle, refresh, typeOrShare, dateRange]
+  const heights = await Promise.all([search, sort, viewToggle, refresh, sharedByMe, dateRange]
     .map(async selector => Math.round((await selector.boundingBox()).height)))
   expect(new Set(heights).size).toBe(1)
   await expect(page.getByRole('link', { name: 'Manage tags' })).toHaveCount(0)
@@ -2238,7 +2238,6 @@ test('opens dashboard views through user-facing document routes', async ({ page 
     q: 'distribution advice',
     tags__id__in: '2',
     correspondents__id__in: '3',
-    document_type__id: '4',
     jd_category_id: '6',
     sensitivity: 'confidential',
     ordering: 'title',
@@ -2412,12 +2411,12 @@ test('edits saved views in place and keeps drafts after a rejected save', async 
 test('editing legacy saved views preserves multi-value scopes and ordering without vocabularies', async ({ page }) => {
   const filters = {
     q: 'invoice', tags__id__in: [2, 7], correspondents__id__in: [3, 9],
-    document_type__id: 4, jd_category_id: 6, sensitivity: 'internal', ordering: 'title',
+    jd_category_id: 6, sensitivity: 'internal', ordering: 'title',
   }
   await mockAPI(page, {
     userRole: 'member', capabilities: [],
     savedViews: [{ id: 8, name: 'Legacy scope', filter_json: JSON.stringify(filters) }],
-    failPaths: ['/api/tags/', '/api/correspondents/', '/api/document_types/'],
+    failPaths: ['/api/tags/', '/api/correspondents/'],
   })
   await page.goto('/#/views')
   await page.getByRole('button', { name: 'Edit Legacy scope' }).click()
@@ -2522,7 +2521,7 @@ test('limits dashboard count requests and defers empty-view facets', async ({ pa
     if (url.pathname === '/api/documents/' && url.searchParams.get('page_size') === '1') {
       countRequests.push(url.toString())
     }
-    if (['/api/tags/', '/api/correspondents/', '/api/document_types/'].includes(url.pathname)) {
+    if (['/api/tags/', '/api/correspondents/'].includes(url.pathname)) {
       facetRequests.push(url.pathname)
     }
   })
@@ -2555,7 +2554,7 @@ test('defers automation facets until an empty workspace is edited', async ({ pag
   const facetRequests = []
   page.on('request', request => {
     const path = new URL(request.url()).pathname
-    if (['/api/tags/', '/api/correspondents/', '/api/document_types/'].includes(path)) facetRequests.push(path)
+    if (['/api/tags/', '/api/correspondents/'].includes(path)) facetRequests.push(path)
   })
   await mockAPI(page, { automations: [] })
   await page.goto('/#/automations')
@@ -2563,7 +2562,7 @@ test('defers automation facets until an empty workspace is edited', async ({ pag
   await expect(page.getByText('No automations yet.')).toBeVisible()
   expect(facetRequests).toEqual([])
   await page.getByRole('button', { name: 'New automation' }).click()
-  await expect.poll(() => new Set(facetRequests).size).toBe(3)
+  await expect.poll(() => new Set(facetRequests).size).toBe(2)
 })
 
 test('keeps saved views ahead of the creation form', async ({ page }) => {
@@ -2741,6 +2740,29 @@ test('shows every document source and the source date', async ({ page }) => {
   await expect(page.getByText('first seen', { exact: true })).toBeVisible()
   await expect(page.getByText('Source date', { exact: true })).toBeVisible()
   await expect(page.getByText('Created', { exact: true })).toHaveCount(0)
+})
+
+test('keeps wide document detail within one viewport-height row', async ({ page }) => {
+  test.skip((page.viewportSize()?.width || 0) <= 1000, 'wide layout only')
+  await mockAPI(page, { documentContent: 'Extracted document text. '.repeat(400) })
+  await page.goto('/#/doc/42')
+  await expect(page.getByRole('heading', { name: 'Electricity bill' })).toBeVisible()
+
+  const layout = await page.locator('.document-detail-grid').evaluate(element => {
+    const preview = element.querySelector('.preview').getBoundingClientRect()
+    const sidebar = element.querySelector('.detail-sidebar')
+    const sidebarBox = sidebar.getBoundingClientRect()
+    return {
+      bottom: element.getBoundingClientRect().bottom,
+      previewBottom: preview.bottom,
+      sidebarBottom: sidebarBox.bottom,
+      sidebarClientHeight: sidebar.clientHeight,
+      sidebarScrollHeight: sidebar.scrollHeight,
+    }
+  })
+  expect(layout.bottom).toBeLessThanOrEqual((page.viewportSize()?.height || 0) + 1)
+  expect(Math.abs(layout.previewBottom - layout.sidebarBottom)).toBeLessThan(1)
+  expect(layout.sidebarScrollHeight).toBeGreaterThan(layout.sidebarClientHeight)
 })
 
 test('protects restricted previews like confidential documents', async ({ page }) => {
@@ -4554,7 +4576,7 @@ test('publishes exact Inbox, Documents, and Search scopes to archive research', 
   await ask('inbox scope')
   expect(chatRequests.at(-1).scope).toMatchObject({ jd_category_id: 9, query: '' })
 
-  await page.goto('/#/documents?q=needle&jd=6&document_ids=41,42&tags__id__in=5,8&correspondents__id__in=7&document_type__id=4&sensitivity=internal&share_link=active')
+  await page.goto('/#/documents?q=needle&jd=6&document_ids=41,42&tags__id__in=5,8&correspondents__id__in=7&sensitivity=internal&share_link=active')
   await page.getByRole('button', { name: 'Any date', exact: true }).click()
   await page.getByLabel('Added on or after', { exact: true }).fill('2026-08-01')
   await page.getByLabel('Added on or before', { exact: true }).fill('2026-08-30')
@@ -4563,7 +4585,7 @@ test('publishes exact Inbox, Documents, and Search scopes to archive research', 
   await ask('full scope')
   expect(chatRequests.at(-1).scope).toEqual({
     query: 'needle', document_ids: [41, 42], jd_category_id: 6,
-    sensitivity: 'internal', document_type_id: 4, tag_ids: [5, 8],
+    sensitivity: 'internal', tag_ids: [5, 8],
     correspondent_ids: [7], created_at_gte: 1785542400,
     created_at_lte: 1788134399, language: '', share_link: 'active',
   })
@@ -4580,7 +4602,7 @@ test('publishes exact Inbox, Documents, and Search scopes to archive research', 
   await ask('cleared search scope')
   expect(chatRequests.at(-1).scope).toEqual({
     query: '', document_ids: [], jd_category_id: 0, sensitivity: '',
-    document_type_id: 0, tag_ids: [], correspondent_ids: [],
+    tag_ids: [], correspondent_ids: [],
     created_at_gte: null, created_at_lte: null, language: 'de',
   })
 })

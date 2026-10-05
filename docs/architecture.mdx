@@ -159,9 +159,9 @@ The upload rechecks predecessor change permission inside the single-writer
 transaction, gives a previously standalone row and its replacement one random
 `v:` family key, inserts the new source and `post-ingest` job with the row, and
 copies only continuity metadata: system, owner, filing category, sensitivity,
-document type, explicit ACL grants, manual tags, correspondents, and title.
-Extraction state, accepted intelligence, classifier-owned tags, custom-field
-values, and other exact-revision state start fresh. The original predecessor
+explicit ACL grants, manual tags, correspondents, and title. Extraction state,
+accepted intelligence, classifier-owned tags, custom-field values, and other
+exact-revision state start fresh. The original predecessor
 row and every immutable blob remain unchanged. Idempotency receipts and the
 predecessor/hash fallback recover a lost successful response without creating a
 second version.
@@ -171,9 +171,9 @@ head returns the same ID-free `version_head_changed` conflict. This makes
 concurrent replacement single-winner and prevents Trash/restore from creating
 new sibling branches.
 
-Migration `0002_document_version_families.sql` assigns deterministic internal
-`m:` keys to valid pre-existing chains and rejects a cycle or disconnected
-predecessor graph before advancing the schema. Family keys are storage identity,
+The version-family section of `0002_metadata_cleanup.sql` assigns deterministic
+internal `m:` keys to valid pre-existing chains and rejects a cycle or
+disconnected predecessor graph before advancing the schema. Family keys are
 not a public address. Discovery in `core/api/documents_list.go`, `search.go`,
 `intelligence.go`, and `chat.go` uses `core/searchquery` plus
 `documentVersionWhere`: by default a family contributes the greatest live row ID
@@ -331,14 +331,21 @@ without OCR/classifier/filing reruns. [Backup and restore](/backup-restore) requ
 all of `DATA_DIR`, including credential keys, with writers stopped or an atomic
 whole-directory snapshot; a database-only copy is incomplete.
 
-The active catalog in `core/db/migrations/` contains the declarative
-`0001_baseline.sql` at `user_version = 1`, lineage `stable-v1`, followed by
-`0002_document_version_families.sql`. The current schema is
-`user_version = 2` with the same lineage. Migration 0002 adds
-`documents.version_family_key`, the family/currentness index, the partial
-document-link reverse index, and the guarded chain backfill. Frozen beta SQL and
-the final account-identity rebuild live separately as compatibility migrations
-`0002`–`0005`; the active catalog cannot discover them by path.
+The active catalog in `core/db/migrations/` contains immutable
+`0001_baseline.sql` for stable schema 1 and one current unreleased migration,
+`0002_metadata_cleanup.sql`, for `user_version = 2`. Migration 0002 converts
+document types to namespaced tags and adds `documents.version_family_key`, the
+family/currentness index, the partial document-link reverse index, and the
+guarded chain backfill. The one-row `schema_lineage = 'stable-v1'` identity is
+unchanged. Frozen beta SQL and the final account-identity rebuild live separately
+as compatibility migrations `0002`–`0005`; the active catalog cannot discover
+them by path.
+
+Stable migration 0002 removes the duplicate document-type vocabulary after
+mapping each row and every live document, ACL, saved-view, automation, and
+template reference to a `type:<name>` tag. Unrepresentable tag-and-type
+automation conjunctions suspend rather than broadening. Paperless source types
+are translated at the importer boundary; no native type schema or API remains.
 
 `migrations.Prepare` delegates core admission to `db.PrepareStable`, which
 classifies the database before writing. Empty databases receive both active

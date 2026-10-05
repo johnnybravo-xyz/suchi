@@ -53,7 +53,6 @@ type ManifestFixture struct {
 	Filename      string         `json:"filename"`
 	Correspondent string         `json:"correspondent"`
 	JDCategory    int            `json:"jd_category"`
-	DocumentType  string         `json:"document_type,omitempty"`
 	Tags          []string       `json:"tags,omitempty"`
 	Language      string         `json:"language,omitempty"`
 	Cluster       string         `json:"cluster,omitempty"`

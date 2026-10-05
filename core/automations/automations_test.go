@@ -48,7 +48,7 @@ func TestApplyDocumentAdded(t *testing.T) {
 				"tag_ids": []any{float64(tag1), float64(tag2)},
 			}},
 			{Kind: "assign_title", Params: map[string]any{
-				"template": "{{correspondent}} — {{title}}",
+				"template": "{{correspondent}} — {{tags}} — {{title}}",
 			}},
 		}})
 	if err != nil {
@@ -63,7 +63,7 @@ func TestApplyDocumentAdded(t *testing.T) {
 	if err := d.Read.QueryRow(`SELECT title FROM documents WHERE id = ?`, docID).Scan(&title); err != nil {
 		t.Fatal(err)
 	}
-	if want := "Landlord — March rent"; title != want {
+	if want := "Landlord — housing,rent — March rent"; title != want {
 		t.Errorf("title = %q, want %q", title, want)
 	}
 	var tagCount int
