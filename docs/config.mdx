@@ -494,7 +494,8 @@ reload after a successful save; pinned fields retain their boot value.
 | `ingest.fs_watch_dir` / `ingest.fs_watch_owner_id` / `ingest.fs_watch_system` | Archive Configuration watcher destination values for fields not pinned at boot; the owner is a durable numeric user ID. |
 | `classification.auto_apply` | Shared automatic application mode; missing means enabled, malformed values fail closed. Saved independently of model configuration. |
 | `classification.archive_enabled` / `classification.archive_auto_threshold` / `classification.archive_review_threshold` | Live local matching, automatic threshold (default `0.90`) and minimum review-suggestion score (default `0.50`). Application also requires the shared mode and current guards. |
-| `llm.chatgpt_model` | Saved ChatGPT dropdown preference; selecting it does not activate inference or grant egress consent. |
+| `llm.subscriptions.{provider}.model` | Saved provider model dropdown preference; selecting it does not activate inference or grant egress consent. |
+| `llm.subscription_provider` | Explicit registered provider ID for the active subscription configuration; empty for endpoint models. `LLM_ENDPOINT_URL` overrides this selection. |
 | `llm.chatgpt_sealed` | Encrypted instance-wide ChatGPT Codex access/refresh credentials. Connect/disconnect in Classification settings; see [LLM classifier](/llm-classifier). |
 | `llm.endpoint_url` / `llm.model` / `llm.api_key_sealed` / `llm.egress_ack` / `llm.confidence_threshold` / `llm.disabled` | Live model configuration. `_sealed` is AEAD-encrypted with the settings key. |
 | `ocr.languages`                                                                                       | JSON array form of `OCR_LANGUAGES`.                                                                          |

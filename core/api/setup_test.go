@@ -726,73 +726,95 @@ type stringErr struct{ s string }
 
 func (e *stringErr) Error() string { return e.s }
 
-func TestChatGPTLoginRequiresAdministrator(t *testing.T) {
+type testSubscriptionProvider struct {
+	start  func(context.Context, int64) (settings.SubscriptionLogin, error)
+	models func(context.Context) ([]settings.SubscriptionModel, error)
+}
+
+func (p testSubscriptionProvider) Start(ctx context.Context, owner int64) (settings.SubscriptionLogin, error) {
+	return p.start(ctx, owner)
+}
+func (p testSubscriptionProvider) Poll(context.Context, int64) (settings.SubscriptionPoll, error) {
+	return settings.SubscriptionPoll{Pending: true}, nil
+}
+func (p testSubscriptionProvider) Cancel(context.Context, int64) error { return nil }
+func (p testSubscriptionProvider) Disconnect(context.Context) error    { return nil }
+func (p testSubscriptionProvider) Connected(context.Context) bool      { return true }
+func (p testSubscriptionProvider) Models(ctx context.Context) ([]settings.SubscriptionModel, error) {
+	return p.models(ctx)
+}
+
+func testSubscriptionLookup(p settings.SubscriptionProvider) func(string) (settings.SubscriptionProvider, bool) {
+	return func(id string) (settings.SubscriptionProvider, bool) { return p, id == "openai_chatgpt" }
+}
+
+func TestSubscriptionOperationsRequireAdministrator(t *testing.T) {
 	calls := 0
-	s := &Server{ChatGPTLogin: func(_ context.Context, owner int64, action string) (map[string]any, error) {
-		calls++
-		if owner != 7 || action != "start" {
-			t.Fatalf("wrong actor/action: %d %s", owner, action)
-		}
-		return map[string]any{"user_code": "ABCD"}, nil
-	}}
-	for _, tc := range []struct {
-		role   string
-		status int
-	}{{"", 401}, {"member", 403}, {"admin", 200}} {
-		r := httptest.NewRequest("POST", "/api/admin/settings/llm/chatgpt/start", nil)
-		r.SetPathValue("action", "start")
-		if tc.role != "" {
-			r = r.WithContext(auth.WithPrincipal(r.Context(), &pluginapi.Principal{Kind: "user", UserID: 7, Role: tc.role}))
-		}
-		w := httptest.NewRecorder()
-		s.ChatGPTLoginAction(w, r)
-		if w.Code != tc.status {
-			t.Fatalf("%s: %d %s", tc.role, w.Code, w.Body.String())
+	provider := testSubscriptionProvider{
+		start: func(_ context.Context, owner int64) (settings.SubscriptionLogin, error) {
+			calls++
+			if owner != 7 {
+				t.Fatalf("wrong actor %d", owner)
+			}
+			return settings.SubscriptionLogin{UserCode: "ABCD"}, nil
+		},
+		models: func(context.Context) ([]settings.SubscriptionModel, error) {
+			calls++
+			return []settings.SubscriptionModel{{ID: "test", Name: "Test"}}, nil
+		},
+	}
+	s := &Server{SubscriptionProvider: testSubscriptionLookup(provider)}
+	for _, operation := range []struct{ method, action string }{{"POST", "start"}, {"GET", "models"}} {
+		for _, tc := range []struct {
+			role   string
+			status int
+		}{{"", 401}, {"member", 403}, {"admin", 200}} {
+			r := httptest.NewRequest(operation.method, "/api/admin/settings/llm/subscriptions/openai_chatgpt/"+operation.action, nil)
+			r.SetPathValue("provider", "openai_chatgpt")
+			r.SetPathValue("action", operation.action)
+			if tc.role != "" {
+				r = r.WithContext(auth.WithPrincipal(r.Context(), &pluginapi.Principal{Kind: "user", UserID: 7, Role: tc.role}))
+			}
+			w := httptest.NewRecorder()
+			if operation.action == "models" {
+				s.SubscriptionModels(w, r)
+			} else {
+				s.SubscriptionLoginAction(w, r)
+			}
+			if w.Code != tc.status {
+				t.Fatalf("%s/%s: %d %s", operation.action, tc.role, w.Code, w.Body.String())
+			}
 		}
 	}
-	if calls != 1 {
+	if calls != 2 {
 		t.Fatalf("calls=%d", calls)
+	}
+	for _, action := range []string{"start", "poll", "cancel", "disconnect", "models"} {
+		r := httptest.NewRequest("POST", "/", nil)
+		r.SetPathValue("provider", "unknown")
+		r.SetPathValue("action", action)
+		r = r.WithContext(auth.WithPrincipal(r.Context(), adminPrincipal(7)))
+		w := httptest.NewRecorder()
+		s.SubscriptionLoginAction(w, r)
+		if w.Code != 404 {
+			t.Fatalf("unknown provider %s: %d", action, w.Code)
+		}
+	}
+	if calls != 2 {
+		t.Fatal("unknown provider reached adapter")
 	}
 }
 
-func TestChatGPTModelsRequiresAdministrator(t *testing.T) {
-	calls := 0
-	s := &Server{ChatGPTLogin: func(_ context.Context, owner int64, action string) (map[string]any, error) {
-		calls++
-		if owner != 7 || action != "models" {
-			t.Fatalf("wrong actor/action: %d %s", owner, action)
-		}
-		return map[string]any{"models": []any{map[string]string{"id": "test", "name": "Test"}}}, nil
-	}}
-	for _, tc := range []struct {
-		role   string
-		status int
-	}{{"", 401}, {"member", 403}, {"admin", 200}} {
-		r := httptest.NewRequest("GET", "/api/admin/settings/llm/chatgpt/models", nil)
-		if tc.role != "" {
-			r = r.WithContext(auth.WithPrincipal(r.Context(), &pluginapi.Principal{Kind: "user", UserID: 7, Role: tc.role}))
-		}
-		w := httptest.NewRecorder()
-		s.ChatGPTModels(w, r)
-		if w.Code != tc.status {
-			t.Fatalf("%s: %d %s", tc.role, w.Code, w.Body.String())
-		}
-	}
-	if calls != 1 {
-		t.Fatalf("calls=%d", calls)
-	}
-}
-
-func TestChatGPTModelSelectionPersistsWithoutActivatingModel(t *testing.T) {
+func TestSubscriptionModelSelectionPersistsWithoutActivatingModel(t *testing.T) {
 	d := openTestDB(t)
 	ctx := context.Background()
 	if err := settings.SetMany(ctx, d, map[string]any{
-		settings.KeyLLMEndpointURL: "https://chatgpt.com/backend-api/codex",
-		settings.KeyLLMModel:       "active-model", settings.KeyLLMDisabled: true, settings.KeyLLMEgressAck: false,
+		settings.KeyLLMSubscriptionProvider: "openai_chatgpt",
+		settings.KeyLLMModel:                "active-model", settings.KeyLLMDisabled: true, settings.KeyLLMEgressAck: false,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), LLMReloader: func(context.Context) error { t.Fatal("selection reloaded the provider"); return nil }}
+	s := &Server{DB: d, SubscriptionProvider: testSubscriptionLookup(testSubscriptionProvider{}), Log: slog.New(slog.NewTextHandler(io.Discard, nil)), LLMReloader: func(context.Context) error { t.Fatal("selection reloaded the provider"); return nil }}
 	patch := func(body string, actor *pluginapi.Principal) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(http.MethodPatch, "/api/admin/settings/llm", strings.NewReader(body))
 		if actor != nil {
@@ -802,15 +824,15 @@ func TestChatGPTModelSelectionPersistsWithoutActivatingModel(t *testing.T) {
 		s.PatchLLMSettings(w, r)
 		return w
 	}
-	for _, body := range []string{`{"chatgpt_model":null}`, `{"chatgpt_model":""}`, `{"chatgpt_model":"bad model"}`, `{"chatgpt_model":"chosen-model","auto_apply":true}`} {
+	for _, body := range []string{`{"subscription_provider":"openai_chatgpt","subscription_model":null}`, `{"subscription_provider":"openai_chatgpt","subscription_model":""}`, `{"subscription_provider":"openai_chatgpt","subscription_model":"bad model"}`, `{"subscription_provider":"openai_chatgpt","subscription_model":"chosen-model","auto_apply":true}`} {
 		if w := patch(body, adminPrincipal(1)); w.Code != 400 {
 			t.Fatalf("accepted invalid patch %s: %d", body, w.Code)
 		}
 	}
-	if w := patch(`{"chatgpt_model":"chosen-model"}`, &pluginapi.Principal{Kind: "user", Role: "member"}); w.Code != 403 {
+	if w := patch(`{"subscription_provider":"openai_chatgpt","subscription_model":"chosen-model"}`, &pluginapi.Principal{Kind: "user", Role: "member"}); w.Code != 403 {
 		t.Fatalf("member saved selection: %d", w.Code)
 	}
-	if w := patch(`{"chatgpt_model":"chosen-model"}`, adminPrincipal(1)); w.Code != 200 {
+	if w := patch(`{"subscription_provider":"openai_chatgpt","subscription_model":"chosen-model"}`, adminPrincipal(1)); w.Code != 200 {
 		t.Fatalf("save: %d %s", w.Code, w.Body.String())
 	}
 	fresh := &Server{DB: d}
@@ -818,7 +840,122 @@ func TestChatGPTModelSelectionPersistsWithoutActivatingModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.ChatGPTModel != "chosen-model" || status.Model != "active-model" || status.Enabled || status.EgressAck {
+	if status.SubscriptionStatus.Model != "chosen-model" || status.Model != "active-model" || status.Enabled || status.EgressAck {
 		t.Fatalf("selection changed activation/config: %+v", status)
+	}
+}
+
+func TestSubscriptionSettingsValidateProviderAndConsent(t *testing.T) {
+	d := openTestDB(t)
+	calls := 0
+	s := &Server{DB: d, SubscriptionProvider: testSubscriptionLookup(testSubscriptionProvider{}), LLMTester: func(_ context.Context, cfg LLMTestConfig) (LLMTestResult, error) {
+		calls++
+		if cfg.SubscriptionProvider != "openai_chatgpt" || cfg.EndpointURL != "" || !cfg.EgressAck {
+			t.Fatalf("wrong candidate: %+v", cfg)
+		}
+		return LLMTestResult{Title: "synthetic"}, nil
+	}}
+	for _, tc := range []struct {
+		body   string
+		status int
+	}{
+		{`{"subscription_provider":"unknown","model":"test","egress_ack":true}`, 400},
+		{`{"subscription_provider":"openai_chatgpt","model":"test"}`, 400},
+		{`{"subscription_provider":"openai_chatgpt","endpoint_url":"http://localhost/v1","model":"test","egress_ack":true}`, 400},
+		{`{"subscription_provider":"openai_chatgpt","api_key":"secret","model":"test","egress_ack":true}`, 400},
+		{`{"subscription_provider":"openai_chatgpt","model":"test","egress_ack":true}`, 200},
+	} {
+		r := httptest.NewRequest("POST", "/api/admin/settings/llm/test", strings.NewReader(tc.body))
+		r = r.WithContext(auth.WithPrincipal(r.Context(), adminPrincipal(7)))
+		w := httptest.NewRecorder()
+		s.TestLLMSettings(w, r)
+		if w.Code != tc.status {
+			t.Fatalf("%s: %d %s", tc.body, w.Code, w.Body.String())
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("invalid input reached provider: %d", calls)
+	}
+	var provider string
+	if err := settings.Get(context.Background(), d, settings.KeyLLMSubscriptionProvider, &provider); !errors.Is(err, settings.ErrNotFound) {
+		t.Fatalf("test persisted activation: %q %v", provider, err)
+	}
+}
+
+func TestPatchArchiveMatchingDoesNotTouchSubscription(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	cfg := settings.LLMConfig{SubscriptionProvider: "openai_chatgpt", Model: "saved-model", EgressAck: true, ConfidenceThreshold: .8}
+	if err := settings.SaveLLMConfig(ctx, d, cfg, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		SubscriptionProvider: func(string) (settings.SubscriptionProvider, bool) {
+			t.Fatal("matching save accessed account state")
+			return nil, false
+		},
+		LLMReloader: func(context.Context) error { t.Fatal("matching save reloaded inference"); return nil },
+	}
+	patch := func(body string, principal *pluginapi.Principal) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPatch, "/api/admin/settings/llm", strings.NewReader(body))
+		if principal != nil {
+			r = r.WithContext(auth.WithPrincipal(ctx, principal))
+		}
+		w := httptest.NewRecorder()
+		s.PatchLLMSettings(w, r)
+		return w
+	}
+	body := `{"archive_enabled":false,"archive_review_threshold":0.6,"archive_auto_threshold":0.85}`
+	if w := patch(body, nil); w.Code != 401 {
+		t.Fatalf("anonymous: %d", w.Code)
+	}
+	if w := patch(body, &pluginapi.Principal{Kind: "user", Role: "member"}); w.Code != 403 {
+		t.Fatalf("member: %d", w.Code)
+	}
+	for _, invalid := range []string{
+		`{"archive_enabled":null}`, `{"archive_enabled":"false"}`, `{"archive_review_threshold":0.95}`,
+		`{"archive_auto_threshold":0.5}`, `{"archive_review_threshold":0.9,"archive_auto_threshold":0.9}`,
+		`{"archive_enabled":false,"auto_apply":false}`, `{"archive_enabled":false,"subscription_provider":"openai_chatgpt"}`,
+		`{"archive_enabled":false,"subscription_model":"new-model","subscription_provider":"openai_chatgpt"}`,
+		`{"archive_enabled":false,"endpoint_url":"http://localhost/v1"}`,
+	} {
+		if w := patch(invalid, adminPrincipal(1)); w.Code != 400 {
+			t.Fatalf("accepted %s: %d %s", invalid, w.Code, w.Body.String())
+		}
+	}
+	if w := patch(body, adminPrincipal(1)); w.Code != 200 {
+		t.Fatalf("save: %d %s", w.Code, w.Body.String())
+	}
+	archive := settings.ResolveArchiveClassifierConfig(ctx, d)
+	if archive.Enabled || archive.ReviewThreshold != .6 || archive.AutoThreshold != .85 {
+		t.Fatalf("matching config: %+v", archive)
+	}
+	if w := patch(`{"archive_enabled":true}`, adminPrincipal(1)); w.Code != 200 {
+		t.Fatalf("partial save: %d %s", w.Code, w.Body.String())
+	}
+	archive = settings.ResolveArchiveClassifierConfig(ctx, d)
+	if !archive.Enabled || archive.ReviewThreshold != .6 || archive.AutoThreshold != .85 {
+		t.Fatalf("partial save lost thresholds: %+v", archive)
+	}
+	fresh, err := settings.ResolveLLMConfig(ctx, d, settings.LLMConfig{}, nil)
+	if err != nil || fresh != cfg {
+		t.Fatalf("matching save changed model: %+v %v", fresh, err)
+	}
+}
+
+type disconnectedSubscriptionProvider struct{ testSubscriptionProvider }
+
+func (disconnectedSubscriptionProvider) Connected(context.Context) bool { return false }
+
+func TestDisconnectedSubscriptionStillRejectsActivationAndTest(t *testing.T) {
+	s := &Server{DB: openTestDB(t), SubscriptionProvider: testSubscriptionLookup(disconnectedSubscriptionProvider{})}
+	for _, handler := range []http.HandlerFunc{s.SaveLLMSettings, s.TestLLMSettings} {
+		r := httptest.NewRequest(http.MethodPost, "/api/admin/settings/llm", strings.NewReader(`{"enabled":true,"subscription_provider":"openai_chatgpt","model":"saved-model","egress_ack":true}`))
+		r = r.WithContext(auth.WithPrincipal(r.Context(), adminPrincipal(1)))
+		w := httptest.NewRecorder()
+		handler(w, r)
+		if w.Code != 400 || !strings.Contains(w.Body.String(), "subscription_not_connected") {
+			t.Fatalf("disconnected account accepted: %d %s", w.Code, w.Body.String())
+		}
 	}
 }

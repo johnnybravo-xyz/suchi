@@ -55,7 +55,7 @@ func TestChatGPTLoginLifecycle(t *testing.T) {
 	defer server.Close()
 	login.authURL = server.URL
 	ctx := context.Background()
-	result, err := login.Action(ctx, 1, "start")
+	result, err := login.Start(ctx, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,32 +63,32 @@ func TestChatGPTLoginLifecycle(t *testing.T) {
 	if strings.Contains(string(raw), "secret-device") {
 		t.Fatal("device ID leaked")
 	}
-	if _, err = login.Action(ctx, 2, "poll"); err == nil {
+	if _, err = login.Poll(ctx, 2); err == nil {
 		t.Fatal("another admin consumed login")
 	}
-	result, err = login.Action(ctx, 1, "poll")
-	if err != nil || result["pending"] != true {
-		t.Fatalf("poll rate limit: %v %v", result, err)
+	pollResult, err := login.Poll(ctx, 1)
+	if err != nil || pollResult.Pending != true {
+		t.Fatalf("poll rate limit: %v %v", pollResult, err)
 	}
 	device := login.pending[1]
 	device.next = time.Time{}
 	login.pending[1] = device
-	result, err = login.Action(ctx, 1, "poll")
-	if err != nil || result["pending"] != true {
-		t.Fatalf("pending grant: %v %v", result, err)
+	pollResult, err = login.Poll(ctx, 1)
+	if err != nil || pollResult.Pending != true {
+		t.Fatalf("pending grant: %v %v", pollResult, err)
 	}
 	device = login.pending[1]
 	if time.Until(device.next) < 19*time.Second {
 		t.Fatal("poll discarded upstream interval")
 	}
-	if _, err = login.Action(ctx, 1, "poll"); err != nil || polls.Load() != 1 {
+	if _, err = login.Poll(ctx, 1); err != nil || polls.Load() != 1 {
 		t.Fatalf("poll was not throttled: calls=%d err=%v", polls.Load(), err)
 	}
 	device.next = time.Time{}
 	login.pending[1] = device
-	result, err = login.Action(ctx, 1, "poll")
-	if err != nil || result["connected"] != true {
-		t.Fatalf("connect: %v %v", result, err)
+	pollResult, err = login.Poll(ctx, 1)
+	if err != nil || pollResult.Connected != true {
+		t.Fatalf("connect: %v %v", pollResult, err)
 	}
 	var sealed []byte
 	if err = settings.Get(ctx, d, chatGPTSecret, &sealed); err != nil {
@@ -119,7 +119,7 @@ func TestChatGPTLoginLifecycle(t *testing.T) {
 	if refreshes.Load() != 1 {
 		t.Fatalf("refreshes=%d", refreshes.Load())
 	}
-	if _, err = restarted.Action(ctx, 1, "disconnect"); err != nil {
+	if err = restarted.Disconnect(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if restarted.Connected(ctx) {
@@ -169,9 +169,17 @@ type chatGPTRoundTrip func(*http.Request) (*http.Response, error)
 
 func (f chatGPTRoundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 func TestChatGPTTransport(t *testing.T) {
-	p, err := New(Config{EndpointURL: ChatGPTEndpoint, Model: "subscription-model", EgressAck: true, APIKey: "must-not-leak", ChatGPTCredential: func(context.Context) (ChatGPTCredential, error) {
-		return ChatGPTCredential{AccessToken: "access", AccountID: "acct"}, nil
-	}}, silentLog())
+	d, _ := openHandlerDocument(t, "title", "text")
+	key, err := suchicrypto.LoadOrCreateKey(filepath.Join(t.TempDir(), "key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	subscriptions := NewSubscriptions(d, key)
+	login := subscriptions.providers[OpenAIChatGPT].(*ChatGPTLogin)
+	if err := login.save(context.Background(), ChatGPTCredential{AccessToken: "access", RefreshToken: "refresh", AccountID: "acct", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	p, err := New(Config{SubscriptionProvider: OpenAIChatGPT, Subscriptions: subscriptions, Model: "subscription-model", EgressAck: true, APIKey: "must-not-leak"}, silentLog())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +231,7 @@ func TestChatGPTModelCatalog(t *testing.T) {
 				}
 				return &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader(tc.body))}, nil
 			})
-			result, err := login.Action(ctx, 1, "models")
+			models, err := login.Models(ctx)
 			if tc.wantError {
 				if err == nil {
 					t.Fatal("accepted bad catalog")
@@ -236,14 +244,14 @@ func TestChatGPTModelCatalog(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			models := result["models"].([]ChatGPTModel)
+
 			if len(models) != tc.count {
 				t.Fatalf("models=%v", models)
 			}
 			if len(models) > 0 && (models[0].Name != "First" || models[1].Name != "two") {
 				t.Fatalf("names=%v", models)
 			}
-			raw, _ := json.Marshal(result)
+			raw, _ := json.Marshal(models)
 			if strings.Contains(string(raw), "access") || strings.Contains(string(raw), "private") {
 				t.Fatal("catalog leaked credentials/upstream fields")
 			}
@@ -278,5 +286,27 @@ data: {"type":"response.output_item.done","output_index":0,"item":{"type":"messa
 		if _, err := readChatGPTResponse(strings.NewReader(stream + ending + "\n")); err == nil {
 			t.Fatalf("accepted unfinished/refused output: %s", ending)
 		}
+	}
+}
+
+func TestSubscriptionSelectionUsesProviderID(t *testing.T) {
+	subscriptions := NewSubscriptions(nil, nil)
+	if _, ok := subscriptions.Provider("unknown"); ok {
+		t.Fatal("unknown provider accepted")
+	}
+	if _, err := runtimeFromConfig(Config{SubscriptionProvider: "unknown", Subscriptions: subscriptions, EndpointURL: ChatGPTEndpoint, Model: "model", EgressAck: true}); err == nil {
+		t.Fatal("endpoint bypassed provider validation")
+	}
+	rt, err := runtimeFromConfig(Config{SubscriptionProvider: OpenAIChatGPT, Subscriptions: subscriptions, EndpointURL: "http://attacker.invalid", APIKey: "must-not-leak", Model: "model", EgressAck: true})
+	if err != nil || rt.cfg.EndpointURL != ChatGPTEndpoint || rt.cfg.APIKey != "" {
+		t.Fatalf("provider did not derive transport: %v %v", rt, err)
+	}
+	rt, err = runtimeFromConfig(Config{EndpointURL: ChatGPTEndpoint, Model: "model", EgressAck: true})
+	if err != nil || rt.cfg.SubscriptionProvider != "" {
+		t.Fatalf("URL selected a subscription: %v %v", rt, err)
+	}
+	p, err := New(Config{SubscriptionProvider: OpenAIChatGPT, Subscriptions: subscriptions, Model: "model"}, silentLog())
+	if err != nil || p != nil {
+		t.Fatalf("subscription enabled without consent: %v %v", p, err)
 	}
 }

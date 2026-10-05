@@ -670,22 +670,39 @@ barcode limits and dependencies. [Pipeline versions](/pipeline-versions) describ
 repair of older derivatives. Verify actual tools/output, not binary presence or
 an `archive_blob` field alone.
 
-The compiled LLM classifier also owns ChatGPT Codex device login and streaming
-Responses transport in `plugins/llm-classifier/chatgpt.go`. `distro/app` injects
-login and credential callbacks into the API/plugin. Session-only administrator
-routes under `/api/admin/settings/llm/chatgpt/{action}` start, poll, cancel and
-disconnect login; the session-only `GET /api/admin/settings/llm/chatgpt/models`
-route returns the connected account catalog with only model IDs/names. Pending
-device grants are administrator-bound in memory. The existing administrator
-settings PATCH stores `llm.chatgpt_model` as a separate dropdown preference,
-returned in settings status without reloading or enabling the provider;
-instance-wide tokens use the settings table and existing AEAD key. Refresh is
-serialized and saved before inference, outside write transactions. Credentials
-are sent only to fixed OpenAI auth/Codex hosts, with redirects refused. The
-transport retains finalized stream parts and accepts them only after a
-successful completion event, including Codex envelopes that omit output. Document
-egress still requires the model's explicit acknowledgement. See [LLM classifier](/llm-classifier).
-Verify with `go test -race ./plugins/llm-classifier` and `make smoke`.
+Account subscription is a provider-neutral settings/API boundary.
+`core/settings/subscriptions.go` defines typed login, poll, model and masked
+status contracts. `plugins/llm-classifier/subscriptions.go` owns a private
+registry; `openai_chatgpt` is its first shipped adapter. `distro/app` injects
+provider lookup into the API and the registry into the classifier, and stops
+active inference on disconnect. Runtime selection uses the explicit provider ID,
+never an endpoint URL comparison. Endpoint models retain their existing path.
+
+Administrator browser-session routes under
+`/api/admin/settings/llm/subscriptions/{provider}/{action}` start, poll, cancel
+and disconnect; `GET /api/admin/settings/llm/subscriptions/{provider}/models`
+returns only provider model IDs/names. Unknown provider IDs are rejected.
+Settings store active `llm.subscription_provider` separately from the model
+preference `llm.subscriptions.{provider}.model`. Preference PATCH does not reload
+or enable inference. Local matching fields have a separate PATCH group; it writes
+only the archive classifier settings consumed by `core/automations` on each
+application, without validating account state or reloading the model. This keeps
+local matching configurable after disconnect. Boot endpoint overrides select
+endpoint mode.
+
+The OpenAI adapter in `plugins/llm-classifier/chatgpt.go` owns client ID, fixed
+hosts, token claims, credential format, catalog and streaming Responses parser.
+Pending device grants remain administrator-bound in memory; instance-wide
+credentials remain encrypted in SQLite with the existing AEAD key. Refresh is
+serialized outside write transactions, and redirects are refused. Finalized
+stream parts are accepted only after successful completion; incomplete, failed,
+empty and refused responses are rejected. Account connection/model selection
+never grants document egress consent or enables inference. Browser activation
+still requires acknowledgement and a successful synthetic model test. See
+[LLM classifier](/llm-classifier).
+Verify with `go test ./core/api ./core/settings ./distro/app`,
+`go test -race ./plugins/llm-classifier`,
+`cd ui && bun run e2e --grep 'Account subscription'`, and `make smoke`.
 
 ## Change and verification map
 

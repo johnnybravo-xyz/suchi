@@ -30,19 +30,20 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	"github.com/johnnybravo-xyz/suchi/core/ingest/emailwatch/oauth"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
+	"github.com/johnnybravo-xyz/suchi/core/settings"
 	"github.com/johnnybravo-xyz/suchi/core/trash"
 )
 
 // LLMSettingsStatus is the masked admin-facing classifier state. API keys are
 // represented only by HasAPIKey and never cross back to the browser.
 type LLMSettingsStatus struct {
-	Enabled             bool    `json:"enabled"`
-	Active              bool    `json:"active"`
-	EndpointURL         string  `json:"endpoint_url"`
-	Model               string  `json:"model"`
-	EgressAck           bool    `json:"egress_ack"`
-	ChatGPTModel        string  `json:"chatgpt_model"`
-	ChatGPTConnected    bool    `json:"chatgpt_connected"`
+	Enabled     bool   `json:"enabled"`
+	Active      bool   `json:"active"`
+	EndpointURL string `json:"endpoint_url"`
+	Model       string `json:"model"`
+	EgressAck   bool   `json:"egress_ack"`
+	settings.SubscriptionStatus
+	Mode                string  `json:"mode"`
 	HasAPIKey           bool    `json:"has_api_key"`
 	ConfidenceThreshold float64 `json:"confidence_threshold"`
 	AutoApply           bool    `json:"auto_apply"`
@@ -53,12 +54,13 @@ type LLMSettingsStatus struct {
 }
 
 type LLMTestConfig struct {
-	EndpointURL         string
-	Model               string
-	APIKey              string
-	ClearAPIKey         bool
-	EgressAck           bool
-	ConfidenceThreshold float64
+	SubscriptionProvider string
+	EndpointURL          string
+	Model                string
+	APIKey               string
+	ClearAPIKey          bool
+	EgressAck            bool
+	ConfidenceThreshold  float64
 }
 
 type LLMTestResult struct {
@@ -138,9 +140,9 @@ type Server struct {
 	// LLMStatusReader resolves settings plus live plugin state without
 	// exposing the API key. LLMTester verifies a candidate configuration
 	// against synthetic text and does not persist it.
-	LLMStatusReader func(ctx context.Context) (LLMSettingsStatus, error)
-	ChatGPTLogin    func(context.Context, int64, string) (map[string]any, error)
-	LLMTester       func(ctx context.Context, cfg LLMTestConfig) (LLMTestResult, error)
+	LLMStatusReader      func(ctx context.Context) (LLMSettingsStatus, error)
+	SubscriptionProvider func(string) (settings.SubscriptionProvider, bool)
+	LLMTester            func(ctx context.Context, cfg LLMTestConfig) (LLMTestResult, error)
 	// ChatEnabled follows the active runtime model. ChatCompletion is the
 	// narrow completion seam; core/api never imports the plugin.
 	ChatEnabled     func() bool

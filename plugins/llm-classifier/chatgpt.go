@@ -169,7 +169,7 @@ func (l *ChatGPTLogin) Credential(ctx context.Context) (ChatGPTCredential, error
 	defer l.mu.Unlock()
 	cred, err := l.read(ctx)
 	if err != nil {
-		return cred, errors.New("Connect your ChatGPT subscription in Classification settings")
+		return cred, errors.New("connect your account subscription in Classification settings")
 	}
 	if time.Until(cred.ExpiresAt) > 5*time.Minute {
 		return cred, nil
@@ -184,98 +184,103 @@ func (l *ChatGPTLogin) Credential(ctx context.Context) (ChatGPTCredential, error
 	}
 	return cred, nil
 }
-func (l *ChatGPTLogin) Action(ctx context.Context, owner int64, action string) (map[string]any, error) {
-	if action == "models" {
-		models, err := l.Models(ctx)
-		return map[string]any{"models": models}, err
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.key == nil {
-		return nil, errors.New("ChatGPT secret storage is unavailable")
-	}
-	now := time.Now()
+func (l *ChatGPTLogin) expirePending(now time.Time) {
 	for id, device := range l.pending {
 		if now.After(device.expires) {
 			delete(l.pending, id)
 		}
 	}
-	switch action {
-	case "start":
-		var device chatGPTDevice
-		if _, err := l.post(ctx, "/api/accounts/deviceauth/usercode", map[string]string{"client_id": chatGPTClientID}, &device); err != nil {
-			return nil, err
-		}
-		if device.DeviceID == "" || device.Code == "" {
-			return nil, errors.New("ChatGPT returned no device code")
-		}
-		interval := 5
-		var seconds int
-		if json.Unmarshal(device.Interval, &seconds) != nil {
-			var s string
-			_ = json.Unmarshal(device.Interval, &s)
-			_, _ = fmt.Sscan(s, &seconds)
-		}
-		if seconds > interval && seconds < 60 {
-			interval = seconds
-		}
-		device.expires = now.Add(15 * time.Minute)
-		device.pollInterval = time.Duration(interval) * time.Second
-		device.next = now.Add(device.pollInterval)
-		l.pending[owner] = device
-		return map[string]any{"user_code": device.Code, "verification_url": "https://auth.openai.com/codex/device", "interval": interval}, nil
-	case "cancel":
-		delete(l.pending, owner)
-		return map[string]any{"canceled": true}, nil
-	case "disconnect":
-		clear(l.pending)
-		if err := settings.Delete(ctx, l.database, chatGPTSecret); err != nil {
-			return nil, err
-		}
-		return map[string]any{"connected": false}, nil
-	case "poll":
-		device, ok := l.pending[owner]
-		if !ok {
-			return nil, errors.New("ChatGPT login expired; start again")
-		}
-		if now.Before(device.next) {
-			return map[string]any{"pending": true}, nil
-		}
-		device.next = now.Add(device.pollInterval)
-		l.pending[owner] = device
-		var grant struct {
-			Code     string `json:"authorization_code"`
-			Verifier string `json:"code_verifier"`
-		}
-		status, err := l.post(ctx, "/api/accounts/deviceauth/token", map[string]string{"device_auth_id": device.DeviceID, "user_code": device.Code}, &grant)
-		if status == 403 || status == 404 {
-			return map[string]any{"pending": true}, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-		if grant.Code == "" || grant.Verifier == "" {
-			return nil, errors.New("ChatGPT returned no authorization grant")
-		}
-		delete(l.pending, owner)
-		form := url.Values{"grant_type": {"authorization_code"}, "code": {grant.Code}, "code_verifier": {grant.Verifier}, "client_id": {chatGPTClientID}, "redirect_uri": {l.authURL + "/deviceauth/callback"}}
-		cred, err := l.tokens(ctx, "/oauth/token", "application/x-www-form-urlencoded", []byte(form.Encode()), ChatGPTCredential{})
-		if err != nil {
-			return nil, err
-		}
-		if err = l.save(ctx, cred); err != nil {
-			return nil, err
-		}
-		clear(l.pending)
-		return map[string]any{"connected": true}, nil
-	default:
-		return nil, errors.New("Unknown ChatGPT login action")
+}
+func (l *ChatGPTLogin) Start(ctx context.Context, owner int64) (settings.SubscriptionLogin, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.key == nil {
+		return settings.SubscriptionLogin{}, errors.New("ChatGPT secret storage is unavailable")
 	}
+	now := time.Now()
+	l.expirePending(now)
+	var device chatGPTDevice
+	if _, err := l.post(ctx, "/api/accounts/deviceauth/usercode", map[string]string{"client_id": chatGPTClientID}, &device); err != nil {
+		return settings.SubscriptionLogin{}, err
+	}
+	if device.DeviceID == "" || device.Code == "" {
+		return settings.SubscriptionLogin{}, errors.New("ChatGPT returned no device code")
+	}
+	interval := 5
+	var seconds int
+	if json.Unmarshal(device.Interval, &seconds) != nil {
+		var s string
+		_ = json.Unmarshal(device.Interval, &s)
+		_, _ = fmt.Sscan(s, &seconds)
+	}
+	if seconds > interval && seconds < 60 {
+		interval = seconds
+	}
+	device.expires = now.Add(15 * time.Minute)
+	device.pollInterval = time.Duration(interval) * time.Second
+	device.next = now.Add(device.pollInterval)
+	l.pending[owner] = device
+	return settings.SubscriptionLogin{UserCode: device.Code, VerificationURL: "https://auth.openai.com/codex/device", Interval: interval}, nil
+}
+func (l *ChatGPTLogin) Poll(ctx context.Context, owner int64) (settings.SubscriptionPoll, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.key == nil {
+		return settings.SubscriptionPoll{}, errors.New("ChatGPT secret storage is unavailable")
+	}
+	now := time.Now()
+	l.expirePending(now)
+	device, ok := l.pending[owner]
+	if !ok {
+		return settings.SubscriptionPoll{}, errors.New("ChatGPT login expired; start again")
+	}
+	if now.Before(device.next) {
+		return settings.SubscriptionPoll{Pending: true}, nil
+	}
+	device.next = now.Add(device.pollInterval)
+	l.pending[owner] = device
+	var grant struct {
+		Code     string `json:"authorization_code"`
+		Verifier string `json:"code_verifier"`
+	}
+	status, err := l.post(ctx, "/api/accounts/deviceauth/token", map[string]string{"device_auth_id": device.DeviceID, "user_code": device.Code}, &grant)
+	if status == 403 || status == 404 {
+		return settings.SubscriptionPoll{Pending: true}, nil
+	}
+	if err != nil {
+		return settings.SubscriptionPoll{}, err
+	}
+	if grant.Code == "" || grant.Verifier == "" {
+		return settings.SubscriptionPoll{}, errors.New("ChatGPT returned no authorization grant")
+	}
+	delete(l.pending, owner)
+	form := url.Values{"grant_type": {"authorization_code"}, "code": {grant.Code}, "code_verifier": {grant.Verifier}, "client_id": {chatGPTClientID}, "redirect_uri": {l.authURL + "/deviceauth/callback"}}
+	cred, err := l.tokens(ctx, "/oauth/token", "application/x-www-form-urlencoded", []byte(form.Encode()), ChatGPTCredential{})
+	if err != nil {
+		return settings.SubscriptionPoll{}, err
+	}
+	if err = l.save(ctx, cred); err != nil {
+		return settings.SubscriptionPoll{}, err
+	}
+	clear(l.pending)
+	return settings.SubscriptionPoll{Connected: true}, nil
+}
+func (l *ChatGPTLogin) Cancel(_ context.Context, owner int64) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.pending, owner)
+	return nil
+}
+func (l *ChatGPTLogin) Disconnect(ctx context.Context) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	clear(l.pending)
+	return settings.Delete(ctx, l.database, chatGPTSecret)
 }
 
 // Models returns the connected account's catalog, in upstream preference order.
 // Catalog membership is not an entitlement guarantee; a completion verifies access.
-func (l *ChatGPTLogin) Models(ctx context.Context) ([]ChatGPTModel, error) {
+func (l *ChatGPTLogin) Models(ctx context.Context) ([]settings.SubscriptionModel, error) {
 	cred, err := l.Credential(ctx)
 	if err != nil {
 		return nil, err
@@ -304,7 +309,7 @@ func (l *ChatGPTLogin) Models(ctx context.Context) ([]ChatGPTModel, error) {
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&catalog); err != nil {
 		return nil, errors.New("ChatGPT model catalog was invalid")
 	}
-	models := make([]ChatGPTModel, 0, len(catalog.Models))
+	models := make([]settings.SubscriptionModel, 0, len(catalog.Models))
 	seen := make(map[string]bool)
 	for _, model := range catalog.Models {
 		if model.Slug == "" || seen[model.Slug] {
@@ -314,21 +319,13 @@ func (l *ChatGPTLogin) Models(ctx context.Context) ([]ChatGPTModel, error) {
 		if model.Name == "" {
 			model.Name = model.Slug
 		}
-		models = append(models, ChatGPTModel{ID: model.Slug, Name: model.Name})
+		models = append(models, settings.SubscriptionModel{ID: model.Slug, Name: model.Name})
 	}
 	return models, nil
 }
 
-type ChatGPTModel struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-}
-
-func (p *Plugin) chatGPTCompletion(ctx context.Context, rt *runtime, body []byte) ([]byte, error) {
-	if rt.cfg.ChatGPTCredential == nil {
-		return nil, errors.New("ChatGPT subscription login is unavailable")
-	}
-	cred, err := rt.cfg.ChatGPTCredential(ctx)
+func (l *ChatGPTLogin) complete(ctx context.Context, rt *runtime, body []byte) ([]byte, error) {
+	cred, err := l.Credential(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -408,7 +405,7 @@ func readChatGPTResponse(reader io.Reader) ([]byte, error) {
 			} `json:"response"`
 		}
 		if err := json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))), &event); err != nil {
-			return nil, errors.New("Invalid ChatGPT stream event")
+			return nil, errors.New("invalid ChatGPT stream event")
 		}
 		switch event.Type {
 		case "response.output_text.done":

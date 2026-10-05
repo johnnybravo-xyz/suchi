@@ -3,8 +3,8 @@
   import { scopedHash as filingHref, systems } from '../lib/systems.svelte.js'
   import { untrack, onDestroy } from 'svelte'
   import { adminListUsers,
-           getLLMSettings, saveLLMSettings, testLLMSettings, chatGPTLoginAction, getChatGPTModels, saveChatGPTModel,
-           saveResearchContextMode, saveClassificationAutoApply,
+           getLLMSettings, saveLLMSettings, testLLMSettings, subscriptionLoginAction, getSubscriptionModels, saveSubscriptionModel,
+           saveResearchContextMode, saveClassificationAutoApply, saveArchiveMatchingSettings,
            getPreferences, savePreferences, getIngestSettings, saveIngestSettings } from '../lib/api.js'
   import { isLocalEndpoint } from '../lib/net.js'
   import EmailAccounts from '../lib/EmailAccounts.svelte'
@@ -59,12 +59,12 @@
   let autoApply = $state(false)
   let llmStatus = $state(null)
   let llmTesting = $state(false)
-  const chatGPTEndpoint = 'https://chatgpt.com/backend-api/codex'
+  let subscriptionProvider = $state('openai_chatgpt')
   let llmMode = $state('local')
   let loginCode = $state(null)
   let loginBusy = $state(false)
   let loginError = $state('')
-  let chatGPTModels = $state([])
+  let subscriptionModels = $state([])
   let modelsLoading = $state(false)
   let modelsError = $state('')
   let modelSaving = $state(false)
@@ -75,72 +75,72 @@
   let loginGeneration = 0
   onDestroy(() => { disposed = true; loginGeneration++; modelsGeneration++; clearTimeout(loginTimer) })
 
-  async function loadChatGPTModels() {
+  async function loadSubscriptionModels() {
     const generation = ++modelsGeneration
     modelsLoading = true; modelsError = ''
     invalidateLLMTest()
     try {
-      const result = await getChatGPTModels()
-      if (disposed || generation !== modelsGeneration || llmMode !== 'chatgpt' || !llmStatus?.chatgpt_connected) return
-      chatGPTModels = result.models || []
-      if (!chatGPTModels.some(model => model.id === llm.model)) llm.model = chatGPTModels[0]?.id || ''
+      const result = await getSubscriptionModels(subscriptionProvider)
+      if (disposed || generation !== modelsGeneration || llmMode !== 'subscription' || !llmStatus?.subscription_connected) return
+      subscriptionModels = result.models || []
+      if (!subscriptionModels.some(model => model.id === llm.model)) llm.model = subscriptionModels[0]?.id || ''
     } catch (ex) {
-      if (!disposed && generation === modelsGeneration) { modelsError = ex.message || 'Could not load ChatGPT models.'; chatGPTModels = [] }
+      if (!disposed && generation === modelsGeneration) { modelsError = ex.message || 'Could not load ChatGPT models.'; subscriptionModels = [] }
     } finally { if (!disposed && generation === modelsGeneration) modelsLoading = false }
   }
 
-  async function persistChatGPTModel() {
+  async function persistSubscriptionModel() {
     const model = llm.model
     if (!model || modelSaving) return
     invalidateLLMTest()
     modelSaving = true; modelSaveError = ''
     try {
-      const result = await saveChatGPTModel(model)
+      const result = await saveSubscriptionModel(subscriptionProvider, model)
       if (disposed) return
-      llmStatus = { ...llmStatus, chatgpt_model: result.chatgpt_model }
+      llmStatus = { ...llmStatus, subscription_model: result.subscription_model }
       notify?.('Model selection saved. Test and enable it to use this model.')
     } catch (ex) {
       if (!disposed) modelSaveError = ex.message || 'Could not save model selection.'
     } finally { if (!disposed) modelSaving = false }
   }
 
-  async function startChatGPTLogin() {
+  async function startSubscriptionLogin() {
     clearTimeout(loginTimer)
     const generation = ++loginGeneration
     loginBusy = true; loginError = ''; loginCode = null
     try {
-      const code = await chatGPTLoginAction('start')
+      const code = await subscriptionLoginAction(subscriptionProvider, 'start')
       if (disposed || generation !== loginGeneration) return
       loginCode = code
-      loginTimer = setTimeout(() => pollChatGPTLogin(generation), code.interval * 1000)
+      loginTimer = setTimeout(() => pollSubscriptionLogin(generation), code.interval * 1000)
     } catch (ex) { if (!disposed && generation === loginGeneration) loginError = ex.message }
     finally { if (!disposed && generation === loginGeneration) loginBusy = false }
   }
-  async function pollChatGPTLogin(generation) {
+  async function pollSubscriptionLogin(generation) {
     if (disposed || generation !== loginGeneration) return
     try {
-      const result = await chatGPTLoginAction('poll')
+      const result = await subscriptionLoginAction(subscriptionProvider, 'poll')
       if (disposed || generation !== loginGeneration) return
       if (result.pending) {
-        loginTimer = setTimeout(() => pollChatGPTLogin(generation), (loginCode?.interval || 5) * 1000)
+        loginTimer = setTimeout(() => pollSubscriptionLogin(generation), (loginCode?.interval || 5) * 1000)
       } else {
         loginCode = null
-        llmStatus = { ...llmStatus, chatgpt_connected: true }
+        llmStatus = { ...llmStatus, subscription_connected: true }
         invalidateLLMTest()
-        if (llmMode === 'chatgpt') void loadChatGPTModels()
+        if (llmMode === 'subscription') void loadSubscriptionModels()
         notify?.('ChatGPT connected. Test the model before enabling it.')
       }
     } catch (ex) { if (!disposed && generation === loginGeneration) { loginError = ex.message; loginCode = null } }
   }
-  async function endChatGPTLogin(action) {
+  async function endSubscriptionLogin(action) {
     loginGeneration++; clearTimeout(loginTimer); loginCode = null
     loginBusy = true; loginError = ''
     try {
-      await chatGPTLoginAction(action)
+      await subscriptionLoginAction(subscriptionProvider, action)
       if (disposed) return
       if (action === 'disconnect') {
-        modelsGeneration++; modelsLoading = false; chatGPTModels = []; modelsError = ''; llm.model = ''
-        llmStatus = { ...llmStatus, chatgpt_connected: false, active: llmStatus?.endpoint_url === chatGPTEndpoint ? false : llmStatus?.active }
+        modelsGeneration++; modelsLoading = false; subscriptionModels = []; modelsError = ''; llm.model = ''
+        llmStatus = { ...llmStatus, subscription_connected: false, active: llmStatus?.mode === 'subscription' ? false : llmStatus?.active }
         invalidateLLMTest()
       }
     } catch (ex) { if (!disposed) loginError = ex.message }
@@ -182,11 +182,12 @@
       ? st.research_context_mode : 'balanced'
     llm.api_key = ''
     llm.clear_api_key = false
-    llmMode = st?.endpoint_url === chatGPTEndpoint || (!st?.endpoint_url && st?.chatgpt_connected) ? 'chatgpt' : st?.endpoint_url && !isLocalEndpoint(st.endpoint_url) ? 'hosted' : 'local'
-    if (llmMode === 'chatgpt') {
-      llm.endpoint_url = chatGPTEndpoint
-      llm.model = st?.chatgpt_model || st?.model || ''
-      if (st?.chatgpt_connected) void loadChatGPTModels()
+    subscriptionProvider = st?.subscription_provider || 'openai_chatgpt'
+    llmMode = st?.mode === 'subscription' || (!st?.endpoint_url && st?.subscription_connected) ? 'subscription' : st?.endpoint_url && !isLocalEndpoint(st.endpoint_url) ? 'hosted' : 'local'
+    if (llmMode === 'subscription') {
+      llm.endpoint_url = ''
+      llm.model = st?.subscription_model || st?.model || ''
+      if (st?.subscription_connected) void loadSubscriptionModels()
     }
   }
   async function loadPreferences() {
@@ -248,6 +249,7 @@
   function llmPayload(enabled) {
     return {
       enabled,
+      subscription_provider: llmMode === 'subscription' ? subscriptionProvider : '',
       endpoint_url: llm.endpoint_url,
       model: llm.model,
       api_key: llm.api_key || '',
@@ -262,13 +264,6 @@
 
   function matchingPayload() {
     return {
-      enabled: !!llmStatus?.enabled,
-      endpoint_url: llmStatus?.endpoint_url || '',
-      model: llmStatus?.model || '',
-      api_key: '',
-      clear_api_key: false,
-      egress_ack: !!llmStatus?.egress_ack,
-      confidence_threshold: llmStatus?.confidence_threshold ?? 0.7,
       archive_enabled: llm.archive_enabled,
       archive_review_threshold: Number(llm.archive_review_threshold),
       archive_auto_threshold: Number(llm.archive_auto_threshold),
@@ -283,24 +278,25 @@
 
   function setLLMMode(mode) {
     if (llmMode === mode) return
-    if (loginCode) void endChatGPTLogin('cancel')
-    modelsGeneration++; modelsLoading = false; chatGPTModels = []; modelsError = ''
+    if (loginCode) void endSubscriptionLogin('cancel')
+    modelsGeneration++; modelsLoading = false; subscriptionModels = []; modelsError = ''
     llmMode = mode
     modelSaveError = ''
     llm.api_key = ''
+    llm.clear_api_key = false
     invalidateLLMTest()
-    if (mode === 'chatgpt') {
-      llm.endpoint_url = chatGPTEndpoint
-      llm.model = llmStatus?.chatgpt_model || (llmStatus?.endpoint_url === chatGPTEndpoint ? llmStatus.model : '')
+    if (mode === 'subscription') {
+      llm.endpoint_url = ''
+      llm.model = llmStatus?.subscription_model || (llmStatus?.mode === 'subscription' ? llmStatus.model : '')
       llm.egress_ack = false
-      if (llmStatus?.chatgpt_connected) void loadChatGPTModels()
+      if (llmStatus?.subscription_connected) void loadSubscriptionModels()
       return
     }
     if (mode === 'local' && (!llm.endpoint_url || !isLocalEndpoint(llm.endpoint_url))) {
       llm.endpoint_url = 'http://host.suchi.local:11434/v1'
       if (!llm.model) llm.model = 'qwen2.5:7b'
       llm.egress_ack = false
-    } else if (mode === 'hosted' && (isLocalEndpoint(llm.endpoint_url) || llm.endpoint_url === chatGPTEndpoint)) {
+    } else if (mode === 'hosted' && (isLocalEndpoint(llm.endpoint_url) || !llm.endpoint_url)) {
       llm.endpoint_url = ''
       llm.egress_ack = false
     }
@@ -330,7 +326,7 @@
 
   async function saveMatching() {
     const payload = matchingPayload()
-    const result = await saveLLMSettings(payload)
+    const result = await saveArchiveMatchingSettings(payload)
     llmStatus = {
       ...llmStatus,
       archive_enabled: payload.archive_enabled,
@@ -352,9 +348,6 @@
     return result
   }
 
-  function applicationModeLabel(enabled) {
-    return enabled ? 'High-confidence suggestions apply automatically' : 'New inferred changes require review'
-  }
 
   async function testClassifier() {
     err = ''; llmTesting = true; llmTestResult = null; llmTestError = ''
@@ -369,7 +362,7 @@
     } finally { llmTesting = false }
   }
 
-  const llmIsRemote = $derived(!!llm.endpoint_url && !isLocalEndpoint(llm.endpoint_url))
+  const llmIsRemote = $derived(llmMode === 'subscription' || (!!llm.endpoint_url && !isLocalEndpoint(llm.endpoint_url)))
 </script>
 
 <div class="configuration-section">
@@ -431,6 +424,7 @@
               <span><b>Apply when confident</b><small>High-confidence suggestions file themselves; the rest wait in Approvals.</small></span></label>
           </div>
           <p class="cls-note" id="application-mode-help">Dates follow the same choice, into Calendar or Approvals.</p>
+          <button class="btn sm" disabled={busy} onclick={() => saveAnd(saveApplicationMode, 'Application mode saved')}>Save application mode</button>
         </div>
         <div class="cls-row">
           <button type="button" class="switch" role="switch" aria-checked={llm.archive_enabled}
@@ -446,10 +440,6 @@
               <input id="archive-review" class="range" type="range" min="0.5" max="0.9" step="0.05" bind:value={llm.archive_review_threshold} /></div>
             <div class="field"><label for="archive-auto">Minimum confidence to apply automatically · {Math.round(Number(llm.archive_auto_threshold) * 100)}%</label>
               <input id="archive-auto" class="range" type="range" min="0.55" max="0.95" step="0.05" bind:value={llm.archive_auto_threshold} disabled={!autoApply} /></div>
-            {#if llmStatus?.enabled}
-              <div class="field"><label for="l-confidence">Minimum model confidence to apply automatically · {Math.round(Number(llm.confidence_threshold) * 100)}%</label>
-                <input id="l-confidence" class="range" type="range" min="0.5" max="0.95" step="0.05" bind:value={llm.confidence_threshold} disabled={!autoApply} /></div>
-            {/if}
             <p class="cls-note">Automatic must stay above the review floor.</p>
             {#if Number(llm.archive_review_threshold) >= Number(llm.archive_auto_threshold)}<p role="alert">The review floor must be below the automatic threshold.</p>{/if}
           </div>
@@ -457,7 +447,7 @@
         <div class="cls-row">
           <div class="cls-main">
             <b>Document model{#if llmStatus?.active}<span class="mdot"></span><em>Active</em>{/if}</b>
-            {#if llmStatus?.active}<small><span class="mono">{llm.model}</span> · {llmMode === 'hosted' ? 'hosted endpoint' : 'local model'}</small>
+            {#if llmStatus?.active}<small><span class="mono">{llm.model}</span> · {llmMode === 'subscription' ? 'account subscription' : llmMode === 'hosted' ? 'hosted endpoint' : 'local model'}</small>
             {:else}<small>Titles, dates, tags and Archive research. Off.</small>{/if}
           </div>
           <div class="cls-right">{#if llmStatus?.active}<button class="act-link" onclick={() => (modelDialogOpen = true)}>Manage</button>
@@ -465,15 +455,15 @@
         </div>
         <div class="cls-foot"><span class="cls-note">New documents only; use Rescan in Documents for older ones.</span>
           <button class="btn primary sm" disabled={busy || Number(llm.archive_review_threshold) >= Number(llm.archive_auto_threshold)}
-                  onclick={() => saveAnd(async () => { await saveApplicationMode(); return saveMatching() }, 'Classification saved')}>Save changes</button></div>
+                  onclick={() => saveAnd(saveMatching, 'Similar-document matching saved')}>Save matching options</button></div>
       </div>
-      <div class="cls-card">
+      <div class="cls-card" role="region" aria-label="Archive research configuration">
         <div class="cls-head"><h3 id="research-context-title">Archive research</h3><p>Answers questions from your documents.</p><span class="cls-when">Applies to the next question</span></div>
         <div class="cls-row"><div class="cls-main"><b>Reading per document</b>
             {#if llmStatus?.active}<small style="text-transform:capitalize">{researchContextMode}</small>
             {:else}<small>Needs the document model.</small>{/if}</div>
           <div class="cls-right">{#if llmStatus?.active}<button class="act-link" onclick={() => (researchOpen = !researchOpen)}>{researchOpen ? 'Hide' : 'Change'}</button>
-            {:else}<button class="act-link" onclick={() => (modelDialogOpen = true)}>Set up model</button>{/if}</div></div>
+            {:else}<button class="act-link" onclick={() => (researchOpen = !researchOpen)}>{researchOpen ? 'Hide' : 'Change'}</button>{/if}</div></div>
         {#if researchOpen}<div class="cls-disc"><div class="context-presets" role="radiogroup" aria-label="Research context">
           {#each RESEARCH_CONTEXT_MODES as mode, index (mode.id)}
             <label class="context-preset" class:on={researchContextMode === mode.id}>
@@ -506,18 +496,21 @@
       <span class="seg" style="margin-bottom:14px">
         <button disabled={modelSaving || loginBusy} class:on={llmMode === 'local'} onclick={() => setLLMMode('local')}>Local model</button>
         <button disabled={modelSaving || loginBusy} class:on={llmMode === 'hosted'} onclick={() => setLLMMode('hosted')}>Hosted endpoint</button>
-        <button disabled={modelSaving || loginBusy} class:on={llmMode === 'chatgpt'} onclick={() => setLLMMode('chatgpt')}>ChatGPT subscription</button>
+        <button disabled={modelSaving || loginBusy} class:on={llmMode === 'subscription'} onclick={() => setLLMMode('subscription')}>Account subscription</button>
       </span>
-      {#if llmMode === 'chatgpt'}
+      {#if llmMode === 'subscription'}
+        <div class="field"><label for="l-provider">Provider</label>
+          <select id="l-provider" class="input" bind:value={subscriptionProvider} disabled={loginBusy || modelSaving}><option value="openai_chatgpt">OpenAI ChatGPT (Codex)</option></select>
+        </div>
         <p class="wiz-p sub">Connect your ChatGPT Codex subscription for classification and archive research. This account powers AI for the whole archive. Suchi sends extracted text to OpenAI; subscription limits apply.</p>
-        <p role="status">{llmStatus?.chatgpt_connected ? 'ChatGPT connected' : 'ChatGPT not connected'}</p>
+        <p role="status">{llmStatus?.subscription_connected ? 'ChatGPT connected' : 'ChatGPT not connected'}</p>
         <div class="toolbar">
-          <button class="btn sm" disabled={loginBusy || !!loginCode} onclick={startChatGPTLogin}>{llmStatus?.chatgpt_connected ? 'Reconnect ChatGPT' : 'Connect ChatGPT'}</button>
-          {#if llmStatus?.chatgpt_connected}<button class="btn sm" disabled={loginBusy} onclick={() => endChatGPTLogin('disconnect')}>Disconnect ChatGPT</button>{/if}
+          <button class="btn sm" disabled={loginBusy || !!loginCode} onclick={startSubscriptionLogin}>{llmStatus?.subscription_connected ? 'Reconnect ChatGPT' : 'Connect ChatGPT'}</button>
+          {#if llmStatus?.subscription_connected}<button class="btn sm" disabled={loginBusy} onclick={() => endSubscriptionLogin('disconnect')}>Disconnect ChatGPT</button>{/if}
         </div>
         {#if loginCode}
           <p>Open <a href={loginCode.verification_url} target="_blank" rel="noopener noreferrer">ChatGPT device login</a> and enter <strong class="mono">{loginCode.user_code}</strong>. Waiting for sign-in…</p>
-          <button class="btn sm" onclick={() => endChatGPTLogin('cancel')}>Cancel login</button>
+          <button class="btn sm" onclick={() => endSubscriptionLogin('cancel')}>Cancel login</button>
         {/if}
         {#if loginError}<p class="err" role="alert">{loginError}</p>{/if}
       {:else if llmMode === 'local'}
@@ -525,26 +518,26 @@
       {:else}
         <p class="wiz-p sub" style="font-size:.8rem">Use the OpenAI-compatible base URL from your provider. Suchi sends extracted text, never the original file.</p>
       {/if}
-      {#if llmMode !== 'chatgpt'}
+      {#if llmMode !== 'subscription'}
       <div class="field"><label for="l-url">Endpoint URL</label>
         <input id="l-url" class="input mono" placeholder="http://host.suchi.local:11434/v1" bind:value={llm.endpoint_url} oninput={invalidateLLMTest} /></div>
       {/if}
       <div class="field"><label for="l-model">Model</label>
-        {#if llmMode === 'chatgpt'}
-          <select id="l-model" class="input" bind:value={llm.model} onchange={persistChatGPTModel} disabled={!llmStatus?.chatgpt_connected || modelsLoading || modelSaving || !chatGPTModels.length}>
-            {#if !chatGPTModels.length}<option value="">{modelsLoading ? 'Loading models…' : llmStatus?.chatgpt_connected ? 'No models available' : 'Connect ChatGPT to load models'}</option>{/if}
-            {#each chatGPTModels as model (model.id)}<option value={model.id}>{model.name} ({model.id})</option>{/each}
+        {#if llmMode === 'subscription'}
+          <select id="l-model" class="input" bind:value={llm.model} onchange={persistSubscriptionModel} disabled={!llmStatus?.subscription_connected || modelsLoading || modelSaving || !subscriptionModels.length}>
+            {#if !subscriptionModels.length}<option value="">{modelsLoading ? 'Loading models…' : llmStatus?.subscription_connected ? 'No models available' : 'Connect ChatGPT to load models'}</option>{/if}
+            {#each subscriptionModels as model (model.id)}<option value={model.id}>{model.name} ({model.id})</option>{/each}
           </select>
         {:else}
           <input id="l-model" class="input mono" placeholder="qwen2.5:7b" bind:value={llm.model} oninput={invalidateLLMTest} />
         {/if}
       </div>
-      {#if llmMode === 'chatgpt'}
+      {#if llmMode === 'subscription'}
         {#if modelsError}<p class="err" role="alert">{modelsError}</p>{/if}
-        {#if llmStatus?.chatgpt_connected}<button class="btn sm" disabled={modelsLoading || modelSaving} onclick={loadChatGPTModels}>Refresh models</button>{/if}
+        {#if llmStatus?.subscription_connected}<button class="btn sm" disabled={modelsLoading || modelSaving} onclick={loadSubscriptionModels}>Refresh models</button>{/if}
         <p class="sub">Selection saves automatically. Test and enable the model to use it for classification and research.</p>
         {#if modelSaving}<p class="sub" role="status">Saving model selection…</p>{/if}
-        {#if modelSaveError}<p class="err" role="alert">{modelSaveError}</p><button class="btn sm" onclick={persistChatGPTModel}>Retry saving model</button>{/if}
+        {#if modelSaveError}<p class="err" role="alert">{modelSaveError}</p><button class="btn sm" onclick={persistSubscriptionModel}>Retry saving model</button>{/if}
         <p class="sub">Models come from your connected ChatGPT account. Test connection verifies access to the selected model.</p>
       {:else}
       <div class="field"><label for="l-key">API key (blank for local)</label>
@@ -562,13 +555,13 @@
           This endpoint is not local. I acknowledge document text will leave this machine.</label>
       {/if}
 
-      {#if llmMode === 'chatgpt' && !llm.egress_ack}
+      {#if llmMode === 'subscription' && !llm.egress_ack}
         <p class="sub">Check the acknowledgement above to test the model. The test sends only a synthetic sample; enabling the model allows document text to leave this machine.</p>
       {/if}
       <div class="field"><label for="l-confidence">Minimum model confidence to apply automatically · {Math.round(Number(llm.confidence_threshold) * 100)}%</label>
         <input id="l-confidence" class="range" type="range" min="0.5" max="0.95" step="0.05" bind:value={llm.confidence_threshold} disabled={!autoApply} oninput={invalidateLLMTest} /></div>
       <div class="toolbar connection-actions">
-        <button class="btn primary sm" disabled={busy || llmTesting || modelSaving || !!modelSaveError || (llmMode !== 'chatgpt' && !llm.endpoint_url) || !llm.model || (llmMode === 'chatgpt' && (!llmStatus?.chatgpt_connected || modelsLoading || !chatGPTModels.some(model => model.id === llm.model))) || (llmIsRemote && !llm.egress_ack)}
+        <button class="btn primary sm" disabled={busy || llmTesting || modelSaving || !!modelSaveError || (llmMode !== 'subscription' && !llm.endpoint_url) || !llm.model || (llmMode === 'subscription' && (!llmStatus?.subscription_connected || modelsLoading || !subscriptionModels.some(model => model.id === llm.model))) || (llmIsRemote && !llm.egress_ack)}
                 onclick={testClassifier}>Test connection</button>
       </div>
       {#if llmTestError}
@@ -589,7 +582,7 @@
           <div class="mdl-foot"><span class="cls-note">Enabling starts suggestions for new documents.</span>
             {#if llmStatus?.enabled}<button class="act-link" style="color:var(--muted)" disabled={busy || llmTesting}
                 onclick={() => saveAnd(() => saveClassifier(false), 'Model disabled; local matching settings unchanged').then(() => (modelDialogOpen = false))}>Disable model</button>{/if}
-            <button class="btn primary sm" disabled={busy || llmTesting || !llm.endpoint_url || !llm.model || (llmIsRemote && !llm.egress_ack)}
+            <button class="btn primary sm" disabled={busy || llmTesting || modelSaving || !!modelSaveError || !llmTestResult || (llmMode !== 'subscription' && !llm.endpoint_url) || !llm.model || (llmMode === 'subscription' && (!llmStatus?.subscription_connected || modelsLoading || !subscriptionModels.some(model => model.id === llm.model))) || (llmIsRemote && !llm.egress_ack)}
                 onclick={() => saveAnd(() => saveClassifier(true), 'Model enabled').then(() => (modelDialogOpen = false))}>Enable model</button></div>
         </div>
       {/if}
@@ -674,9 +667,6 @@
   .mdl { position: fixed; left: 50%; top: 7vh; transform: translateX(-50%); width: min(620px, 94vw); background: var(--surface); border-radius: var(--r); box-shadow: 0 30px 70px rgba(20,22,28,.3); z-index: 61; max-height: 86vh; overflow: auto }
   .mdl-head { display: flex; justify-content: space-between; align-items: center; padding: 16px 22px; border-bottom: 1px solid var(--line) } .mdl-head b { font-size: 1rem }
   .mdl-body { padding: 16px 22px } .mdl-body .seg { margin-bottom: 14px }
-  .mdl-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px }
-  .mdl-test { display: flex; align-items: center; gap: 12px; margin-top: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface-2); flex-wrap: wrap }
-  .mdl-ok { color: var(--ok); font-weight: 600; font-size: .8rem } .mdl-bad { color: var(--danger); font-size: .8rem }
   .mdl-foot { display: flex; align-items: center; gap: 14px; padding: 14px 22px; border-top: 1px solid var(--line) }
   .mdl-foot .btn.primary { margin-left: auto }
 </style>

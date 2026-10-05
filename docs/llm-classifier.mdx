@@ -26,10 +26,11 @@ setup and choose:
 
 - **Local model** for Ollama or another endpoint on the trusted network
 - **Hosted endpoint** for a provider on the public internet
-- **ChatGPT subscription** for a ChatGPT account with Codex access
+- **Account subscription**, with **Provider: OpenAI ChatGPT (Codex)** for an account with Codex access
 
-Configure endpoint, model, optional API key, confidence threshold, and enabled
-state. The same screen controls local archive matching and its automatic/review
+For endpoint models, configure the endpoint and optional API key. For account
+subscriptions, connect the selected provider. Both flows configure a model,
+confidence threshold, and enabled state. The same screen controls local archive matching and its automatic/review
 thresholds. **Automatically apply high-confidence suggestions** is on by default;
 turn it off for review-first behavior. **Save application mode** saves that
 choice independently. Hosted mode still requires an explicit egress
@@ -40,9 +41,14 @@ the stored value; **Clear the stored API key** removes the web-managed value.
 A key pinned in the config file or environment remains active until the
 operator changes that source and restarts Suchi.
 
-## ChatGPT Codex subscription
+**Save matching options** saves local similar-document matching independently
+of the model, account connection, and inference configuration. It remains
+available after disconnecting an account subscription.
 
-Choose **ChatGPT subscription**, then **Connect ChatGPT**. Open the device-login
+## Account subscription
+
+Choose **Account subscription**, select **OpenAI ChatGPT (Codex)** under
+**Provider**, then **Connect ChatGPT**. Open the device-login
 link and enter the displayed code; approval happens on OpenAI's site. Device
 login may need to be enabled in your ChatGPT security settings. After connecting,
 Suchi fetches the account's model catalog and fills a dropdown, initially selecting
@@ -66,9 +72,12 @@ are lost on restart. **Disconnect ChatGPT** deletes Suchi's saved credential and
 stops the active subscription model. Manage upstream account permissions in
 ChatGPT as well. Back up the data directory including its encryption key.
 
-The fixed endpoint is `https://chatgpt.com/backend-api/codex`. Setting it through
-`LLM_ENDPOINT_URL` still requires web login and `LLM_EGRESS_ACK=true`;
-`LLM_API_KEY` is not used for subscription requests. Subscription inference sends
+OpenAI ChatGPT (Codex) is the first registered subscription provider, identified
+by `openai_chatgpt`. Suchi derives its fixed endpoint and authentication from the
+adapter; an endpoint URL does not select subscription mode. Configure account
+subscriptions in the browser; `LLM_ENDPOINT_URL` selects an endpoint model and
+overrides the saved subscription configuration. `LLM_API_KEY` is not used for
+subscription requests. Subscription inference sends
 no tools and does not store Responses remotely. It uses prompt-based JSON output
 followed by the same application validation as other providers. The backend does
 not accept the chat-completions token-limit setting; requests are bounded by

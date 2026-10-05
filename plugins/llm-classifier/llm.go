@@ -109,11 +109,12 @@ func (*completionTruncatedError) CompletionTruncated() bool { return true }
 
 // Config carries per-instance knobs. Zero-value = disabled.
 type Config struct {
-	EndpointURL       string                                           // e.g. https://api.openai.com/v1 or http://localhost:11434/v1
-	Model             string                                           // e.g. gpt-4o-mini or llama3
-	APIKey            string                                           // optional for local endpoints
-	ChatGPTCredential func(context.Context) (ChatGPTCredential, error) // fixed subscription endpoint only
-	EgressAck         bool                                             // must be true when EndpointURL is not local
+	EndpointURL          string // e.g. https://api.openai.com/v1 or http://localhost:11434/v1
+	Model                string // e.g. gpt-4o-mini or llama3
+	APIKey               string // optional for local endpoints
+	SubscriptionProvider string
+	Subscriptions        *Subscriptions // private shipped provider registry
+	EgressAck            bool           // must be true when EndpointURL is not local
 
 	// ConfidenceThreshold is the automatic score floor when application mode
 	// allows it. Metadata and each date are scored independently. Default 0.7.
@@ -219,14 +220,19 @@ func NewDisabled(log *slog.Logger) *Plugin {
 // keeps booting; the classifier just stays off.
 func New(cfg Config, log *slog.Logger) (*Plugin, error) {
 	log = log.With("component", "llm-classifier")
-	if strings.TrimSpace(cfg.EndpointURL) == "" {
+	if strings.TrimSpace(cfg.EndpointURL) == "" && cfg.SubscriptionProvider == "" {
 		log.Info("llm-classifier.disabled", "reason", "LLM_ENDPOINT_URL not set")
 		return nil, nil
 	}
 	rt, err := runtimeFromConfig(cfg)
 	if errors.Is(err, errEgressAckRequired) {
 		// This error is reached only after endpoint validation succeeds.
-		endpoint, _ := parseEndpointURL(strings.TrimSpace(cfg.EndpointURL))
+		endpointURL := cfg.EndpointURL
+		if cfg.SubscriptionProvider != "" {
+			provider, _ := cfg.Subscriptions.provider(cfg.SubscriptionProvider)
+			endpointURL = provider.endpoint()
+		}
+		endpoint, _ := parseEndpointURL(strings.TrimSpace(endpointURL))
 		log.Warn("llm-classifier.disabled",
 			"reason", "non-local endpoint requires LLM_EGRESS_ACK=true",
 			"host", endpoint.Hostname())
@@ -265,6 +271,14 @@ func (p *Plugin) SetConfig(cfg Config) error {
 }
 
 func runtimeFromConfig(cfg Config) (*runtime, error) {
+	if cfg.SubscriptionProvider != "" {
+		provider, err := cfg.Subscriptions.provider(cfg.SubscriptionProvider)
+		if err != nil {
+			return nil, err
+		}
+		cfg.EndpointURL = provider.endpoint()
+		cfg.APIKey = ""
+	}
 	cfg.EndpointURL = strings.TrimSpace(cfg.EndpointURL)
 	cfg.Model = strings.TrimSpace(cfg.Model)
 	if cfg.EndpointURL == "" {
@@ -437,8 +451,12 @@ func (p *Plugin) doCompletion(ctx context.Context, rt *runtime, body []byte) ([]
 	if !rt.local {
 		p.log.Info("llm-classifier.egress", "host", rt.host, "model", cfg.Model)
 	}
-	if strings.TrimRight(cfg.EndpointURL, "/") == ChatGPTEndpoint {
-		return p.chatGPTCompletion(ctx, rt, body)
+	if cfg.SubscriptionProvider != "" {
+		provider, err := cfg.Subscriptions.provider(cfg.SubscriptionProvider)
+		if err != nil {
+			return nil, err
+		}
+		return provider.complete(ctx, rt, body)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		strings.TrimRight(cfg.EndpointURL, "/")+"/chat/completions",
