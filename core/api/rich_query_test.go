@@ -54,9 +54,7 @@ func seedRichQueryData(t *testing.T, s *Server) (matchingID, otherID int64) {
 			(1, 7, 'tax', 'tax', 0, 0),
 			(1, 8, 'archived', 'archived', 0, 0);
 		INSERT INTO correspondents(system_id, id, name, slug, created_at, updated_at)
-			VALUES (1, 9, 'Bagmane Prime', 'bagmane-prime', 0, 0);
-		INSERT INTO document_types(system_id, id, name, slug, created_at, updated_at)
-			VALUES (1, 10, 'statement', 'statement', 0, 0)`); err != nil {
+			VALUES (1, 9, 'Bagmane Prime', 'bagmane-prime', 0, 0)`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -68,7 +66,6 @@ func seedRichQueryData(t *testing.T, s *Server) (matchingID, otherID int64) {
 		UPDATE documents
 		SET content = 'Distribution advice for the annual report',
 		    jd_category_id = 6,
-		    document_type_id = 10,
 		    sensitivity = 'internal',
 		    languages = ',de,',
 		    added_at = ?,
@@ -98,7 +95,7 @@ func seedRichQueryData(t *testing.T, s *Server) (matchingID, otherID int64) {
 func TestRichQueryEndpointParity(t *testing.T) {
 	s := newListServer(t)
 	matchingID, _ := seedRichQueryData(t, s)
-	query := `"distribution advice" jd:22 from:"Bagmane Prime" tag:tax type:statement sensitivity:internal lang:de added:>=2026-01-01 is:encrypted -tag:archived`
+	query := `"distribution advice" jd:22 from:"Bagmane Prime" tag:tax sensitivity:internal lang:de added:>=2026-01-01 is:encrypted -tag:archived`
 
 	searchCode, searchResult, _ := doSearch(t, s, query, adminPrincipal(1))
 	if searchCode != 200 {

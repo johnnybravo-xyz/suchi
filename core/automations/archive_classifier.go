@@ -155,8 +155,8 @@ func proposeArchiveInput(ctx context.Context, tx *sql.Tx, log *slog.Logger, docI
 		}
 	}
 
-	scalarTally := map[string]map[int64]float64{"jd_category": {}, "correspondent": {}, "document_type": {}}
-	scalarSupporters := map[string]map[int64][]int64{"jd_category": {}, "correspondent": {}, "document_type": {}}
+	scalarTally := map[string]map[int64]float64{"jd_category": {}, "correspondent": {}}
+	scalarSupporters := map[string]map[int64][]int64{"jd_category": {}, "correspondent": {}}
 	tagTally := map[int64]float64{}
 	tagSupporters := map[int64][]int64{}
 	var totalScore float64
@@ -167,7 +167,7 @@ func proposeArchiveInput(ctx context.Context, tx *sql.Tx, log *slog.Logger, docI
 			field string
 			id    int64
 		}{
-			{"jd_category", md.JDCategoryID}, {"correspondent", md.CorrespondentID}, {"document_type", md.DocumentTypeID},
+			{"jd_category", md.JDCategoryID}, {"correspondent", md.CorrespondentID},
 		} {
 			if value.id != 0 {
 				scalarTally[value.field][value.id] += n.Score
@@ -210,10 +210,9 @@ func proposeArchiveInput(ctx context.Context, tx *sql.Tx, log *slog.Logger, docI
 		pending = append(pending, change)
 		return nil
 	}
-	for _, field := range []string{"jd_category", "correspondent", "document_type"} {
+	for _, field := range []string{"jd_category", "correspondent"} {
 		if (field == "jd_category" && input.target.JDCategoryID != 0 && input.target.JDCategoryID != input.inboxID) ||
-			(field == "correspondent" && input.target.CorrespondentID != 0) ||
-			(field == "document_type" && input.target.DocumentTypeID != 0) {
+			(field == "correspondent" && input.target.CorrespondentID != 0) {
 			continue
 		}
 		winnerID, score := topScalar(scalarTally[field])
@@ -261,7 +260,6 @@ func proposeArchiveInput(ctx context.Context, tx *sql.Tx, log *slog.Logger, docI
 type neighbourMD struct {
 	JDCategoryID    int64
 	CorrespondentID int64
-	DocumentTypeID  int64
 	TagIDs          []int64
 }
 
@@ -275,8 +273,7 @@ func loadNeighbourMetadata(ctx context.Context, tx *sql.Tx, systemID int64, ids 
 	rows, err := tx.QueryContext(ctx, `SELECT d.id, COALESCE(d.jd_category_id,0),
 		COALESCE((SELECT dc.correspondent_id FROM document_correspondents dc
 		          WHERE dc.document_id=d.id AND dc.role='sender'
-		          ORDER BY dc.position,dc.correspondent_id LIMIT 1),0),
-		COALESCE(d.document_type_id,0)
+		          ORDER BY dc.position,dc.correspondent_id LIMIT 1),0)
 		FROM documents d WHERE d.id IN (`+placeholders+`) AND d.system_id = ? AND d.trashed_at IS NULL`, args...)
 	if err != nil {
 		return nil, err
@@ -284,7 +281,7 @@ func loadNeighbourMetadata(ctx context.Context, tx *sql.Tx, systemID int64, ids 
 	for rows.Next() {
 		var id int64
 		var md neighbourMD
-		if err := rows.Scan(&id, &md.JDCategoryID, &md.CorrespondentID, &md.DocumentTypeID); err != nil {
+		if err := rows.Scan(&id, &md.JDCategoryID, &md.CorrespondentID); err != nil {
 			rows.Close()
 			return nil, err
 		}

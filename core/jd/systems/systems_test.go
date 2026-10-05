@@ -166,7 +166,6 @@ func TestNamespaceIntegrityAndStableCodes(t *testing.T) {
 			VALUES(1,147,1,'same-blob',1,1,1,1,17,19),(2,148,1,'same-blob',1,2,1,1,17,19);
 		INSERT INTO tags(system_id,id,name,slug,created_at,updated_at) VALUES(1,1,'Tax','tax',1,1),(2,2,'Tax','tax',1,1);
 		INSERT INTO correspondents(system_id,id,name,slug,created_at,updated_at) VALUES(1,1,'Client','client',1,1),(2,2,'Client','client',1,1);
-		INSERT INTO document_types(system_id,id,name,slug,created_at,updated_at) VALUES(1,1,'Return','return',1,1),(2,2,'Return','return',1,1);
 		INSERT INTO storage_paths(system_id,id,name,slug,path,created_at,updated_at) VALUES(1,1,'Records','records','records',1,1),(2,2,'Records','records','records',1,1);
 		INSERT INTO custom_fields(system_id,id,name,data_type,created_at,updated_at) VALUES(1,1,'Related','documentlink',1,1),(2,2,'Related','documentlink',1,1);
 		INSERT INTO approval_defs(system_id,id,slug,version,spec_json,created_at) VALUES(1,1,'change',1,'{}',1),(2,2,'change',1,'{}',1);
@@ -187,7 +186,6 @@ func TestNamespaceIntegrityAndStableCodes(t *testing.T) {
 		`UPDATE jd_categories SET system=0 WHERE id=1`,
 		`UPDATE documents SET system_id=2 WHERE id=147`,
 		`UPDATE documents SET jd_category_id=2 WHERE id=147`,
-		`UPDATE documents SET document_type_id=2 WHERE id=147`,
 		`UPDATE documents SET storage_path_id=2 WHERE id=147`,
 		`UPDATE documents SET previous_version_id=148 WHERE id=147`,
 		`UPDATE documents SET split_parent_id=148 WHERE id=147`,
@@ -209,10 +207,9 @@ func TestNamespaceIntegrityAndStableCodes(t *testing.T) {
 		}
 	}
 	// Deleting nullable metadata removes the relation without changing ownership.
-	exec(t, d, `UPDATE documents SET document_type_id=1,storage_path_id=1 WHERE id=147;
+	exec(t, d, `UPDATE documents SET storage_path_id=1 WHERE id=147;
 		DELETE FROM correspondents WHERE id=1;
-		DELETE FROM document_types WHERE id=1;
 		DELETE FROM storage_paths WHERE id=1;`)
-	count(t, d, `SELECT count(*) FROM documents WHERE id=147 AND system_id=1 AND document_type_id IS NULL AND storage_path_id IS NULL`, 1)
+	count(t, d, `SELECT count(*) FROM documents WHERE id=147 AND system_id=1 AND storage_path_id IS NULL`, 1)
 	count(t, d, `SELECT count(*) FROM document_correspondents WHERE document_id=147`, 0)
 }

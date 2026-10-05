@@ -20,12 +20,13 @@ import (
 )
 
 const (
-	// StableSchemaVersion is the single stable-v1 core schema version.
-	StableSchemaVersion = 1
+	// StableSchemaVersion is the latest schema in the stable-v1 lineage.
+	StableSchemaVersion = 2
 
 	stableLineage                   = "stable-v1"
 	finalBetaLineage                = "final-beta-schema-3"
-	stableFingerprint               = "9d2a6320eae1582b0f294caa6ed518b5a73ab3dbe6597c9ca1a36cc563e03240"
+	stableFingerprint               = "8e722073006db789f8aa44a6f0aa1b6f7af4dc689f23983666ce207d7b56d165"
+	stableV1Fingerprint             = "9d2a6320eae1582b0f294caa6ed518b5a73ab3dbe6597c9ca1a36cc563e03240"
 	preIdentityStableFingerprint    = "5d6ac98308eb644b030092178792a46f36e6f8f5041411f020ed2dcf216f46c2"
 	betaOneFingerprint              = "68089660de648a4fcc136bcefc105edc5d29dc4de59dad482124914ea626fb2b"
 	betaTwoFingerprint              = "a341b731c93a7270e3440a18f58911df80b2289bf44cd3baeecff4a2b2b0071c"
@@ -75,6 +76,12 @@ func PrepareStable(ctx context.Context, d *DB, stable, compatibility []Migration
 	if state.version == StableSchemaVersion && state.lineageValid && state.lineage == stableLineage && state.fingerprint == stableFingerprint {
 		return nil
 	}
+	if state.version == 1 && state.lineageValid && state.lineage == stableLineage && state.fingerprint == stableV1Fingerprint {
+		if err := Migrate(ctx, d, stable, log); err != nil {
+			return err
+		}
+		return verifyStableSchema(ctx, d.Write)
+	}
 
 	profile, ok := classifyBeta(state)
 	if !ok {
@@ -111,13 +118,24 @@ func PrepareStable(ctx context.Context, d *DB, stable, compatibility []Migration
 	if err := adoptBeta(ctx, d, beta, profile.nextVersion); err != nil {
 		return fmt.Errorf("adopt %s (snapshot retained at %s): %w", profile.name, snapshot, err)
 	}
+	if err := Migrate(ctx, d, stable, log); err != nil {
+		return fmt.Errorf("migrate adopted %s (snapshot retained at %s): %w", profile.name, snapshot, err)
+	}
+	if err := verifyStableSchema(ctx, d.Write); err != nil {
+		return fmt.Errorf("verify adopted %s (snapshot retained at %s): %w", profile.name, snapshot, err)
+	}
 	log.Info("db.stable_adoption.complete", "source", profile.name, "schema", stableLineage)
 	return nil
 }
 
 func validateStableCatalogs(stable, compatibility []Migration) ([]Migration, error) {
-	if len(stable) != 1 || stable[0].Version != StableSchemaVersion {
-		return nil, fmt.Errorf("stable migration catalog must contain only version %d", StableSchemaVersion)
+	if len(stable) != StableSchemaVersion {
+		return nil, fmt.Errorf("stable migration catalog has %d migrations, want %d", len(stable), StableSchemaVersion)
+	}
+	for i, migration := range stable {
+		if migration.Version != i+1 {
+			return nil, fmt.Errorf("stable migration version %d is %d, want %d", i, migration.Version, i+1)
+		}
 	}
 	beta := append([]Migration(nil), compatibility...)
 	sort.Slice(beta, func(i, j int) bool { return beta[i].Version < beta[j].Version })
@@ -203,8 +221,19 @@ func adoptBeta(ctx context.Context, d *DB, compatibility []Migration, nextVersio
 		if err := checkIntegrity(ctx, tx); err != nil {
 			return err
 		}
-		return verifyStableSchema(ctx, tx)
+		return verifyStableV1Schema(ctx, tx)
 	})
+}
+
+func verifyStableV1Schema(ctx context.Context, q schemaQueryer) error {
+	state, err := inspectSchema(ctx, q)
+	if err != nil {
+		return err
+	}
+	if state.version != 1 || !state.lineageValid || state.lineage != stableLineage || state.fingerprint != stableV1Fingerprint {
+		return fmt.Errorf("stable-v1 schema mismatch: user_version=%d lineage=%q fingerprint=%s", state.version, state.lineage, state.fingerprint)
+	}
+	return nil
 }
 
 func verifyStableSchema(ctx context.Context, q schemaQueryer) error {

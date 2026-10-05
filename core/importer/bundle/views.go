@@ -254,13 +254,7 @@ func buildFilterJSON(
 		case 4: // document type is
 			if r.Value != nil {
 				if id, ok := remapIDString(dtMap, *r.Value); ok {
-					// suchi allow-list has singular document_type__id.
-					// Repeated rules → last-wins + PARTIAL.
-					if _, exists := filter["document_type__id"]; exists {
-						worst = worsten(worst, OutcomePartial)
-						reasons = append(reasons, "multiple document_type rules collapsed to last")
-					}
-					filter["document_type__id"] = id
+					appendIntArray(filter, "tags__id__in", id)
 					mapped++
 					continue
 				}
@@ -269,12 +263,10 @@ func buildFilterJSON(
 		case 28: // has document type in
 			if r.Value != nil {
 				if id, ok := remapIDString(dtMap, *r.Value); ok {
-					if _, exists := filter["document_type__id"]; exists {
-						reasons = append(reasons, "document_type 'in' list truncated to first")
-					}
-					filter["document_type__id"] = id
+					appendIntArray(filter, "tags__id__in", id)
 					mapped++
 					worst = worsten(worst, OutcomePartial)
+					reasons = append(reasons, "document type 'in' list truncated to first namespaced tag")
 					continue
 				}
 			}

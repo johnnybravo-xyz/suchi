@@ -19,6 +19,16 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Changed
 
+- Replace the Paperless-derived document-type vocabulary with ordinary
+  `type:<name>` tags. The stable schema upgrade migrates assignments, ACLs,
+  saved-view filters, automation filters/actions, and title/storage templates;
+  automations whose tag-and-type AND predicate cannot be represented are
+  suspended, and pending type-change reviews are cancelled. Paperless bundle
+  imports preserve source types through the same tags and report unsupported
+  template expressions.
+- Replace the combined type/share selector in Documents with a dedicated
+  **Shared by me** toggle for active links created by the signed-in user.
+
 - Keep document-change approvals compact with one-line value transitions,
   collapsed plain-language source explanations, and no producer score details.
 - Streamline Classification with concise helper copy and a contained **Similar

@@ -2,14 +2,9 @@
 
 // `suchi export` — one-shot portable takeout.
 //
-// Writes a zip containing every document (original bytes + JSON
-// sidecar in the standard suchi shape) plus taxonomy dumps for
-// tags, correspondents, document types, storage paths, custom
-// field definitions, and JD categories. The archive is readable by
-// any tool that can walk a zip; the sidecar shape matches
-// core/ingest/sidecar/sidecar.go so re-importing into a fresh suchi
-// instance (or another DMS that follows the same JSON convention)
-// is deterministic.
+// Writes a zip containing every document (original bytes + JSON sidecar in the
+// standard Suchi shape) plus taxonomy dumps for tags, correspondents, storage
+// paths, custom-field definitions, and JD categories.
 //
 // Layout:
 //
@@ -21,7 +16,6 @@
 //   ├── taxonomy/
 //   │   ├── tags.json
 //   │   ├── correspondents.json
-//   │   ├── document_types.json
 //   │   ├── storage_paths.json
 //   │   ├── custom_fields.json
 //   │   └── jd_categories.json
@@ -362,7 +356,6 @@ func dumpTaxonomy(ctx context.Context, zw *zip.Writer, d *db.DB, systemID int64)
 	}{
 		{"taxonomy/tags.json", `SELECT id, name, slug, color, parent_id FROM tags`},
 		{"taxonomy/correspondents.json", `SELECT id, name, slug FROM correspondents`},
-		{"taxonomy/document_types.json", `SELECT id, name, slug FROM document_types`},
 		{"taxonomy/storage_paths.json", `SELECT id, name, path FROM storage_paths`},
 		{"taxonomy/custom_fields.json", `SELECT id, name, data_type, extra_data FROM custom_fields`},
 		{"taxonomy/jd_categories.json", `SELECT id, code, name, description, area_start FROM jd_categories`},
@@ -629,8 +622,8 @@ suchi document management instance.
 
 Layout:
   documents/  original bytes + a sidecar JSON per doc
-  taxonomy/   flat JSON dumps of tags, correspondents, doc types,
-              storage paths, custom-field defs, JD categories
+  taxonomy/   flat JSON dumps of tags, correspondents, storage paths,
+              custom-field defs, and JD categories
   manifest.json  producer version, counts, generated_at
 
 The sidecar shape matches the suchi ingest format — dropping a

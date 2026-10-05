@@ -86,7 +86,7 @@ func EnqueueOwnerTemplateMoves(ctx context.Context, tx *sql.Tx, ownerID int64) e
 
 // Kind is the job kind mutators enqueue when they change any metadata
 // field the storage-path template reads (title, correspondent,
-// document type, JD category, tags, storage_path, archive_serial).
+// JD category, tags, storage_path, archive_serial).
 const Kind = "render"
 
 // Handler is the Subscriber wrapper. `nil` Renderer → nil handler; the

@@ -115,7 +115,6 @@ type ChatScope struct {
 	DocumentIDs      []int64 `json:"document_ids,omitempty"`
 	JDCategoryID     int64   `json:"jd_category_id,omitempty"`
 	Sensitivity      string  `json:"sensitivity,omitempty"`
-	DocumentTypeID   int64   `json:"document_type_id,omitempty"`
 	TagIDs           []int64 `json:"tag_ids,omitempty"`
 	CorrespondentIDs []int64 `json:"correspondent_ids,omitempty"`
 	CreatedAtGTE     *int64  `json:"created_at_gte,omitempty"`
@@ -294,7 +293,7 @@ func (s *Server) PostChat(w http.ResponseWriter, r *http.Request) {
 	}
 	in.Scope.Query = strings.TrimSpace(in.Scope.Query)
 	if len(in.Scope.Query) > searchquery.MaxQueryBytes || in.Scope.JDCategoryID < 0 ||
-		in.Scope.DocumentTypeID < 0 || (in.Scope.CreatedAtGTE != nil && *in.Scope.CreatedAtGTE < 0) ||
+		(in.Scope.CreatedAtGTE != nil && *in.Scope.CreatedAtGTE < 0) ||
 		(in.Scope.CreatedAtLTE != nil && *in.Scope.CreatedAtLTE < 0) ||
 		(in.Scope.Sensitivity != "" && !SensitivityLevels[in.Scope.Sensitivity]) ||
 		(in.Scope.ShareLink != "" && in.Scope.ShareLink != "active") {

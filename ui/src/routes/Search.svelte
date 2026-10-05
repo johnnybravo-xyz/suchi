@@ -34,7 +34,7 @@
   function publishEmptyScope() {
     onScopeChange?.({
       label: lang ? 'Current search filters' : 'All archive', query: '', document_ids: [], jd_category_id: 0,
-      sensitivity: '', document_type_id: 0, tag_ids: [], correspondent_ids: [],
+      sensitivity: '', tag_ids: [], correspondent_ids: [],
       created_at_gte: null, created_at_lte: null, language: lang,
     })
   }
@@ -76,7 +76,7 @@
       onScopeChange?.({
         label: 'Current search results',
         query,
-        document_ids: [], jd_category_id: 0, sensitivity: '', document_type_id: 0,
+        document_ids: [], jd_category_id: 0, sensitivity: '',
         tag_ids: [], correspondent_ids: [], created_at_gte: null, created_at_lte: null,
         language: requestLang,
       })

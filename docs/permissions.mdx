@@ -58,9 +58,9 @@ keys or a regulatory/professional-independence guarantee.
 | `3` | view and change          |
 | `7` | view, change, and delete |
 
-`object_acls` supports `document`, `tag`, `correspondent`, `document_type`, and
-`storage_path`. Principals are users or groups. Reapplying a grant replaces its
-permission bits.
+`object_acls` supports `document`, `tag`, `correspondent`, and `storage_path`.
+Principals are users or groups. Reapplying a grant replaces its permission
+bits.
 
 ## Enforcement
 
@@ -227,7 +227,7 @@ creator being active and able to enter it. Public requests return only still-
 shareable live documents. Revocation, removal of membership, or loss of the
 creator's authority cannot be bypassed using the bearer link.
 
-The Documents **My active shares** filter follows those same checks
+The Documents **Shared by me** filter follows those same checks
 and only considers links created by the current user. It does not expose another
 user's sharing activity to administrators.
 

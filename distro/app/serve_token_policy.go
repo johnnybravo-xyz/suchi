@@ -49,7 +49,6 @@ func tokenRouteScopes() map[string]string {
 		"GET /api/tasks/":                         auth.ScopeDocumentsRead,
 		"GET /api/tags/":                          auth.ScopeDocumentsRead,
 		"GET /api/correspondents/":                auth.ScopeDocumentsRead,
-		"GET /api/document_types/":                auth.ScopeDocumentsRead,
 		"GET /api/custom_fields/":                 auth.ScopeDocumentsRead,
 		"GET /api/search/":                        auth.ScopeDocumentsRead,
 		"GET /api/autocomplete/":                  auth.ScopeDocumentsRead,

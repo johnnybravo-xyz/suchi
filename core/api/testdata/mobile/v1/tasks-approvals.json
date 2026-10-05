@@ -117,13 +117,13 @@
       "doc_title": "Service agreement",
       "state_key": "review",
       "assignee": "user:7",
-      "prompt": "Review suggested document type",
+      "prompt": "Review suggested tag",
       "approval_name": "document-change",
       "choices": ["apply", "reject"],
       "status": "open",
       "created_at": 1785779350,
       "vars": {
-        "field": "document_type",
+        "field": "tag",
         "reason": "review_first",
         "policy_version": "review-first-v1",
         "confidence": 0.84,
@@ -132,7 +132,7 @@
         "source_current": true,
         "review_conflict": false,
         "current_value": "",
-        "proposed_value": "Agreement",
+        "proposed_value": "type:Agreement",
         "sources": []
       }
     },

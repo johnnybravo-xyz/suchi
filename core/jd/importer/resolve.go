@@ -58,16 +58,6 @@ func resolveActionParams(ctx context.Context, tx *sql.Tx, systemID int64, act pr
 		out["tag_ids"] = ids
 	}
 
-	// document_type name → document_type_id.
-	if name, ok := stringField(out, "document_type"); ok {
-		id, err := taxonomy.UpsertByName(ctx, tx, systemID, taxonomy.TableDocumentTypes, name, time.Now().Unix())
-		if err != nil {
-			return nil, err
-		}
-		delete(out, "document_type")
-		out["document_type_id"] = id
-	}
-
 	// correspondent name → correspondent_id.
 	if name, ok := stringField(out, "correspondent"); ok {
 		id, err := taxonomy.UpsertByName(ctx, tx, systemID, taxonomy.TableCorrespondents, name, time.Now().Unix())

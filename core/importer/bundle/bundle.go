@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/blob"
@@ -234,20 +235,27 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 		if err := json.Unmarshal(o.Fields, &f); err != nil {
 			return nil, fmt.Errorf("decode document_type pk=%d: %w", o.PK, err)
 		}
-		id, err := upsertDocumentType(ctx, d, opts.SystemID, opts.DryRun, f)
+		id, err := upsertDocumentTypeTag(ctx, d, opts.SystemID, opts.DryRun, o.PK, f)
 		if err != nil {
 			return nil, err
 		}
 		dtMap[o.PK] = id
 		names.documentTypes[o.PK] = f.Name
 		rep.DocumentTypes++
-		mrep.Full(KindDocumentType, f.Name, f.Name)
+		mrep.Full(KindDocumentType, f.Name, "type:"+f.Name)
 	}
 	for _, o := range buckets[ModelStoragePath] {
 		var f StoragePathFields
 		if err := json.Unmarshal(o.Fields, &f); err != nil {
 			return nil, fmt.Errorf("decode storage_path pk=%d: %w", o.PK, err)
 		}
+		rewritten, changed, unsupported := rewriteDocumentTypePath(f.Path)
+		if unsupported {
+			mrep.Failed(KindStoragePath, f.Name, "unsupported document_type template expression; documents use the default path")
+			rep.Warnings = append(rep.Warnings, fmt.Sprintf("storage path %q skipped: unsupported document_type template expression", f.Name))
+			continue
+		}
+		f.Path = rewritten
 		id, err := upsertStoragePath(ctx, d, opts.SystemID, opts.DryRun, f)
 		if err != nil {
 			return nil, err
@@ -255,7 +263,11 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 		spMap[o.PK] = id
 		names.storagePaths[o.PK] = f.Name
 		rep.StoragePaths++
-		mrep.Full(KindStoragePath, f.Name, f.Name)
+		if changed {
+			mrep.Partial(KindStoragePath, f.Name, f.Name, "document_type template rewritten to tag_list")
+		} else {
+			mrep.Full(KindStoragePath, f.Name, f.Name)
+		}
 	}
 	for _, o := range buckets[ModelCustomField] {
 		var f CustomFieldFields
@@ -523,11 +535,9 @@ func importDoc(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, o
 		if in.Fields.Correspondent != nil {
 			correspondentID = in.CorMap[*in.Fields.Correspondent]
 		}
-		var documentTypeID any
+		var documentTypeTagID int64
 		if in.Fields.DocumentType != nil {
-			if v, ok := in.DTMap[*in.Fields.DocumentType]; ok {
-				documentTypeID = v
-			}
+			documentTypeTagID = in.DTMap[*in.Fields.DocumentType]
 		}
 		var storagePathID any
 		if in.Fields.StoragePath != nil {
@@ -551,13 +561,13 @@ func importDoc(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, o
 		res, err := tx.ExecContext(ctx, `
 			INSERT INTO documents (
 				system_id, owner_id, original_blob, original_size, archive_blob, archive_size,
-				title, content, mime_type, document_type_id, storage_path_id,
+				title, content, mime_type, storage_path_id,
 				jd_category_id, legacy_id, archive_serial_number,
 				added_at, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`,
 			opts.SystemID, in.OwnerID, origRef.SHA256, origRef.Size, archiveBlob, archiveSize,
-			in.Fields.Title, content, mime, documentTypeID, storagePathID,
+			in.Fields.Title, content, mime, storagePathID,
 			in.InboxCat, in.LegacyID, asn,
 			added, created, updated,
 		)
@@ -585,9 +595,18 @@ func importDoc(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, o
 				continue // manifest inconsistency — log-worthy but non-fatal
 			}
 			if _, err := tx.ExecContext(ctx,
-				`INSERT INTO document_tags(document_id, tag_id) VALUES (?, ?)`,
+				`INSERT INTO document_tags(document_id, tag_id) VALUES (?, ?)
+				 ON CONFLICT(document_id, tag_id) DO UPDATE SET classifier_owned=0`,
 				docID, tagID); err != nil {
 				return fmt.Errorf("tag junction: %w", err)
+			}
+		}
+		if documentTypeTagID > 0 {
+			if _, err := tx.ExecContext(ctx,
+				`INSERT INTO document_tags(document_id, tag_id) VALUES (?, ?)
+				 ON CONFLICT(document_id, tag_id) DO UPDATE SET classifier_owned=0`,
+				docID, documentTypeTagID); err != nil {
+				return fmt.Errorf("document type tag junction: %w", err)
 			}
 		}
 
@@ -730,28 +749,47 @@ func upsertCorrespondent(ctx context.Context, d *db.DB, systemID int64, dry bool
 	return id, err
 }
 
-func upsertDocumentType(ctx context.Context, d *db.DB, systemID int64, dry bool, f DocumentTypeFields) (int64, error) {
+func upsertDocumentTypeTag(ctx context.Context, d *db.DB, systemID int64, dry bool, sourcePK int64, f DocumentTypeFields) (int64, error) {
 	if dry {
 		return 0, nil
 	}
 	now := time.Now().Unix()
+	name := "type:" + f.Name
+	preferredSlug := "type-" + defaultSlug(f.Slug, f.Name)
 	var id int64
 	err := d.WriteTx(ctx, func(tx *sql.Tx) error {
+		var existing int
+		if err := tx.QueryRowContext(ctx,
+			`SELECT EXISTS(SELECT 1 FROM tags WHERE system_id=? AND slug=?)`,
+			systemID, preferredSlug).Scan(&existing); err != nil {
+			return err
+		}
+		tagSlug := preferredSlug
+		if existing != 0 {
+			tagSlug = fmt.Sprintf("type-document-type-%d", sourcePK)
+		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO document_types(system_id, name, slug, matching_algorithm, match, is_insensitive, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			INSERT INTO tags(system_id, name, slug, color, matching_algorithm, match, is_insensitive, is_inbox_tag, created_at, updated_at)
+			VALUES (?, ?, ?, '#a6cee3', ?, ?, ?, 0, ?, ?)
 			ON CONFLICT(system_id, name) DO UPDATE SET
-				slug = excluded.slug,
 				matching_algorithm = excluded.matching_algorithm,
 				match = excluded.match,
 				is_insensitive = excluded.is_insensitive,
 				updated_at = excluded.updated_at
-		`, systemID, f.Name, defaultSlug(f.Slug, f.Name), f.MatchAlg, f.Match, boolInt(f.Insensitive), now, now); err != nil {
+		`, systemID, name, tagSlug, f.MatchAlg, f.Match, boolInt(f.Insensitive), now, now); err != nil {
 			return err
 		}
-		return tx.QueryRowContext(ctx, `SELECT id FROM document_types WHERE system_id = ? AND name = ?`, systemID, f.Name).Scan(&id)
+		return tx.QueryRowContext(ctx, `SELECT id FROM tags WHERE system_id=? AND name=?`, systemID, name).Scan(&id)
 	})
 	return id, err
+}
+
+func rewriteDocumentTypePath(path string) (rewritten string, changed, unsupported bool) {
+	rewritten = strings.ReplaceAll(path, "{{document_type}}", "{{tag_list}}")
+	rewritten = strings.ReplaceAll(rewritten, "{{ document_type }}", "{{ tag_list }}")
+	changed = rewritten != path
+	unsupported = strings.Contains(rewritten, "document_type")
+	return rewritten, changed, unsupported
 }
 
 func upsertStoragePath(ctx context.Context, d *db.DB, systemID int64, dry bool, f StoragePathFields) (int64, error) {

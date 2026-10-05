@@ -25,14 +25,14 @@ Disabled originals and edited forks survive reimport independently in each syste
 | `document_updated` | After an explicit metadata update                   |
 
 Triggers can filter by source path, filename, mail rule, tag, correspondent,
-document type, title or content regex, sender, subject, mailbox folder, and
-attachment presence. Multiple filters on one trigger use AND. Multiple
-triggers on an automation use OR.
+title or content regex, sender, subject, mailbox folder, and attachment
+presence. Multiple filters on one trigger use AND. Multiple triggers on an
+automation use OR.
 
 ## Actions
 
-The visual builder exposes title, tag, correspondent, document type,
-Johnny.Decimal category, storage path, owner, and custom-field assignment.
+The visual builder exposes title, tag, correspondent, Johnny.Decimal category,
+storage path, owner, and custom-field assignment.
 The JSON view remains available for inspecting the complete automation.
 
 The server exposes the current builder vocabulary and parameter schemas at
@@ -63,7 +63,6 @@ Example:
     }
   ],
   "actions": [
-    { "type": "assign_document_type", "params": { "document_type_id": 3 } },
     { "type": "assign_tags", "params": { "tag_ids": [7] } },
     {
       "type": "assign_title",
@@ -73,10 +72,9 @@ Example:
 }
 ```
 
-Title templates support `{{title}}`, `{{correspondent}}`,
-`{{document_type}}`, and `{{date}}`. Unknown placeholders remain visible
-so a typo does not silently erase text. Use IDs, not display names, in action
-parameters.
+Title templates support `{{title}}`, `{{correspondent}}`, `{{tags}}`, and
+`{{date}}`. Unknown placeholders remain visible so a typo does not silently
+erase text. Use IDs, not display names, in action parameters.
 
 ## Classification order
 

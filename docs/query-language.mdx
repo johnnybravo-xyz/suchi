@@ -26,7 +26,7 @@ title:invoice content:"payment due"
 sensitivity:confidential lang:de
 added:>=2026-01-01 -is:trash
 date:>=2026-09-01 date:<=2026-09-30 date-role:renewal
-from:"Northstar Cloud" tag:renewal -type:quote
+from:"Northstar Cloud" tag:renewal -tag:quote
 ```
 
 Search and Documents compile the same query into the same matching document
@@ -104,7 +104,6 @@ Negation applies only to the following clause. There is no grouped negation.
 | `jd:`          | Johnny.Decimal category by visible code or exact category name, for example `jd:22` or `jd:"22 Investments"`. Database row IDs are not query syntax. |
 | `tag:`         | Exact tag name. Multiple positive tag clauses require every tag.                                                                                     |
 | `from:`        | Exact correspondent name. Matches the primary or any linked correspondent.                                                                           |
-| `type:`        | Exact document-type name.                                                                                                                            |
 | `sensitivity:` | `public`, `internal`, `confidential`, or `restricted`.                                                                                               |
 | `lang:`        | Assigned or detected two- or three-letter language code, such as `en`, `de`, or `hin`.                                                               |
 | `title:`       | Prefix or quoted phrase restricted to title.                                                                                                         |
@@ -186,8 +185,8 @@ One query remains an AND-composed set of independently negatable clauses.
 
 The Search and Documents query fields recognize an incomplete final qualifier.
 Suggestions cover filter names, Johnny.Decimal categories, tags,
-correspondents, document types, sensitivity values, date roles, and `is:`
-states. Selecting one replaces the active token but does not run the search.
+correspondents, sensitivity values, date roles, and `is:` states. Selecting
+one replaces the active token but does not run the search.
 
 ## Limits
 

@@ -70,7 +70,6 @@
       document_ids: scope.document_ids || [],
       jd_category_id: scope.jd_category_id || 0,
       sensitivity: scope.sensitivity || '',
-      document_type_id: scope.document_type_id || 0,
       tag_ids: scope.tag_ids || [],
       correspondent_ids: scope.correspondent_ids || [],
       created_at_gte: scope.created_at_gte ?? null,

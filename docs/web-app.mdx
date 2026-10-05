@@ -106,7 +106,6 @@ failures show **Retry** rather than an empty archive.
 | Filing category database ID              | `jd`                     | `#/documents?jd=6`                       |
 | Tag                                      | `tags__id__in`           | `#/documents?tags__id__in=4`             |
 | Correspondent                            | `correspondents__id__in` | `#/documents?correspondents__id__in=3`   |
-| Document type                            | `document_type__id`      | `#/documents?document_type__id=2`        |
 | Sensitivity                              | `sensitivity`            | `#/documents?sensitivity=confidential`   |
 | Active links created by the user         | `share_link`             | `#/documents?share_link=active`           |
 | Sort order                               | `ordering`               | `#/documents?ordering=title`             |
@@ -128,9 +127,9 @@ explicit historical URLs restore their page. Invalid values become page one and
 out-of-range values become the last page without adding history. Only the newest
 request updates the screen.
 
-The **Type or sharing** filter includes **My active shares** alongside document types.
-It includes each document once while at least one link created by the current
-user is unexpired, unrevoked, and still permitted by current ownership and ACLs.
+The dedicated **Shared by me** toggle includes each document once while at
+least one link created by the current user is unexpired, unrevoked, and still
+permitted by current ownership and ACLs.
 
 Mouse/trackpad devices have hover quick actions; on touchscreens open the document
 for filing/Trash actions. Search and Documents share the [query language](/query-language):
@@ -183,8 +182,8 @@ sit above **Restore** and **Delete permanently**.
 ## Saved views
 
 **New view** opens **Create a view** with optional Query, category, tag,
-correspondent, document type, sensitivity and date filters. Empty choices mean all
-values. Date ranges use `yyyy-mm-dd`. Select a view's name to open its documents;
+correspondent, sensitivity and date filters. Empty choices mean all values.
+Date ranges use `yyyy-mm-dd`. Select a view's name to open its documents;
 **Edit** is available only for your views. **Save changes** updates in place;
 **Cancel**/Escape discards the draft.
 
@@ -272,11 +271,10 @@ When OIDC is configured, People cannot create password accounts: users
 self-provision through browser sign-in only when their verified provider email
 is unused. `ADMIN_EMAIL` can grant the first matching provisioned identity the
 administrator role; it does not find or merge a returning account.
-
-**Metadata** manages tags, correspondents, document types, storage paths and
-custom fields through one type selector. Metadata types have navigable URLs, so
-reload and Back/Forward restore the selected catalog. Metadata is scoped to the
-current filing system; People is server-wide.
+**Metadata** manages tags, correspondents, storage paths and custom fields
+through one type selector. Metadata types have navigable URLs, so reload and
+Back/Forward restore the selected catalog. Metadata is scoped to the current
+filing system; People is server-wide.
 
 **Filing tree** imports and exports HuML or TOML taxonomy files. Preview precedes
 Apply; export explicitly offers starter rules or tree only. **What is included?**

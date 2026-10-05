@@ -282,18 +282,12 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/tags/{id}", s.DeleteTag)
 	mux.HandleFunc("PATCH /api/tags/{id}/parent", s.SetTagParent)
 
-	// Taxonomy CRUD (correspondents, document_types, storage_paths).
-	// Shared shape via core/api/taxonomy_crud.go. Admin-only mutation;
-	// any authed user can list/read.
+	// Taxonomy CRUD (correspondents and storage paths). Shared shape via
+	// core/api/taxonomy_crud.go. Admin-only mutation; any authed user can list.
 	mux.HandleFunc("GET /api/correspondents/", s.ListCorrespondents)
 	mux.HandleFunc("POST /api/correspondents/", s.CreateCorrespondent)
 	mux.HandleFunc("PATCH /api/correspondents/{id}", s.UpdateCorrespondent)
 	mux.HandleFunc("DELETE /api/correspondents/{id}", s.DeleteCorrespondent)
-
-	mux.HandleFunc("GET /api/document_types/", s.ListDocumentTypes)
-	mux.HandleFunc("POST /api/document_types/", s.CreateDocumentType)
-	mux.HandleFunc("PATCH /api/document_types/{id}", s.UpdateDocumentType)
-	mux.HandleFunc("DELETE /api/document_types/{id}", s.DeleteDocumentType)
 
 	mux.HandleFunc("GET /api/storage_paths/", s.ListStoragePaths)
 	mux.HandleFunc("POST /api/storage_paths/", s.CreateStoragePath)

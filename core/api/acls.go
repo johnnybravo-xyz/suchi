@@ -204,12 +204,11 @@ func parseAclPath(w http.ResponseWriter, s *Server, r *http.Request) (authz.Kind
 	rawKind := r.PathValue("kind")
 	kind := authz.Kind(rawKind)
 	switch kind {
-	case authz.KindDocument, authz.KindTag, authz.KindCorrespondent,
-		authz.KindDocumentType, authz.KindStoragePath:
+	case authz.KindDocument, authz.KindTag, authz.KindCorrespondent, authz.KindStoragePath:
 		// ok
 	default:
 		s.writeError(w, http.StatusBadRequest, "bad_kind",
-			"kind must be one of document|tag|correspondent|document_type|storage_path")
+			"kind must be one of document|tag|correspondent|storage_path")
 		return "", 0, false
 	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)

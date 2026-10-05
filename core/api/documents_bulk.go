@@ -6,8 +6,8 @@
 // Wire shape:
 //
 //	{ "documents": [1, 2, 3],
-//	  "method": "set_correspondent" | "set_document_type" | "set_storage_path"
-//	          | "add_tag" | "remove_tag" | "modify_tags"
+//	  "method": "set_correspondent" | "set_storage_path" | "add_tag"
+//	          | "remove_tag" | "modify_tags"
 //	          | "delete" | "restore"
 //	          | "set_sensitivity" | "set_jd_category"
 //	          | "rescan_enqueue",
@@ -243,14 +243,9 @@ func (s *Server) applyBulkEdit(r *http.Request, tx *sql.Tx, systemID int64, meth
 			append([]any{now}, args...)...,
 		)
 		return err
-	case "set_document_type", "set_storage_path", "set_jd_category":
-		var column, table string
-		switch method {
-		case "set_document_type":
-			column, table = "document_type_id", "document_types"
-		case "set_storage_path":
-			column, table = "storage_path_id", "storage_paths"
-		case "set_jd_category":
+	case "set_storage_path", "set_jd_category":
+		column, table := "storage_path_id", "storage_paths"
+		if method == "set_jd_category" {
 			column, table = "jd_category_id", "jd_categories"
 		}
 		value, err := paramInt64(params, column)

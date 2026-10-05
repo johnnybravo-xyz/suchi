@@ -40,9 +40,6 @@ func (r apiQueryResolver) Resolve(ctx context.Context, filter, value string) ([]
 	case "from":
 		query = `SELECT id, name FROM correspondents WHERE system_id = ? AND lower(name) = lower(?) ORDER BY name LIMIT 8`
 		args = []any{r.systemID, value}
-	case "type":
-		query = `SELECT id, name FROM document_types WHERE system_id = ? AND lower(name) = lower(?) ORDER BY name LIMIT 8`
-		args = []any{r.systemID, value}
 	default:
 		return nil, fmt.Errorf("resolve unsupported search filter %q", filter)
 	}
@@ -218,8 +215,6 @@ func (s *Server) queryCompletions(ctx context.Context, raw string, limit int) ([
 		query = `SELECT id, name, name FROM tags WHERE system_id = ? AND lower(name) LIKE lower(?) ESCAPE '\' ORDER BY name LIMIT ?`
 	case "from":
 		query = `SELECT id, name, name FROM correspondents WHERE system_id = ? AND lower(name) LIKE lower(?) ESCAPE '\' ORDER BY name LIMIT ?`
-	case "type":
-		query = `SELECT id, name, name FROM document_types WHERE system_id = ? AND lower(name) LIKE lower(?) ESCAPE '\' ORDER BY name LIMIT ?`
 	default:
 		return []AutocompleteSuggestion{}, true, nil
 	}

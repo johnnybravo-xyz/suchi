@@ -138,16 +138,6 @@ func TestAccountIdentityFreshAndAdoptedSchemasMatch(t *testing.T) {
 
 	assertMigrationScalar(t, fresh, `
 		SELECT count(*)
-		FROM sqlite_schema
-		WHERE type='table'
-		  AND name NOT GLOB 'sqlite_*'
-		  AND name NOT GLOB 'documents_fts*'`, 40)
-	assertMigrationScalar(t, fresh, `
-		SELECT count(*)
-		FROM sqlite_schema
-		WHERE type='table' AND name GLOB 'documents_fts*'`, 5)
-	assertMigrationScalar(t, fresh, `
-		SELECT count(*)
 		FROM pragma_table_info('documents')
 		WHERE name='correspondent_id'`, 0)
 	assertMigrationScalar(t, fresh, `

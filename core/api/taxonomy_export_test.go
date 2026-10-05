@@ -38,7 +38,6 @@ filter_title_matching = "Invoice"
 filter_content_matching = "electricity"
 filter_has_tag = "To file"
 filter_has_correspondent = "Utility company"
-filter_has_document_type = "Bill"
 [[seeds.automations.actions]]
 kind = "assign_title"
 [seeds.automations.actions.params]
@@ -93,7 +92,7 @@ func TestTaxonomyExportPreservesNamedAndTitleFilters(t *testing.T) {
 				{"Statement", true, "Statement"},
 				{"Invoice", false, "Invoice"},
 			} {
-				res, err := dest.Write.Exec(`INSERT INTO documents(system_id,owner_id,title,content,original_blob,original_size,jd_category_id,document_type_id,created_at,added_at,updated_at) VALUES(1,1,?,'electricity',?,1,(SELECT id FROM jd_categories WHERE code=49),(SELECT id FROM document_types WHERE name='Bill'),0,0,0)`, tc.title, fmt.Sprintf("source-%d", i))
+				res, err := dest.Write.Exec(`INSERT INTO documents(system_id,owner_id,title,content,original_blob,original_size,jd_category_id,created_at,added_at,updated_at) VALUES(1,1,?,'electricity',?,1,(SELECT id FROM jd_categories WHERE code=49),0,0,0)`, tc.title, fmt.Sprintf("source-%d", i))
 				if err != nil {
 					t.Fatal(err)
 				}

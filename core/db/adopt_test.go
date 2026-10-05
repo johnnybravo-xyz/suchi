@@ -21,8 +21,8 @@ func TestStableCatalogAndBetaAdoption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(stable) != 1 || stable[0].Version != db.StableSchemaVersion {
-		t.Fatalf("active migrations = %+v, want only stable version 1", stable)
+	if len(stable) != db.StableSchemaVersion || stable[len(stable)-1].Version != db.StableSchemaVersion {
+		t.Fatalf("active migrations = %+v, want versions 1 through %d", stable, db.StableSchemaVersion)
 	}
 	beta, err := db.LoadMigrations(compatibility.FS, ".")
 	if err != nil {

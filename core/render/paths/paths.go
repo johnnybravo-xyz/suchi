@@ -13,7 +13,6 @@
 //	{{ title }}            documents.title
 //	{{ doc_pk }}           documents.id
 //	{{ correspondent }}    correspondent.name  ("" if none)
-//	{{ document_type }}    document_types.name
 //	{{ storage_path }}     storage_paths.name  (self-referential, rare)
 //	{{ tag_list }}         comma-joined tag names
 //	{{ created }}          ISO date string (2026-03-02)
@@ -60,7 +59,6 @@ type Context struct {
 	Title         string
 	DocPK         int64
 	Correspondent string
-	DocumentType  string
 	StoragePath   string
 	Tags          []string
 	Created       string // "YYYY-MM-DD"
@@ -181,7 +179,6 @@ func templateValues(c Context) map[string]string {
 		"title":              c.Title,
 		"doc_pk":             strconv.FormatInt(c.DocPK, 10),
 		"correspondent":      c.Correspondent,
-		"document_type":      c.DocumentType,
 		"storage_path":       c.StoragePath,
 		"tag_list":           strings.Join(c.Tags, ","),
 		"created":            c.Created,

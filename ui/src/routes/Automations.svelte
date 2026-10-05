@@ -1,8 +1,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
   import { listAutomations, createAutomation, patchAutomation, deleteAutomation,
-           listTags, listCorrespondents, listDocumentTypes,
-           automationsSchema } from '../lib/api.js'
+           listTags, listCorrespondents, automationsSchema } from '../lib/api.js'
   import Icon from '../lib/Icon.svelte'
 
   let { notify, readOnly = false, jdCategories = [] } = $props()
@@ -13,7 +12,7 @@
   let mode = $state('builder')      // 'builder' | 'json'
   let jsonDraft = $state('')
   let draftErr = $state('')
-  let facets = $state({ tags: [], correspondents: [], types: [] })
+  let facets = $state({ tags: [], correspondents: [] })
   let facetsPromise
   let facetsError = $state('')
   let peekID = $state(null)
@@ -35,7 +34,7 @@
   const blank = () => ({
     name: '', enabled: true, order: items.length,
     triggers: [{ type: 2, filter_filename: '', filter_path: '', filter_title_matching: '', filter_content_matching: '',
-                 filter_has_tag: 0, filter_has_correspondent: 0, filter_has_document_type: 0 }],
+                 filter_has_tag: 0, filter_has_correspondent: 0 }],
     actions: [{ type: 'assign_tags', params: { tag_ids: [] } }],
   })
 
@@ -51,12 +50,11 @@
   function loadFacets() {
     if (facetsPromise) return facetsPromise
     facetsError = ''
-    facetsPromise = Promise.all([listTags(), listCorrespondents(), listDocumentTypes()])
-      .then(([tags, correspondents, types]) => {
+    facetsPromise = Promise.all([listTags(), listCorrespondents()])
+      .then(([tags, correspondents]) => {
         facets = {
           tags: tags?.results || [],
           correspondents: correspondents?.results || [],
-          types: types?.results || [],
         }
       })
       .catch((ex) => {
@@ -84,7 +82,7 @@
     }
   }
 
-  function addTrigger() { editing.triggers.push({ type: 2, filter_filename: '', filter_path: '', filter_title_matching: '', filter_content_matching: '', filter_has_tag: 0, filter_has_correspondent: 0, filter_has_document_type: 0 }) }
+  function addTrigger() { editing.triggers.push({ type: 2, filter_filename: '', filter_path: '', filter_title_matching: '', filter_content_matching: '', filter_has_tag: 0, filter_has_correspondent: 0 }) }
   function addAction() { editing.actions.push({ type: 'assign_tags', params: { tag_ids: [] } }) }
   function actionKindChanged(a) {
     const spec = ACTION_KINDS.find(k => k.kind === a.type)
@@ -99,7 +97,7 @@
       catch (ex) { draftErr = ex.message || 'Not valid JSON.'; return }
     } else body = editing
     if (!body.name?.trim()) { draftErr = 'Give it a name.'; return }
-    for (const t of body.triggers || []) for (const k of ['type','filter_has_tag','filter_has_correspondent','filter_has_document_type']) t[k] = Number(t[k]) || 0
+    for (const t of body.triggers || []) for (const k of ['type','filter_has_tag','filter_has_correspondent']) t[k] = Number(t[k]) || 0
     for (const a of body.actions || []) for (const k of Object.keys(a.params || {}))
       if (k.endsWith('_id')) a.params[k] = Number(a.params[k]) || 0
       else if (k === 'tag_ids') a.params[k] = (a.params[k] || []).map(Number)
@@ -171,10 +169,6 @@
       case 'assign_correspondent': {
         const name = facets.correspondents.find(c => c.id === p.correspondent_id)?.name
         return name ? `Set correspondent → ${name}` : 'Set correspondent'
-      }
-      case 'assign_document_type': {
-        const name = facets.types.find(t => t.id === p.document_type_id)?.name
-        return name ? `Set document type → ${name}` : 'Set document type'
       }
       case 'assign_jd_category': {
         const jd = jdCategories.find(x => x.id === p.jd_category_id)
@@ -296,11 +290,6 @@
             <select class="input" bind:value={a.params.correspondent_id}>
               <option value={0}>choose…</option>
               {#each facets.correspondents as x}<option value={x.id}>{x.name}</option>{/each}
-            </select>
-          {:else if a.type === 'assign_document_type'}
-            <select class="input" bind:value={a.params.document_type_id}>
-              <option value={0}>choose…</option>
-              {#each facets.types as x}<option value={x.id}>{x.name}</option>{/each}
             </select>
           {:else if a.type === 'assign_jd_category'}
             <select class="input" bind:value={a.params.jd_category_id}>

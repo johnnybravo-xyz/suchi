@@ -1,19 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// CRUD for the "matcher"-style taxonomy resources — correspondents,
-// document_types, storage_paths. They share the same table shape:
+// CRUD for the matcher-style correspondent and storage-path resources.
+// They share matcher fields; storage paths add the rendered-view template.
+// Custom fields live separately because they have typed values and JSON extras.
 //
-//	{id, name, slug, matching_algorithm, match, is_insensitive,
-//	 created_at, updated_at}
-//
-// storage_paths adds one column (`path` — the Gonja template applied
-// at rendered-view time). custom_fields lives in its own file because
-// its shape is fundamentally different (typed data_type + JSON extras).
-//
-// Every list endpoint wears the DRF pagination envelope. Create and
-// update are admin-only; list and get are open to any authed user.
-// Delete cascades via the parent tables' ON DELETE SET NULL (already
-// set at schema time).
+// Every list endpoint wears the DRF pagination envelope. Create and update are
+// admin-only; list and get are open to any authenticated user.
 
 package api
 
@@ -38,8 +30,6 @@ func kindForTable(table string) authz.Kind {
 	switch table {
 	case "correspondents":
 		return authz.KindCorrespondent
-	case "document_types":
-		return authz.KindDocumentType
 	case "storage_paths":
 		return authz.KindStoragePath
 	}
@@ -87,21 +77,6 @@ func (s *Server) DeleteCorrespondent(w http.ResponseWriter, r *http.Request) {
 	s.taxonomyDelete(w, r, "correspondents")
 }
 
-// ---------- Document types ----------
-
-func (s *Server) ListDocumentTypes(w http.ResponseWriter, r *http.Request) {
-	s.taxonomyList(w, r, "document_types", false)
-}
-func (s *Server) CreateDocumentType(w http.ResponseWriter, r *http.Request) {
-	s.taxonomyCreate(w, r, "document_types", false)
-}
-func (s *Server) UpdateDocumentType(w http.ResponseWriter, r *http.Request) {
-	s.taxonomyUpdate(w, r, "document_types", false)
-}
-func (s *Server) DeleteDocumentType(w http.ResponseWriter, r *http.Request) {
-	s.taxonomyDelete(w, r, "document_types")
-}
-
 // ---------- Storage paths ----------
 
 func (s *Server) ListStoragePaths(w http.ResponseWriter, r *http.Request) {
@@ -124,7 +99,7 @@ func (s *Server) DeleteStoragePath(w http.ResponseWriter, r *http.Request) {
 // future callers can't accidentally introduce SQL injection.
 func isSafeTable(t string) bool {
 	switch t {
-	case "correspondents", "document_types", "storage_paths":
+	case "correspondents", "storage_paths":
 		return true
 	}
 	return false

@@ -275,16 +275,24 @@ without OCR/classifier/filing reruns. [Backup and restore](/backup-restore) requ
 all of `DATA_DIR`, including credential keys, with writers stopped or an atomic
 whole-directory snapshot; a database-only copy is incomplete.
 
-The active catalog in `core/db/migrations/` contains one declarative
-`0001_baseline.sql`: the complete v0.1.0 schema at `user_version = 1` with the
-one-row `schema_lineage = 'stable-v1'` identity. Frozen beta SQL and the final
-account-identity rebuild live separately as compatibility migrations
-`0002`–`0005`; the normal catalog cannot discover them.
+The active catalog in `core/db/migrations/` contains the immutable declarative
+`0001_baseline.sql` for stable schema 1 and the current unreleased
+`0002_document_types_to_tags.sql` migration for `user_version = 2`. The
+one-row `schema_lineage = 'stable-v1'` identity is unchanged. Frozen beta SQL
+and the final account-identity rebuild live separately as compatibility
+migrations `0002`–`0005`; the normal catalog cannot discover them.
+
+Stable migration 0002 removes the duplicate document-type vocabulary after
+mapping each row and every live document, ACL, saved-view, automation, and
+template reference to a `type:<name>` tag. Unrepresentable tag-and-type
+automation conjunctions suspend rather than broadening. Paperless source types
+are translated at the importer boundary; no native type schema or API remains.
 
 `migrations.Prepare` delegates core admission to `db.PrepareStable`, which
-classifies the database before writing. Empty databases receive the baseline;
-already-stable databases are no-ops. Every other accepted state must match its
-complete canonical `sqlite_schema` fingerprint and lineage, not merely a
+classifies the database before writing. Empty databases receive every active
+migration; already-current databases are no-ops. An exact stable schema-1
+database applies migration 0002 directly. Every other accepted state must match
+its complete canonical `sqlite_schema` fingerprint and lineage, not merely a
 `user_version`. Unknown, partial, spoofed, corrupt and future states fail
 without mutation. The exact pre-identity schema-4 fingerprint is an explicit
 compatibility boundary that runs only `0005`; a schema claiming the stable

@@ -22,17 +22,16 @@ test('parses saved-view filters defensively', () => {
 
 test('serializes new saved views to one stable query string', () => {
   const query = canonicalSavedViewQuery(
-    { q: '"distribution advice"', tag: '7', corr: '9', type: '10', jd: '6', sens: 'internal', dateFrom: '2026-09-01', dateTo: '2026-09-30', dateRole: 'renewal' },
+    { q: '"distribution advice"', tag: '7', corr: '9', jd: '6', sens: 'internal', dateFrom: '2026-09-01', dateTo: '2026-09-30', dateRole: 'renewal' },
     {
       tags: [{ id: 7, name: 'income tax' }],
       correspondents: [{ id: 9, name: 'Bagmane "Prime"' }],
-      types: [{ id: 10, name: 'statement' }],
       categories: [{ id: 6, code: 22, name: 'Investments' }],
     },
   )
   assert.equal(
     query,
-    '"distribution advice" tag:"income tax" from:"Bagmane \\"Prime\\"" type:"statement" jd:22 sensitivity:internal date:>=2026-09-01 date:<=2026-09-30 date-role:renewal',
+    '"distribution advice" tag:"income tax" from:"Bagmane \\"Prime\\"" jd:22 sensitivity:internal date:>=2026-09-01 date:<=2026-09-30 date-role:renewal',
   )
 })
 

@@ -197,8 +197,8 @@ separate docs — they're kept inside the parent .eml's CAS blob only.
 
 Attachment children inherit the parent's correspondents (so the
 `From:` sender shows up on every child PDF), owner, and JD category.
-They do NOT inherit tags or document type — the pipeline (automations,
-LLM classifier) reclassifies each child independently.
+They do NOT inherit tags — the pipeline (automations and LLM classifier)
+reclassifies each child independently.
 
 **How to feed it in.** Any of the three supported ingest paths works;
 suchi doesn't care what put the `.eml` on the disk:

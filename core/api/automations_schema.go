@@ -38,9 +38,8 @@ type AutomationActionParam struct {
 	Type        string `json:"type"`
 	Required    bool   `json:"required"`
 	Description string `json:"description,omitempty"`
-	// TargetKind is set for `id` and `tag_ids` params so the SPA
-	// knows which picker to render — one of "tag", "correspondent",
-	// "document_type", "storage_path", "custom_field", "user".
+	// TargetKind is set for `id` and `tag_ids` params so the SPA knows which
+	// picker to render: tag, correspondent, storage_path, custom_field, or user.
 	TargetKind string `json:"target_kind,omitempty"`
 }
 
@@ -69,7 +68,7 @@ var automationSchema = AutomationSchema{
 			Description: "Rewrites the document title from a bounded placeholder template.",
 			Params: []AutomationActionParam{
 				{Name: "template", Type: "template", Required: true,
-					Description: "Supports {{title}}, {{correspondent}}, {{document_type}}, and {{date}}."},
+					Description: "Supports {{title}}, {{correspondent}}, {{tags}}, and {{date}}."},
 			},
 		},
 		{
@@ -82,12 +81,6 @@ var automationSchema = AutomationSchema{
 			Kind: "assign_correspondent", Name: "Assign correspondent",
 			Params: []AutomationActionParam{
 				{Name: "correspondent_id", Type: "id", Required: true, TargetKind: "correspondent"},
-			},
-		},
-		{
-			Kind: "assign_document_type", Name: "Assign document type",
-			Params: []AutomationActionParam{
-				{Name: "document_type_id", Type: "id", Required: true, TargetKind: "document_type"},
 			},
 		},
 		{

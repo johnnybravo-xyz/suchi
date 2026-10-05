@@ -297,7 +297,6 @@ func resolveRule(ctx context.Context, tx *sql.Tx, systemID int64, rule plannedRu
 	}{
 		{taxonomy.TableTags, t.FilterTag, &trigger.FilterTagID},
 		{taxonomy.TableCorrespondents, t.FilterCorrespondent, &trigger.FilterCorrID},
-		{taxonomy.TableDocumentTypes, t.FilterDocumentType, &trigger.FilterDocTypeID},
 	} {
 		if ref.name == "" {
 			continue
@@ -333,8 +332,8 @@ func insertRule(ctx context.Context, tx *sql.Tx, systemID int64, rule automation
 		return err
 	}
 	t := rule.Triggers[0]
-	_, err = tx.ExecContext(ctx, `INSERT INTO automation_triggers(automation_id,type,filter_path,filter_filename,filter_tag_id,filter_corr_id,filter_doctype_id,filter_title_re,filter_content_re,filter_email_from,filter_email_subject,filter_email_folder,filter_email_has_attachment,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		id, t.Type, nullIfEmpty(t.FilterPath), nullIfEmpty(t.FilterFilename), nullID(t.FilterTagID), nullID(t.FilterCorrID), nullID(t.FilterDocTypeID), nullIfEmpty(t.FilterTitleRE), nullIfEmpty(t.FilterContentRE), nullIfEmpty(t.FilterEmailFrom), nullIfEmpty(t.FilterEmailSubject), nullIfEmpty(t.FilterEmailFolder), t.FilterEmailHasAttachment, now)
+	_, err = tx.ExecContext(ctx, `INSERT INTO automation_triggers(automation_id,type,filter_path,filter_filename,filter_tag_id,filter_corr_id,filter_title_re,filter_content_re,filter_email_from,filter_email_subject,filter_email_folder,filter_email_has_attachment,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		id, t.Type, nullIfEmpty(t.FilterPath), nullIfEmpty(t.FilterFilename), nullID(t.FilterTagID), nullID(t.FilterCorrID), nullIfEmpty(t.FilterTitleRE), nullIfEmpty(t.FilterContentRE), nullIfEmpty(t.FilterEmailFrom), nullIfEmpty(t.FilterEmailSubject), nullIfEmpty(t.FilterEmailFolder), t.FilterEmailHasAttachment, now)
 	if err != nil {
 		return err
 	}

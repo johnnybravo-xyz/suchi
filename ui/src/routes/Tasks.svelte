@@ -85,7 +85,7 @@
   function taskChoices(t) {
     const choices = Array.isArray(t.choices) ? t.choices : []
     if (t.approval_name === 'document-change') {
-      if (!['jd_category', 'correspondent', 'document_type', 'tag', 'title', 'language'].includes(t.vars?.field)) return []
+      if (!['jd_category', 'correspondent', 'tag', 'title', 'language'].includes(t.vars?.field)) return []
       return choices.filter(choice => choice === 'reject' || (choice === 'apply' &&
         t.vars?.source_current === true && t.vars?.review_conflict === false &&
         ['review_first', 'low_confidence'].includes(t.vars?.reason)))
@@ -111,7 +111,6 @@
         return {
           jd_category: 'File document',
           correspondent: 'Set correspondent',
-          document_type: 'Set document type',
           tag: 'Add tag',
           title: 'Change title',
           language: 'Set language',
@@ -152,11 +151,10 @@
       return t.prompt || t.title || `Task #${t.id}`
     }
     const value = suggestionValue(t.vars)
-    if (!['jd_category', 'correspondent', 'document_type', 'tag', 'title', 'language'].includes(t.vars.field)) return 'Unsupported action · read-only'
+    if (!['jd_category', 'correspondent', 'tag', 'title', 'language'].includes(t.vars.field)) return 'Unsupported action · read-only'
     return {
       jd_category: `File under “${value}”?`,
       correspondent: `Set correspondent to “${value}”?`,
-      document_type: `Set document type to “${value}”?`,
       tag: `Add “${value}” tag?`,
       title: `Change title to “${value}”?`,
       language: `Set language to “${value}”?`,

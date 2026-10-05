@@ -211,7 +211,7 @@ func validateDocumentChange(c DocumentChange) error {
 		if c.ValueID <= 0 {
 			return ErrStaleProposal
 		}
-	case "correspondent", "document_type", "tag":
+	case "correspondent", "tag":
 		if c.ValueID == 0 && strings.TrimSpace(c.Value) == "" {
 			return ErrStaleProposal
 		}
@@ -424,10 +424,6 @@ func validateDestination(ctx context.Context, tx *sql.Tx, docID, systemID int64,
 		if err := tx.QueryRowContext(ctx, `SELECT NOT EXISTS(SELECT 1 FROM document_correspondents WHERE document_id=documents.id AND role='sender') FROM documents WHERE id=?`, docID).Scan(&eligible); err != nil {
 			return err
 		}
-	case "document_type":
-		if err := tx.QueryRowContext(ctx, `SELECT document_type_id IS NULL FROM documents WHERE id=?`, docID).Scan(&eligible); err != nil {
-			return err
-		}
 	case "language":
 		if err := tx.QueryRowContext(ctx, `SELECT languages_locked=0 FROM documents WHERE id=?`, docID).Scan(&eligible); err != nil {
 			return err
@@ -439,7 +435,7 @@ func validateDestination(ctx context.Context, tx *sql.Tx, docID, systemID int64,
 		return ErrStaleProposal
 	}
 	if c.ValueID > 0 {
-		table := map[string]string{"jd_category": "jd_categories", "correspondent": "correspondents", "document_type": "document_types", "tag": "tags"}[c.Field]
+		table := map[string]string{"jd_category": "jd_categories", "correspondent": "correspondents", "tag": "tags"}[c.Field]
 		var one int
 		if table == "" {
 			return ErrStaleProposal
@@ -462,8 +458,6 @@ func documentChangeVocabulary(ctx context.Context, tx *sql.Tx, systemID int64, c
 	switch c.Field {
 	case "tag":
 		table = "tags"
-	case "document_type":
-		table = "document_types"
 	default:
 		return 0, nil
 	}
@@ -558,8 +552,6 @@ func writeDocumentChangeValue(ctx context.Context, tx *sql.Tx, docID, systemID i
 			table = taxonomy.TableTags
 		case "correspondent":
 			table = taxonomy.TableCorrespondents
-		case "document_type":
-			table = taxonomy.TableDocumentTypes
 		}
 		if table != 0 {
 			var err error
@@ -578,8 +570,6 @@ func writeDocumentChangeValue(ctx context.Context, tx *sql.Tx, docID, systemID i
 		if err = taxonomy.SetPrimaryCorrespondent(ctx, tx, docID, c.ValueID); err == nil {
 			result, err = tx.ExecContext(ctx, `UPDATE documents SET updated_at=? WHERE id=?`, now, docID)
 		}
-	case "document_type":
-		result, err = tx.ExecContext(ctx, `UPDATE documents SET document_type_id=?,updated_at=? WHERE id=? AND document_type_id IS NULL`, c.ValueID, now, docID)
 	case "title":
 		result, err = tx.ExecContext(ctx, `UPDATE documents SET title=?,updated_at=? WHERE id=? AND title<>?`, c.Value, now, docID, c.Value)
 	case "language":
@@ -640,13 +630,13 @@ func DocumentChangeProjection(ctx context.Context, q systems.Queryer, docID int6
 	out["source_current"] = fresh
 	out["review_conflict"] = !fresh || current.FieldRevision(c.Field) != c.Baseline.FieldRevision(c.Field) || c.PolicyVersion != ReviewPolicyVersion
 	var currentValue string
-	err = q.QueryRowContext(ctx, `SELECT CASE ? WHEN 'title' THEN d.title WHEN 'language' THEN trim(d.languages,',') WHEN 'correspondent' THEN COALESCE((SELECT c.name FROM document_correspondents dc JOIN correspondents c ON c.id=dc.correspondent_id WHERE dc.document_id=d.id AND dc.role='sender' ORDER BY dc.position,dc.correspondent_id LIMIT 1),'') WHEN 'document_type' THEN COALESCE(dt.name,'') WHEN 'jd_category' THEN COALESCE(j.name,'') WHEN 'tag' THEN COALESCE((SELECT group_concat(t.name,', ') FROM document_tags link JOIN tags t ON t.id=link.tag_id WHERE link.document_id=d.id AND link.classifier_owned=0),'') END FROM documents d LEFT JOIN document_types dt ON dt.id=d.document_type_id LEFT JOIN jd_categories j ON j.id=d.jd_category_id WHERE d.id=?`, c.Field, docID).Scan(&currentValue)
+	err = q.QueryRowContext(ctx, `SELECT CASE ? WHEN 'title' THEN d.title WHEN 'language' THEN trim(d.languages,',') WHEN 'correspondent' THEN COALESCE((SELECT c.name FROM document_correspondents dc JOIN correspondents c ON c.id=dc.correspondent_id WHERE dc.document_id=d.id AND dc.role='sender' ORDER BY dc.position,dc.correspondent_id LIMIT 1),'') WHEN 'jd_category' THEN COALESCE(j.name,'') WHEN 'tag' THEN COALESCE((SELECT group_concat(t.name,', ') FROM document_tags link JOIN tags t ON t.id=link.tag_id WHERE link.document_id=d.id AND link.classifier_owned=0),'') END FROM documents d LEFT JOIN jd_categories j ON j.id=d.jd_category_id WHERE d.id=?`, c.Field, docID).Scan(&currentValue)
 	if err != nil {
 		return nil, err
 	}
 	proposed := c.Value
 	if c.ValueID > 0 {
-		table := map[string]string{"jd_category": "jd_categories", "correspondent": "correspondents", "document_type": "document_types", "tag": "tags"}[c.Field]
+		table := map[string]string{"jd_category": "jd_categories", "correspondent": "correspondents", "tag": "tags"}[c.Field]
 		if err := q.QueryRowContext(ctx, "SELECT name FROM "+table+" WHERE id=? AND system_id=?", c.ValueID, current.SystemID).Scan(&proposed); err != nil {
 			out["review_conflict"] = true
 			proposed = "Unavailable"

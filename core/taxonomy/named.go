@@ -19,7 +19,6 @@ type NamedTable uint8
 const (
 	TableTags NamedTable = iota + 1
 	TableCorrespondents
-	TableDocumentTypes
 )
 
 func (t NamedTable) sqlName() (string, error) {
@@ -28,8 +27,6 @@ func (t NamedTable) sqlName() (string, error) {
 		return "tags", nil
 	case TableCorrespondents:
 		return "correspondents", nil
-	case TableDocumentTypes:
-		return "document_types", nil
 	default:
 		return "", fmt.Errorf("taxonomy: invalid named table %d", t)
 	}

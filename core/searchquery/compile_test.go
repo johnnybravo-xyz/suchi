@@ -29,17 +29,16 @@ func (r fakeResolver) InboxCategoryID(context.Context) (int64, error) {
 }
 
 func TestResolveAndCompile(t *testing.T) {
-	parsed, err := Parse(`annual report jd:22 tag:tax -from:"Old Bank" type:statement sensitivity:internal lang:de added:>=2026-01-01 is:encrypted`)
+	parsed, err := Parse(`annual report jd:22 tag:tax -from:"Old Bank" sensitivity:internal lang:de added:>=2026-01-01 is:encrypted`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	resolved, err := Resolve(context.Background(), parsed, fakeResolver{
 		inbox: 49,
 		values: map[string][]Candidate{
-			"jd:22":          {{ID: 6, Label: "22 Investments"}},
-			"tag:tax":        {{ID: 7, Label: "tax"}},
-			"from:Old Bank":  {{ID: 8, Label: "Old Bank"}},
-			"type:statement": {{ID: 9, Label: "statement"}},
+			"jd:22":         {{ID: 6, Label: "22 Investments"}},
+			"tag:tax":       {{ID: 7, Label: "tax"}},
+			"from:Old Bank": {{ID: 8, Label: "Old Bank"}},
 		},
 	})
 	if err != nil {
@@ -49,8 +48,8 @@ func TestResolveAndCompile(t *testing.T) {
 	if plan.Match != `"annual"* AND "report"*` {
 		t.Errorf("match=%q", plan.Match)
 	}
-	if len(plan.Predicates) != 8 {
-		t.Fatalf("predicates=%d, want 8", len(plan.Predicates))
+	if len(plan.Predicates) != 7 {
+		t.Fatalf("predicates=%d, want 7", len(plan.Predicates))
 	}
 	if got := plan.Predicates[0].Args; !reflect.DeepEqual(got, []any{int64(6)}) {
 		t.Errorf("jd args=%v", got)
@@ -58,7 +57,7 @@ func TestResolveAndCompile(t *testing.T) {
 	if !strings.HasPrefix(plan.Predicates[2].SQL, "NOT EXISTS (SELECT 1 FROM document_correspondents") {
 		t.Errorf("negated correspondent SQL=%q", plan.Predicates[2].SQL)
 	}
-	added := plan.Predicates[6]
+	added := plan.Predicates[5]
 	wantStart := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Unix()
 	if !reflect.DeepEqual(added.Args, []any{wantStart}) {
 		t.Errorf("added args=%v, want %d", added.Args, wantStart)

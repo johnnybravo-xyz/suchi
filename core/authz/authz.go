@@ -46,7 +46,6 @@ const (
 	KindDocument      Kind = "document"
 	KindTag           Kind = "tag"
 	KindCorrespondent Kind = "correspondent"
-	KindDocumentType  Kind = "document_type"
 	KindStoragePath   Kind = "storage_path"
 )
 
@@ -339,7 +338,7 @@ func objectBoundary(ctx context.Context, q queryRower, p Principal, kind Kind, i
 }
 
 // loadOwner returns the (owner_id, true) for kinds that carry a
-// natural owner column. Kinds without one (tags, document_types)
+// natural owner column. Kinds without one (tags)
 // return (_, false) so the authorizer can use the global-object policy.
 func loadOwner(ctx context.Context, q queryRower, kind Kind, id int64) (int64, bool) {
 	if q == nil {
@@ -360,8 +359,7 @@ func loadOwner(ctx context.Context, q queryRower, kind Kind, id int64) (int64, b
 
 // ownerColumnFor names the (column, table) that stores the owner FK
 // for a given object kind. Returns ok=false for kinds where there is
-// no owner concept (tags, document_types) — those fall back to the
-// admin-only path.
+// no owner concept (tags) — those fall back to the admin-only path.
 func ownerColumnFor(kind Kind) (col, table string, ok bool) {
 	switch kind {
 	case KindDocument:

@@ -35,6 +35,6 @@ seeds::
         filter_content_matching: "gas safety"
       actions::
         - ::
-          kind: "assign_document_type"
+          kind: "assign_tags"
           params::
-            document_type: "certificate"
+            tag: "certificate"

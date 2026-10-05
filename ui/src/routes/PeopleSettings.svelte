@@ -5,7 +5,7 @@
   import { adminListUsers, adminPatchUser,
            listGroups, createGroup, deleteGroup, groupMembers, addGroupMember, removeGroupMember,
            listCustomFields, createCustomField, patchCustomField, deleteCustomField,
-           listAllTags, listCorrespondents, listDocumentTypes, listStoragePaths,
+           listAllTags, listCorrespondents, listStoragePaths,
            createTaxon, patchTaxon, deleteTaxon, deleteTags } from '../lib/api.js'
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
   import UserCreateForm from '../lib/UserCreateForm.svelte'
@@ -194,7 +194,6 @@
   const TAXA = [
     { kind: 'tags', label: 'Tags', singular: 'tag', description: 'Labels for finding and grouping documents across your filing tree.', load: listAllTags },
     { kind: 'correspondents', label: 'Correspondents', singular: 'correspondent', description: 'People and organizations you send documents to or receive them from.', load: listCorrespondents },
-    { kind: 'document_types', label: 'Document types', singular: 'document type', description: 'Describe what a document is, such as an invoice, contract, or statement.', load: listDocumentTypes },
     { kind: 'storage_paths', label: 'Storage paths', singular: 'storage path', description: 'Named storage paths used when filing documents.', load: listStoragePaths },
     { kind: 'custom_fields', label: 'Custom fields', description: 'Extra document details, such as an invoice number, renewal date, or web link.' },
   ]

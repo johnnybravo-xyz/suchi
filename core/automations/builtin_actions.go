@@ -74,20 +74,6 @@ func BuiltinActions() []ActionDefinition {
 				return taxonomy.SetPrimaryCorrespondent(ctx, tx, target.DocID, id)
 			},
 		},
-		{Kind: "assign_document_type",
-			Validate: func(ctx context.Context, d *sql.Tx, systemID int64, params map[string]any) error {
-				return validateActionReference(ctx, d, systemID, params, "document_type_id", "document_types")
-			},
-			Execute: func(ctx context.Context, tx *sql.Tx, target ActionTarget, params map[string]any) error {
-				id := intVal(params["document_type_id"])
-				if id == 0 {
-					return errors.New("assign_document_type: document_type_id required")
-				}
-				_, err := tx.ExecContext(ctx,
-					`UPDATE documents SET document_type_id = ? WHERE id = ?`, id, target.DocID)
-				return err
-			},
-		},
 		{Kind: "assign_jd_category",
 			Validate: func(ctx context.Context, d *sql.Tx, systemID int64, params map[string]any) error {
 				return validateActionReference(ctx, d, systemID, params, "jd_category_id", "jd_categories")
@@ -159,16 +145,6 @@ func BuiltinActions() []ActionDefinition {
 				// tag trigger). In-flight and queued suggestions must become stale.
 				_, err := tx.ExecContext(ctx,
 					`UPDATE documents SET tags_revision = tags_revision + 1 WHERE id = ?`, target.DocID)
-				return err
-			},
-		},
-		{Kind: "remove_document_type",
-			Validate: func(ctx context.Context, d *sql.Tx, systemID int64, params map[string]any) error {
-				return nil
-			},
-			Execute: func(ctx context.Context, tx *sql.Tx, target ActionTarget, params map[string]any) error {
-				_, err := tx.ExecContext(ctx,
-					`UPDATE documents SET document_type_id = NULL WHERE id = ?`, target.DocID)
 				return err
 			},
 		},
