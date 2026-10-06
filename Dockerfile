@@ -16,8 +16,10 @@ ARG BUN_IMAGE=oven/bun:1.4.1-alpine@sha256:2ef545220f7a886f22fcb3f2309bbd6bcf1c0
 # Build the browser application from source. Bun and node_modules remain in this
 # stage; only Vite's generated output crosses into the Go builder.
 FROM ${BUN_IMAGE} AS ui-build
-USER bun
+USER root
 WORKDIR /home/bun/app
+RUN chown bun:bun /home/bun/app
+USER bun
 COPY --chown=bun:bun ui/package.json ui/bun.lock ./
 RUN bun install --frozen-lockfile
 COPY --chown=bun:bun ui/ ./

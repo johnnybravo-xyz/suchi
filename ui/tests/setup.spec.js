@@ -1538,6 +1538,7 @@ test('separates model-free matching saves from validated model settings', async 
   await expect(saveModel).toBeDisabled()
   await page.getByRole('button', { name: 'Hosted endpoint' }).click()
   await page.getByLabel('Endpoint URL').fill('https://models.example.test/v1')
+  await page.getByLabel('Model', { exact: true }).fill('hosted-model')
   const egress = page.getByLabel('This endpoint is not local. I acknowledge document text will leave this machine.')
   await egress.check()
   await testConnection.click()
@@ -1793,7 +1794,8 @@ test('offers ready-made trees, focused sets, and file tools without blocking oth
   await expect(page.getByRole('heading', { name: 'Import a taxonomy file' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Export this filing tree' })).toBeVisible()
   await page.getByRole('link', { name: 'Classification', exact: true }).click()
-  await expect(page.getByRole('button', { name: 'Local model' })).toBeVisible()
+  await page.getByRole('button', { name: /^(Set up model|Manage)$/ }).first().click()
+  await expect(page.getByRole('button', { name: 'Local model', exact: true })).toBeVisible()
 })
 
 test('reviews category mappings and applies the operator choice', async ({ page }) => {
@@ -4264,8 +4266,7 @@ test('keeps stale metadata visible, unknown actions read-only, and queued decisi
   })
   await page.goto('/#/tasks')
   const titleReview = page.locator('.decision-row').filter({ hasText: 'Change title to' })
-  await expect(titleReview.locator('dd').nth(0)).toHaveText('Original title')
-  await expect(titleReview.locator('dd').nth(1)).toHaveText('Reviewed title')
+  await expect(titleReview.getByLabel('Current Original title; proposed Reviewed title', { exact: true })).toBeVisible()
   const unknown = page.locator('.decision-row').filter({ hasText: 'Unsupported action' })
   await expect(unknown.getByRole('button')).toHaveCount(0)
   await titleReview.getByRole('button', { name: 'Change title' }).click()
