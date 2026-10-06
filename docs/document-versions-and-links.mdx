@@ -1,6 +1,6 @@
 ---
-title: "Document versions and links"
-description: "How replacement history and exact document relationships behave across search, permissions, Trash, and purge."
+title: "Document detail, versions, and links"
+description: "How notes, typed metadata, replacement history, and exact document relationships behave across search, permissions, Trash, and purge."
 ---
 
 {/* SPDX-License-Identifier: AGPL-3.0-or-later */}
@@ -15,6 +15,19 @@ Suchi models a replacement version and a link as different facts:
 
 These distinctions keep immutable originals, human metadata, permissions, and
 retrieval behavior explicit.
+
+## Notes on an exact revision
+
+The **Notes** card on Document Detail keeps attributed working context beside one
+exact file revision. A user who can change the document can add a note of up to
+16 KiB. Each row shows its author and created or edited time. The author may edit
+or delete their own note; an administrator may moderate any note.
+
+Notes are deliberately revision-owned. Uploading a replacement starts its Notes
+card empty, while the earlier revision keeps its history. Trash makes the card
+read-only until restore. The API rechecks both document change permission and
+note ownership in the write transaction, and records create, update, and delete
+audit events.
 
 ## Replacement versions
 
@@ -68,8 +81,9 @@ Revision-owned or generated state starts fresh:
 
 - the immutable original and acquisition source;
 - extracted content, detected languages, thumbnails, and processing results;
-- classifier-owned tags and accepted or pending document dates; and
-- every custom-field value, including document links.
+- classifier-owned tags and accepted or pending document dates;
+- every custom-field value, including document links;
+- notes and the previous archive number.
 
 This prevents a new file from silently claiming metadata that described only the
 older evidence. Edit the new revision after upload when an exact value still
@@ -101,6 +115,7 @@ Ordinary custom fields appear in the document metadata card with their declared
 types. **Linked documents** shows assigned outgoing values under **This document
 links to** and keeps unused link types in the **Add link** chooser. Outgoing rows
 use **Change link** and **Remove link**.
+
 
 **Documents linking to this version** is an independently paged projection of
 current values; each row says **Linked here as “link type”**. These rows are
@@ -136,7 +151,22 @@ repeat authorization at both ends:
 Visibility changes are therefore reflected immediately without rewriting the
 stored value.
 
-## Find documents with or without a value
+## Typed custom fields
+
+Administrators define fields under **Settings > Archive configuration >
+Metadata > Custom fields**. Text, URL, number, monetary, date, yes/no, select,
+multi-choice, and Document link values use type-specific editors on Document
+Detail. Select and multi-choice definitions require a non-empty, unique choice
+list. Once a field has values, its type cannot change; an in-use choice cannot
+be removed. Adding choices and renaming the field remain safe.
+
+Filesystem sidecars may set an existing field by its exact name. The watcher
+uses the same server-side type validation as the API and writes metadata in the
+document transaction: an unknown field or invalid value rejects the intake
+instead of leaving a partially described document. Automations expose named
+field pickers and the selected field's real value control.
+
+## Find documents by field presence or value
 
 `has-field:` resolves an exact custom-field name in the selected filing system.
 It works in Documents, ranked Search, saved Views, Calendar, and archive research:
@@ -145,6 +175,18 @@ It works in Documents, ranked Search, saved Views, Calendar, and archive researc
 has-field:"Payment receipt"
 type:invoice -has-field:"Payment receipt"
 ```
+
+Use `field:` when the value matters:
+
+```text
+field:"Invoice amount">=100
+field:Status="Needs review"
+field:Approved=yes
+```
+
+Number, monetary, and date fields support comparisons. Text, URL, select, and
+multi-choice fields use equality; equality on multi-choice means membership.
+Document links remain relationship navigation rather than raw-ID search.
 
 For ordinary fields, presence means a value is stored. For a Document link, the
 exact target must also be live and visible to the caller. A hidden, trashed,
@@ -173,9 +215,11 @@ an exact-row operation.
 
 ## API entry points
 
+- [`GET /api/documents/{id}`](/api#get-apidocumentsid) — typed fields, notes, rendered layout, and read-only previous archive number
+- [`POST /api/documents/{id}/notes/`](/api#post-apidocumentsidnotes) — attributed note creation
+- [`PATCH|DELETE /api/documents/{id}/notes/{note}`](/api#patchdelete-apidocumentsidnotesnote) — author/admin note mutation
 - [`GET /api/documents/{id}/versions/`](/api#get-apidocumentsidversions) — paged visible family history
 - [`POST /api/documents/{id}/versions/`](/api#post-apidocumentsidversions) — idempotent replacement upload
-- [`GET /api/documents/{id}`](/api#get-apidocumentsid) — typed outgoing custom fields
 - [`GET /api/documents/{id}/referenced-by/`](/api#get-apidocumentsidreferenced-by) — paged computed backlinks
-- [`PUT|DELETE /api/documents/{id}/custom_fields/{field}`](/api#put-apidocumentsidcustom-fieldsfield) — exact link mutation
-- [Query language](/query-language) — `version:` and `has-field:` selectors
+- [`PUT|DELETE /api/documents/{id}/custom_fields/{field}`](/api#put-apidocumentsidcustom-fieldsfield) — exact typed-value mutation
+- [Query language](/query-language) — `version:`, `has-field:`, `field:`, and `asn:` selectors

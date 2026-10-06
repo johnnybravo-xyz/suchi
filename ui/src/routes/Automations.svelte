@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
   import { listAutomations, createAutomation, patchAutomation, deleteAutomation,
-           listTags, listCorrespondents, automationsSchema } from '../lib/api.js'
+           listTags, listCorrespondents, listCustomFields, listRenderedLayouts, automationsSchema } from '../lib/api.js'
   import Icon from '../lib/Icon.svelte'
 
   let { notify, readOnly = false, jdCategories = [] } = $props()
@@ -12,7 +12,7 @@
   let mode = $state('builder')      // 'builder' | 'json'
   let jsonDraft = $state('')
   let draftErr = $state('')
-  let facets = $state({ tags: [], correspondents: [] })
+  let facets = $state({ tags: [], correspondents: [], customFields: [], renderedLayouts: [] })
   let facetsPromise
   let facetsError = $state('')
   let peekID = $state(null)
@@ -27,7 +27,7 @@
   automationsSchema().then(sc => {
     if (sc?.triggers?.length) TRIGGER_TYPES = sc.triggers.map(t => ({ code: t.code, label: t.name || t.type }))
     if (sc?.actions?.length) ACTION_KINDS = sc.actions.map(a => ({
-      kind: a.kind, label: a.name || a.kind, params: (a.params || []).map(p => p.name),
+      kind: a.kind, label: a.name || a.kind, description: a.description || '', params: a.params || [],
     }))
   }).catch(ex => { err = ex.message || 'Could not load the automation schema.' })
 
@@ -50,11 +50,13 @@
   function loadFacets() {
     if (facetsPromise) return facetsPromise
     facetsError = ''
-    facetsPromise = Promise.all([listTags(), listCorrespondents()])
-      .then(([tags, correspondents]) => {
+    facetsPromise = Promise.all([listTags(), listCorrespondents(), listCustomFields(), listRenderedLayouts()])
+      .then(([tags, correspondents, customFields, renderedLayouts]) => {
         facets = {
           tags: tags?.results || [],
           correspondents: correspondents?.results || [],
+          customFields: customFields?.results || customFields || [],
+          renderedLayouts: renderedLayouts?.results || renderedLayouts || [],
         }
       })
       .catch((ex) => {
@@ -86,7 +88,27 @@
   function addAction() { editing.actions.push({ type: 'assign_tags', params: { tag_ids: [] } }) }
   function actionKindChanged(a) {
     const spec = ACTION_KINDS.find(k => k.kind === a.type)
-    a.params = Object.fromEntries((spec?.params || []).map(p => [p, p === 'tag_ids' ? [] : p === 'template' || p === 'value' ? '' : 0]))
+    a.params = Object.fromEntries((spec?.params || []).map(p => [
+      p.name, p.name === 'tag_ids' ? [] : p.type === 'template' || p.type === 'string' ? '' : 0,
+    ]))
+  }
+
+  function customFieldFor(action) {
+    return facets.customFields.find(field => Number(field.id) === Number(action.params?.field_id))
+  }
+
+  function customFieldChoices(field) {
+    if (!field?.extra_data) return []
+    let extra = field.extra_data
+    if (typeof extra === 'string') {
+      try { extra = JSON.parse(extra) } catch { return [] }
+    }
+    return Array.isArray(extra?.choices) ? extra.choices : []
+  }
+
+  function customFieldChanged(action) {
+    const field = customFieldFor(action)
+    action.params.value = field?.data_type === 'multi' ? [] : field?.data_type === 'bool' ? false : ''
   }
 
   async function save() {
@@ -178,10 +200,15 @@
         return p.template ? `Set title → “${p.template}”` : 'Set title'
       case 'assign_owner':
         return p.owner_id ? `Set owner → user #${p.owner_id}` : 'Set owner'
-      case 'assign_storage_path':
-        return p.storage_path_id ? `Set storage path → #${p.storage_path_id}` : 'Set storage path'
-      case 'assign_custom_field':
-        return `Set custom field #${p.field_id ?? '?'} → ${p.value ?? ''}`
+      case 'assign_storage_path': {
+        const layout = facets.renderedLayouts.find(candidate => Number(candidate.id) === Number(p.storage_path_id))
+        return layout ? `Assign rendered layout → ${layout.name}` : 'Assign rendered layout'
+      }
+      case 'assign_custom_field': {
+        const field = facets.customFields.find(candidate => Number(candidate.id) === Number(p.field_id))
+        const value = Array.isArray(p.value) ? p.value.join(', ') : String(p.value ?? '')
+        return field ? `Set ${field.name} → ${value}` : 'Set custom field'
+      }
       default:
         return spec?.label || a.type
     }
@@ -276,7 +303,7 @@
       <div class="side-head" style="padding-left:0">Then</div>
       {#each editing.actions as a, i (i)}
         <div class="brow">
-          <select class="input" value={a.type} onchange={(e) => { a.type = e.target.value; actionKindChanged(a) }}>
+          <select class="input" aria-label={`Action ${i + 1}`} value={a.type} onchange={(e) => { a.type = e.target.value; actionKindChanged(a) }}>
             {#each ACTION_KINDS as k}<option value={k.kind}>{k.label}</option>{/each}
           </select>
           {#if a.type === 'assign_title'}
@@ -296,9 +323,48 @@
               <option value={0}>choose…</option>
               {#each jdCategories as x}<option value={x.id}>{x.code} · {x.name}</option>{/each}
             </select>
+          {:else if a.type === 'assign_storage_path'}
+            <select class="input action-value" aria-label="Rendered layout" bind:value={a.params.storage_path_id}>
+              <option value={0}>Choose rendered layout…</option>
+              {#each facets.renderedLayouts as layout}
+                <option value={layout.id}>{layout.name}{layout.uses_asn ? ' (previous archive number required)' : ''}</option>
+              {/each}
+            </select>
           {:else if a.type === 'assign_custom_field'}
-            <input class="input" style="max-width:110px" type="number" placeholder="field id" bind:value={a.params.field_id} />
-            <input class="input" placeholder="value" bind:value={a.params.value} />
+            {@const field = customFieldFor(a)}
+            <select class="input" aria-label="Custom field" value={a.params.field_id}
+                    onchange={(event) => { a.params.field_id = Number(event.currentTarget.value); customFieldChanged(a) }}>
+              <option value={0}>Choose custom field…</option>
+              {#each facets.customFields as candidate}<option value={candidate.id}>{candidate.name} · {candidate.data_type}</option>{/each}
+            </select>
+            {#if field?.data_type === 'bool'}
+              <select class="input action-value" aria-label="Custom field value" value={String(a.params.value)}
+                      onchange={(event) => (a.params.value = event.currentTarget.value === 'true')}>
+                <option value="true">Yes</option><option value="false">No</option>
+              </select>
+            {:else if field?.data_type === 'select'}
+              <select class="input action-value" aria-label="Custom field value" bind:value={a.params.value}>
+                <option value="">Choose value…</option>
+                {#each customFieldChoices(field) as choice}<option value={choice}>{choice}</option>{/each}
+              </select>
+            {:else if field?.data_type === 'multi'}
+              <select class="input action-value" aria-label="Custom field value" multiple size="3"
+                      onchange={(event) => (a.params.value = [...event.currentTarget.selectedOptions].map(option => option.value))}>
+                {#each customFieldChoices(field) as choice}<option value={choice} selected={(a.params.value || []).includes(choice)}>{choice}</option>{/each}
+              </select>
+            {:else if field?.data_type === 'number' || field?.data_type === 'monetary'}
+              <input class="input action-value" aria-label="Custom field value" type="number" step="any" placeholder={field.data_type === 'monetary' ? 'Amount' : 'Number'} bind:value={a.params.value} />
+            {:else if field?.data_type === 'date'}
+              <input class="input action-value" aria-label="Custom field value" type="date" bind:value={a.params.value} />
+            {:else if field?.data_type === 'url'}
+              <input class="input action-value" aria-label="Custom field value" type="url" placeholder="https://…" bind:value={a.params.value} />
+            {:else if field?.data_type === 'documentlink'}
+              <input class="input action-value" aria-label="Custom field value" type="number" min="1" placeholder="Linked document ID" bind:value={a.params.value} />
+            {:else if field}
+              <input class="input action-value" aria-label="Custom field value" placeholder="Value" bind:value={a.params.value} />
+            {:else}
+              <span class="sub">Choose a field to set its typed value.</span>
+            {/if}
           {:else}
             <input class="input" style="max-width:130px" type="number" placeholder="id" bind:value={a.params[Object.keys(a.params)[0]]} />
           {/if}
@@ -419,6 +485,8 @@
     font-size: .75rem;
     white-space: pre-wrap;
   }
+  .action-value { flex:1; max-width:260px; }
+  select.action-value[multiple] { min-width:180px; }
   .automation-switch { margin-top: 1px; }
   @media (max-width: 600px) {
     .automation-row { flex-wrap: wrap; gap: 8px; }

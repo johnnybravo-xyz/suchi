@@ -26,6 +26,7 @@ function detail(id, overrides = {}) {
     tags: [],
     correspondents: [],
     custom_fields: [],
+    notes: [],
     ...overrides,
   }
 }
@@ -46,6 +47,7 @@ async function installDetailAPI(page, handler) {
     else if (/^\/api\/acls\/document\/\d+$/.test(path)) body = { results: [], principals: [] }
     else if (/^\/api\/documents\/\d+\/similar$/.test(path)) body = { results: [] }
     else if (path === '/api/custom_fields/') body = { results: [] }
+    else if (path === '/api/rendered_layouts/') body = { results: [] }
     else if (/^\/api\/documents\/\d+\/referenced-by\/$/.test(path)) body = { results: [], count: 0 }
     else if (/^\/api\/documents\/\d+\/versions\/$/.test(path)) body = { results: [], count: 0, head_id: null, can_upload: false }
     else if (/^\/api\/documents\/\d+$/.test(path)) body = detail(Number(path.split('/').at(-1)))
@@ -313,6 +315,87 @@ test('keeps outgoing and incoming document links in one compact tab', async ({ p
   await linkType.selectOption('9')
   await expect(linksFrom.getByLabel('Governing record document')).toBeVisible()
   expect(writes[1].method).toBe('DELETE')
+})
+
+test('edits typed metadata, notes, and rendered layout without exposing compatibility IDs', async ({ page }) => {
+  const writes = []
+  const notes = [{
+    id: 9, user_id: 1, author: 'Admin', note: 'Check the tariff',
+    created_at: 1780000100, updated_at: 1780000100, can_edit: true,
+  }]
+  let invoiceAmount = 125
+  await installDetailAPI(page, async ({ route, request, path }) => {
+    if (path === '/api/documents/42' && request.method() === 'GET') {
+      await route.fulfill({ json: detail(42, {
+        title: 'Electricity bill',
+        custom_fields: [{
+          field_id: 11, name: 'Invoice amount', data_type: 'number',
+          extra_data: {}, value: invoiceAmount, display_value: String(invoiceAmount),
+        }],
+        notes,
+      }) })
+      return true
+    }
+    if (path === '/api/custom_fields/') {
+      await route.fulfill({ json: { results: [{
+        id: 11, name: 'Invoice amount', data_type: 'number', extra_data: '{}',
+      }] } })
+      return true
+    }
+    if (path === '/api/rendered_layouts/') {
+      await route.fulfill({ json: { results: [
+        { id: 7, name: 'Bills by year', path: 'Bills/{{ created_year }}/{{ title }}', uses_asn: false },
+        { id: 8, name: 'Imported folders', path: 'Legacy/{{ asn }}/{{ title }}', uses_asn: true },
+      ] } })
+      return true
+    }
+    if (path === '/api/documents/42/custom_fields/11' && request.method() === 'PUT') {
+      const body = request.postDataJSON()
+      writes.push({ kind: 'field', body })
+      invoiceAmount = body.value
+      await route.fulfill({ status: 204, body: '' })
+      return true
+    }
+    if (path === '/api/documents/42/notes/' && request.method() === 'POST') {
+      const body = request.postDataJSON()
+      writes.push({ kind: 'note', body })
+      await route.fulfill({ status: 201, json: {
+        id: 10, user_id: 1, author: 'Admin', note: body.note,
+        created_at: 1780000200, updated_at: 1780000200, can_edit: true,
+      } })
+      return true
+    }
+    if (path === '/api/documents/42' && request.method() === 'PATCH') {
+      writes.push({ kind: 'document', body: request.postDataJSON() })
+      await route.fulfill({ json: { id: 42 } })
+      return true
+    }
+    return false
+  })
+
+  await page.goto('/#/doc/42')
+  const fieldRow = page.locator('dt').filter({ hasText: /^Invoice amount$/ }).locator('xpath=following-sibling::dd[1]')
+  await fieldRow.getByRole('button', { name: 'Edit' }).click()
+  await fieldRow.getByLabel('Invoice amount').fill('250.5')
+  await fieldRow.getByRole('button', { name: 'Save' }).click()
+  await expect(fieldRow.getByText('250.5', { exact: true })).toBeVisible()
+
+  const notesCard = page.getByRole('region', { name: 'Document notes' })
+  await expect(notesCard.getByText('Check the tariff', { exact: true })).toBeVisible()
+  await notesCard.getByLabel('Add a note').fill('Call the utility')
+  await notesCard.getByRole('button', { name: 'Add note' }).click()
+  await expect(notesCard.getByText('Call the utility', { exact: true })).toBeVisible()
+
+  const layout = page.getByRole('combobox', { name: 'Rendered layout' })
+  await expect(layout.getByRole('option', { name: /Imported folders/ })).toBeDisabled()
+  await layout.selectOption('7')
+
+  expect(writes).toEqual([
+    { kind: 'field', body: { value: 250.5 } },
+    { kind: 'note', body: { note: 'Call the utility' } },
+    { kind: 'document', body: { rendered_layout_id: 7 } },
+  ])
+  await expect(page.getByText('Previous archive number', { exact: true })).toHaveCount(0)
 })
 
 test('ignores late history and backlink responses after exact-route navigation', async ({ page }) => {

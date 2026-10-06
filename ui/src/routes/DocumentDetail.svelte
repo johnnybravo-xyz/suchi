@@ -3,7 +3,7 @@
   import { scopedHash as filingHref } from '../lib/systems.svelte.js'
   import { captureScope, scopeCurrent } from '../lib/systems.svelte.js'
   import { onDestroy, untrack } from 'svelte'
-  import { getDocument, getDocumentIntrinsic, patchDocument, deleteDocument, restoreDocument, permanentlyDeleteDocument, documentVersions, documentBacklinks, uploadDocumentVersion, setDocumentCustomField, clearDocumentCustomField, createShareLink, listShareLinks, deleteShareLink, previewPath, downloadPath, similarDocs, listGrants, putGrant, deleteGrant, listAllTags, listCustomFields, listDocuments, bulkEdit } from '../lib/api.js'
+  import { getDocument, getDocumentIntrinsic, patchDocument, deleteDocument, restoreDocument, permanentlyDeleteDocument, documentVersions, documentBacklinks, uploadDocumentVersion, setDocumentCustomField, clearDocumentCustomField, createDocumentNote, updateDocumentNote, deleteDocumentNote, createShareLink, listShareLinks, deleteShareLink, previewPath, downloadPath, similarDocs, listGrants, putGrant, deleteGrant, listAllTags, listCustomFields, listRenderedLayouts, listDocuments, bulkEdit } from '../lib/api.js'
   import { go } from '../lib/router.svelte.js'
   import { SENSITIVITY_OPTIONS, fmtDate, fmtBytes, isHighSensitivity, sensDot, sensitivityLabel } from '../lib/format.js'
   import { session } from '../lib/session.svelte.js'
@@ -34,11 +34,16 @@
   let customFieldDefinitions = $state([])
   let customFieldsLoading = $state(false)
   let customFieldsError = $state('')
+  let renderedLayouts = $state([])
+  let renderedLayoutsLoading = $state(false)
+  let renderedLayoutsError = $state('')
+  let renderedLayoutBusy = $state(false)
   let backlinks = $state({ count: 0, results: [], next: null, previous: null })
   let backlinksLoading = $state(false)
   let backlinksError = $state('')
   let backlinksPage = $state(1)
   let referenceEditors = $state({})
+  let customFieldEditors = $state({})
   let addingReference = $state(false)
   let newReferenceFieldID = $state('')
   let loading = $state(true)
@@ -71,6 +76,12 @@
   let trashBusy = $state(false)
   let deleteOpen = $state(false)
   let recoveryBusy = $state(false)
+  let noteDraft = $state('')
+  let noteEditID = $state(null)
+  let noteEditDraft = $state('')
+  let noteBusy = $state(false)
+  let noteError = $state('')
+  let notePendingDelete = $state(null)
   let loadVersion = 0
   let tagRefreshVersion = 0
   let loadedID
@@ -116,7 +127,31 @@
   const canRestore = $derived(canManageTrash && doc?.deletes_at > Math.floor(Date.now() / 1000))
   const canReadFile = $derived(!trashed || canManageTrash)
   const canShareLinks = $derived(!trashed && hasCapability(session.user, 'share_links'))
-  const ordinaryCustomFields = $derived((doc?.custom_fields || []).filter(field => field.data_type !== 'documentlink'))
+  const ordinaryCustomFields = $derived.by(() => {
+    const fields = new Map()
+    for (const definition of customFieldDefinitions) {
+      if (definition.data_type === 'documentlink') continue
+      fields.set(Number(definition.id), {
+        field_id: definition.id,
+        name: definition.name,
+        data_type: definition.data_type,
+        extra_data: parseCustomFieldExtra(definition.extra_data),
+        value: null,
+        display_value: '',
+        is_set: false,
+      })
+    }
+    for (const value of doc?.custom_fields || []) {
+      if (value.data_type === 'documentlink') continue
+      fields.set(Number(value.field_id), {
+        ...(fields.get(Number(value.field_id)) || {}),
+        ...value,
+        extra_data: parseCustomFieldExtra(value.extra_data),
+        is_set: true,
+      })
+    }
+    return [...fields.values()].sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
+  })
   const documentLinkFields = $derived.by(() => {
     const fields = new Map()
     for (const field of customFieldDefinitions) {
@@ -180,11 +215,16 @@
     customFieldDefinitions = []
     customFieldsLoading = false
     customFieldsError = ''
+    renderedLayouts = []
+    renderedLayoutsLoading = false
+    renderedLayoutsError = ''
+    renderedLayoutBusy = false
     backlinks = { count: 0, results: [], next: null, previous: null }
     backlinksLoading = false
     backlinksError = ''
     backlinksPage = 1
     referenceEditors = {}
+    customFieldEditors = {}
     similar = null
     addingReference = false
     newReferenceFieldID = ''
@@ -208,6 +248,12 @@
     trashBusy = false
     deleteOpen = false
     recoveryBusy = false
+    noteDraft = ''
+    noteEditID = null
+    noteEditDraft = ''
+    noteBusy = false
+    noteError = ''
+    notePendingDelete = null
     try {
       const loaded = await getDocument(documentID)
       if (version !== loadVersion || !scopeCurrent(scope)) return
@@ -217,6 +263,7 @@
       void loadVersions(documentID, 1, version, scope)
       void loadBacklinks(documentID, 1, version, scope)
       void loadCustomFieldDefinitions(version, scope)
+      void loadRenderedLayoutOptions(version, scope)
       void loadSimilarDocuments(documentID, version, scope)
       void loadAccess(documentID, version, scope)
     } catch (ex) {
@@ -305,6 +352,52 @@
     }
   }
 
+  async function loadRenderedLayoutOptions(version = loadVersion, scope = captureScope()) {
+    renderedLayoutsLoading = true
+    renderedLayoutsError = ''
+    try {
+      const result = await listRenderedLayouts()
+      if (disposed || version !== loadVersion || !scopeCurrent(scope)) return
+      renderedLayouts = result?.results || result || []
+    } catch (ex) {
+      if (!disposed && version === loadVersion && scopeCurrent(scope)) {
+        renderedLayoutsError = ex.message || 'Could not load rendered layouts.'
+      }
+    } finally {
+      if (!disposed && version === loadVersion && scopeCurrent(scope)) renderedLayoutsLoading = false
+    }
+  }
+
+  async function assignRenderedLayout(event) {
+    const layoutID = Number(event.currentTarget.value)
+    if (renderedLayoutBusy || trashed) return
+    const version = loadVersion
+    const documentID = id
+    const scope = captureScope()
+    renderedLayoutBusy = true
+    renderedLayoutsError = ''
+    try {
+      await patchDocument(documentID, { rendered_layout_id: layoutID })
+      if (disposed || version !== loadVersion || id !== documentID || !scopeCurrent(scope)) return
+      const layout = renderedLayouts.find(candidate => Number(candidate.id) === layoutID)
+      doc = {
+        ...doc,
+        rendered_layout: layout ? {
+          id: layout.id, name: layout.name, path: layout.path, uses_asn: !!layout.uses_asn,
+        } : null,
+      }
+      notify?.(layout ? `Rendered layout set to ${layout.name}` : 'Using the default JD layout')
+    } catch (ex) {
+      if (!disposed && version === loadVersion && id === documentID && scopeCurrent(scope)) {
+        renderedLayoutsError = ex.code === 'rendered_layout_requires_archive_number'
+          ? 'This layout requires a previous archive number, which this document does not have.'
+          : (ex.message || 'Could not assign the rendered layout.')
+      }
+    } finally {
+      if (!disposed && version === loadVersion && id === documentID && scopeCurrent(scope)) renderedLayoutBusy = false
+    }
+  }
+
   async function loadAccess(documentID = id, version = loadVersion, scope = captureScope()) {
     try {
       const result = await listGrants('document', documentID)
@@ -362,11 +455,101 @@
       Number(value.field_id) === Number(fieldID) && value.data_type === 'documentlink')
   }
 
+  function parseCustomFieldExtra(extra) {
+    if (extra && typeof extra === 'object') return extra
+    try {
+      return JSON.parse(extra || '{}')
+    } catch {
+      return {}
+    }
+  }
+
   function customFieldDisplay(field) {
-    if (field.data_type === 'bool') return field.value ? 'Yes' : 'No'
-    if (field.data_type === 'date') return fmtDate(field.value)
+    if (field.display_value) return field.display_value
+    if (field.data_type === 'bool' && field.is_set) return field.value ? 'Yes' : 'No'
+    if (field.data_type === 'date' && field.value) return fmtDate(field.value)
     if (field.data_type === 'multi') return Array.isArray(field.value) ? field.value.join(', ') : ''
     return String(field.value ?? '')
+  }
+
+  function customFieldInitialValue(field) {
+    if (field.data_type === 'multi') return Array.isArray(field.value) ? [...field.value] : []
+    if (field.data_type === 'bool') return field.value ? 'true' : 'false'
+    if (field.data_type === 'date' && field.value) return new Date(Number(field.value) * 1000).toISOString().slice(0, 10)
+    return String(field.value ?? '')
+  }
+
+  function updateCustomFieldEditor(fieldID, patch) {
+    customFieldEditors = {
+      ...customFieldEditors,
+      [fieldID]: { ...(customFieldEditors[fieldID] || {}), ...patch },
+    }
+  }
+
+  function startCustomFieldEdit(field) {
+    updateCustomFieldEditor(field.field_id, {
+      open: true,
+      value: customFieldInitialValue(field),
+      busy: false,
+      error: '',
+    })
+  }
+
+  function customFieldValueReady(field, editor) {
+    if (!editor) return false
+    if (field.data_type === 'bool') return true
+    if (field.data_type === 'multi') return Array.isArray(editor.value) && editor.value.length > 0
+    return String(editor.value ?? '').trim() !== ''
+  }
+
+  async function saveCustomField(event, field) {
+    event.preventDefault()
+    const editor = customFieldEditors[field.field_id]
+    if (!customFieldValueReady(field, editor) || editor.busy || trashed) return
+    const version = loadVersion
+    const documentID = id
+    const scope = captureScope()
+    updateCustomFieldEditor(field.field_id, { busy: true, error: '' })
+    let value = editor.value
+    if (field.data_type === 'number' || field.data_type === 'monetary') value = Number(value)
+    else if (field.data_type === 'bool') value = value === 'true'
+    else if (field.data_type !== 'multi') value = String(value).trim()
+    try {
+      await setDocumentCustomField(documentID, field.field_id, value)
+      const loaded = await getDocument(documentID)
+      if (disposed || version !== loadVersion || id !== documentID || !scopeCurrent(scope)) return
+      doc = loaded
+      const next = { ...customFieldEditors }
+      delete next[field.field_id]
+      customFieldEditors = next
+      notify?.(`${field.name} saved`)
+    } catch (ex) {
+      if (!disposed && version === loadVersion && id === documentID && scopeCurrent(scope)) {
+        updateCustomFieldEditor(field.field_id, { busy: false, error: ex.message || `Could not save ${field.name}.` })
+      }
+    }
+  }
+
+  async function clearOrdinaryCustomField(field) {
+    const editor = customFieldEditors[field.field_id]
+    if (editor?.busy || trashed) return
+    const version = loadVersion
+    const documentID = id
+    const scope = captureScope()
+    updateCustomFieldEditor(field.field_id, { busy: true, error: '' })
+    try {
+      await clearDocumentCustomField(documentID, field.field_id)
+      if (disposed || version !== loadVersion || id !== documentID || !scopeCurrent(scope)) return
+      doc = { ...doc, custom_fields: (doc.custom_fields || []).filter(value => Number(value.field_id) !== Number(field.field_id)) }
+      const next = { ...customFieldEditors }
+      delete next[field.field_id]
+      customFieldEditors = next
+      notify?.(`${field.name} cleared`)
+    } catch (ex) {
+      if (!disposed && version === loadVersion && id === documentID && scopeCurrent(scope)) {
+        updateCustomFieldEditor(field.field_id, { busy: false, error: ex.message || `Could not clear ${field.name}.` })
+      }
+    }
   }
 
   function chooseReplacement(event) {
@@ -674,6 +857,91 @@
     return save({ languages: trimmed }, trimmed ? 'Languages updated' : 'Languages cleared')
   }
 
+  async function addNote(event) {
+    event.preventDefault()
+    const note = noteDraft.trim()
+    if (!note || noteBusy || trashed) return
+    const version = loadVersion
+    const documentID = id
+    const scope = captureScope()
+    noteBusy = true
+    noteError = ''
+    try {
+      const created = await createDocumentNote(documentID, note)
+      if (disposed || version !== loadVersion || id !== documentID || !scopeCurrent(scope)) return
+      doc = { ...doc, notes: [...(doc.notes || []), created] }
+      noteDraft = ''
+      notify?.('Note added')
+    } catch (ex) {
+      if (!disposed && version === loadVersion && id === documentID && scopeCurrent(scope)) {
+        noteError = ex.message || 'Could not add this note.'
+      }
+    } finally {
+      if (!disposed && version === loadVersion && id === documentID && scopeCurrent(scope)) noteBusy = false
+    }
+  }
+
+  function startNoteEdit(note) {
+    noteEditID = note.id
+    noteEditDraft = note.note
+    noteError = ''
+  }
+
+  async function saveNoteEdit(event, note) {
+    event.preventDefault()
+    const next = noteEditDraft.trim()
+    if (!next || noteBusy || trashed) return
+    const version = loadVersion
+    const documentID = id
+    const scope = captureScope()
+    noteBusy = true
+    noteError = ''
+    try {
+      const result = await updateDocumentNote(documentID, note.id, next)
+      if (disposed || version !== loadVersion || id !== documentID || !scopeCurrent(scope)) return
+      doc = {
+        ...doc,
+        notes: (doc.notes || []).map(item => item.id === note.id
+          ? { ...item, note: next, updated_at: result.updated_at }
+          : item),
+      }
+      noteEditID = null
+      noteEditDraft = ''
+      notify?.('Note updated')
+    } catch (ex) {
+      if (!disposed && version === loadVersion && id === documentID && scopeCurrent(scope)) {
+        noteError = ex.message || 'Could not update this note.'
+      }
+    } finally {
+      if (!disposed && version === loadVersion && id === documentID && scopeCurrent(scope)) noteBusy = false
+    }
+  }
+
+  async function removeNote() {
+    const note = notePendingDelete
+    if (!note || noteBusy) return
+    const version = loadVersion
+    const documentID = id
+    const scope = captureScope()
+    noteBusy = true
+    noteError = ''
+    try {
+      await deleteDocumentNote(documentID, note.id)
+      if (disposed || version !== loadVersion || id !== documentID || !scopeCurrent(scope)) return
+      doc = { ...doc, notes: (doc.notes || []).filter(item => item.id !== note.id) }
+      notePendingDelete = null
+      if (noteEditID === note.id) noteEditID = null
+      notify?.('Note deleted')
+    } catch (ex) {
+      if (!disposed && version === loadVersion && id === documentID && scopeCurrent(scope)) {
+        noteError = ex.message || 'Could not delete this note.'
+        notePendingDelete = null
+      }
+    } finally {
+      if (!disposed && version === loadVersion && id === documentID && scopeCurrent(scope)) noteBusy = false
+    }
+  }
+
   // ---- share dialog: expiry + optional password + existing links ----
   let shareOpen = $state(false)
   let shareLinks = $state([])
@@ -966,6 +1234,23 @@
               <span class="sub" style="margin-left:6px">{doc.jd_area_name}</span>
             {:else}<span class="chip">Category #{doc.jd_category_id}</span>{/if}
           </dd>
+          <dt>Rendered layout</dt>
+          <dd class="layout-assignment">
+            <select class="input" aria-label="Rendered layout" value={doc.rendered_layout?.id || 0}
+                    onchange={assignRenderedLayout} disabled={renderedLayoutsLoading || renderedLayoutBusy || trashed}>
+              <option value={0}>Default JD layout</option>
+              {#if doc.rendered_layout && !renderedLayouts.some(layout => Number(layout.id) === Number(doc.rendered_layout.id))}
+                <option value={doc.rendered_layout.id}>{doc.rendered_layout.name}</option>
+              {/if}
+              {#each renderedLayouts as layout (layout.id)}
+                <option value={layout.id} disabled={layout.uses_asn && doc.archive_serial_number == null}>
+                  {layout.name}{layout.uses_asn && doc.archive_serial_number == null ? ' — requires previous archive number' : ''}
+                </option>
+              {/each}
+            </select>
+            {#if renderedLayoutsError}<span class="meta-control-error" role="alert">{renderedLayoutsError}</span>
+            {:else if doc.rendered_layout?.uses_asn}<span class="meta-control-help">Uses this document’s previous archive number.</span>{/if}
+          </dd>
           <dt>Sensitivity</dt>
           <dd>
             {#if trashed}
@@ -998,6 +1283,10 @@
           {#if doc.source_mtime || (doc.created_at && doc.created_at !== doc.added_at)}
             <dt title="Date carried from the source at ingest">Source date</dt>
             <dd>{fmtDate(doc.source_mtime || doc.created_at)}</dd>
+          {/if}
+          {#if doc.archive_serial_number != null}
+            <dt title="Read-only compatibility metadata retained from the previous archive">Previous archive number</dt>
+            <dd><span class="mono">#{doc.archive_serial_number}</span> <span class="sub" title="Kept for old references and imported layouts">· read-only</span></dd>
           {/if}
           <dt>Original</dt><dd>{doc.mime_type} · {fmtBytes(doc.original_size)}</dd>
           {#if doc.archive_blob}
@@ -1044,12 +1333,63 @@
             <dd>{#each doc.correspondents as c}<span class="pill" style="margin-right:5px">{c.name} · {c.role}</span>{/each}</dd>
           {/if}
           {#each ordinaryCustomFields as field (field.field_id)}
+            {@const editor = customFieldEditors[field.field_id]}
             <dt>{field.name}</dt>
-            <dd>
-              {#if field.data_type === 'url' && field.value}
-                <a href={field.value} target="_blank" rel="noreferrer">{field.value}</a>
+            <dd class="custom-field-value">
+              {#if editor?.open}
+                <form class="custom-field-editor" onsubmit={(event) => saveCustomField(event, field)}>
+                  {#if field.data_type === 'bool'}
+                    <select class="input" aria-label={field.name} value={editor.value}
+                            onchange={(event) => updateCustomFieldEditor(field.field_id, { value: event.currentTarget.value })}>
+                      <option value="true">Yes</option>
+                      <option value="false">No</option>
+                    </select>
+                  {:else if field.data_type === 'select'}
+                    <select class="input" aria-label={field.name} value={editor.value}
+                            onchange={(event) => updateCustomFieldEditor(field.field_id, { value: event.currentTarget.value })}>
+                      <option value="">Select a choice</option>
+                      {#each field.extra_data?.choices || [] as choice}<option value={choice}>{choice}</option>{/each}
+                    </select>
+                  {:else if field.data_type === 'multi'}
+                    <div class="custom-field-choices" aria-label={field.name}>
+                      {#each field.extra_data?.choices || [] as choice}
+                        <label>
+                          <input type="checkbox" value={choice} checked={editor.value?.includes(choice)}
+                                 onchange={(event) => updateCustomFieldEditor(field.field_id, {
+                                   value: event.currentTarget.checked
+                                     ? [...new Set([...(editor.value || []), choice])]
+                                     : (editor.value || []).filter(value => value !== choice),
+                                 })} />
+                          {choice}
+                        </label>
+                      {/each}
+                    </div>
+                  {:else}
+                    <input class="input" aria-label={field.name}
+                           type={field.data_type === 'date' ? 'date' : field.data_type === 'url' ? 'url' : field.data_type === 'number' || field.data_type === 'monetary' ? 'number' : 'text'}
+                           step={field.data_type === 'monetary' ? '0.01' : field.data_type === 'number' ? 'any' : undefined}
+                           value={editor.value}
+                           oninput={(event) => updateCustomFieldEditor(field.field_id, { value: event.currentTarget.value })} />
+                  {/if}
+                  <div class="custom-field-actions">
+                    <button class="btn primary sm" disabled={editor.busy || !customFieldValueReady(field, editor)}>{editor.busy ? 'Saving…' : 'Save'}</button>
+                    <button class="btn sm" type="button" disabled={editor.busy}
+                            onclick={() => { const next = { ...customFieldEditors }; delete next[field.field_id]; customFieldEditors = next }}>Cancel</button>
+                    {#if field.is_set}
+                      <button class="btn danger sm" type="button" disabled={editor.busy} onclick={() => clearOrdinaryCustomField(field)}>Clear</button>
+                    {/if}
+                  </div>
+                  {#if editor.error}<p class="err" role="alert">{editor.error}</p>{/if}
+                </form>
               {:else}
-                {customFieldDisplay(field)}
+                <span class:sub={!field.is_set}>
+                  {#if field.data_type === 'url' && field.value}
+                    <a href={field.value} target="_blank" rel="noreferrer">{customFieldDisplay(field)}</a>
+                  {:else}
+                    {field.is_set ? customFieldDisplay(field) : 'Not set'}
+                  {/if}
+                </span>
+                {#if !trashed}<button class="btn sm" type="button" onclick={() => startCustomFieldEdit(field)}>{field.is_set ? 'Edit' : 'Add'}</button>{/if}
               {/if}
             </dd>
           {/each}
@@ -1085,6 +1425,69 @@
         {/if}
       </div>
 
+
+      <section class="card notes-card" aria-label="Document notes">
+        <div class="notes-heading">
+          <div>
+            <h3>Notes</h3>
+            <p class="sub">Context kept with this exact document revision.</p>
+          </div>
+          <span class="pill">{doc.notes?.length || 0}</span>
+        </div>
+
+        {#if !trashed}
+          <form class="note-composer" onsubmit={addNote}>
+            <label for="new-document-note">Add a note</label>
+            <textarea id="new-document-note" class="input" rows="3" maxlength="16384"
+                      placeholder="Add context, a decision, or a follow-up…"
+                      bind:value={noteDraft} disabled={noteBusy}></textarea>
+            <div class="note-composer-actions">
+              <span class="sub">Visible to people who can open this document.</span>
+              <button class="btn primary sm" disabled={noteBusy || !noteDraft.trim()}>
+                {noteBusy && noteEditID == null && notePendingDelete == null ? 'Adding…' : 'Add note'}
+              </button>
+            </div>
+          </form>
+        {/if}
+
+        {#if noteError}<p class="err" role="alert">{noteError}</p>{/if}
+        <div class="note-list">
+          {#each doc.notes || [] as note (note.id)}
+            <article class="note-item">
+              <div class="note-meta">
+                <strong>{note.author}</strong>
+                <span class="sub">
+                  {fmtDate(note.updated_at || note.created_at)}
+                  {#if note.updated_at > note.created_at} · edited{/if}
+                </span>
+              </div>
+              {#if noteEditID === note.id}
+                <form class="note-edit" onsubmit={(event) => saveNoteEdit(event, note)}>
+                  <textarea class="input" rows="4" maxlength="16384" aria-label={`Edit note by ${note.author}`}
+                            bind:value={noteEditDraft} disabled={noteBusy}></textarea>
+                  <div class="note-actions">
+                    <button class="btn primary sm" disabled={noteBusy || !noteEditDraft.trim()}>
+                      {noteBusy ? 'Saving…' : 'Save'}
+                    </button>
+                    <button class="btn sm" type="button" disabled={noteBusy}
+                            onclick={() => { noteEditID = null; noteEditDraft = ''; noteError = '' }}>Cancel</button>
+                  </div>
+                </form>
+              {:else}
+                <p class="note-body">{note.note}</p>
+                {#if note.can_edit && !trashed}
+                  <div class="note-actions">
+                    <button class="btn sm" type="button" disabled={noteBusy} onclick={() => startNoteEdit(note)}>Edit</button>
+                    <button class="btn danger sm" type="button" disabled={noteBusy} onclick={() => (notePendingDelete = note)}>Delete</button>
+                  </div>
+                {/if}
+              {/if}
+            </article>
+          {:else}
+            <p class="sub note-empty">{trashed ? 'No notes on this revision.' : 'No notes yet. Add context without changing the original file.'}</p>
+          {/each}
+        </div>
+      </section>
 
       {#if !trashed}
         <section class="card related-card" aria-label="Document insights">
@@ -1404,6 +1807,17 @@
   </div>
 {/if}
 
+{#if notePendingDelete}
+  <ConfirmDialog
+    title="Delete note?"
+    message={`The note by ${notePendingDelete.author} will be permanently deleted.`}
+    confirmLabel="Delete note"
+    busyLabel="Deleting…"
+    busy={noteBusy}
+    onConfirm={removeNote}
+    onCancel={() => (notePendingDelete = null)} />
+{/if}
+
 {#if trashOpen}
   <ConfirmDialog
     title="Move document to trash?"
@@ -1499,6 +1913,37 @@
   .tag-actions { margin:8px 0 4px }
   .tag-actions :global(.tag-picker) { flex:1 1 140px }
   .inline-state { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .layout-assignment { display:grid; gap:5px; min-width:0; }
+  .layout-assignment .input { width:100%; max-width:none; padding:4px 8px; font-size:.8rem; }
+  .meta-control-help, .meta-control-error { font-size:.68rem; line-height:1.4; }
+  .meta-control-help { color:var(--muted); }
+  .meta-control-error { color:var(--danger); }
+  .custom-field-value { min-width:0; }
+  .custom-field-value:not(:has(.custom-field-editor)) { display:flex; align-items:center; flex-wrap:wrap; gap:7px; }
+  .custom-field-editor { display:grid; gap:7px; width:100%; }
+  .custom-field-editor > .input { width:100%; max-width:none; }
+  .custom-field-actions { display:flex; align-items:center; flex-wrap:wrap; gap:6px; }
+  .custom-field-editor .err { margin:0; font-size:.72rem; }
+  .custom-field-choices { display:flex; flex-wrap:wrap; gap:6px 12px; padding:7px 9px; border:1px solid var(--line); border-radius:7px; background:var(--bg); }
+  .custom-field-choices label { display:flex; align-items:center; gap:5px; font-size:.75rem; }
+  .notes-heading, .note-meta, .note-composer-actions, .note-actions { display:flex; align-items:center; gap:8px; }
+  .notes-heading { align-items:flex-start; justify-content:space-between; }
+  .notes-heading h3 { margin:0; font-size:.92rem; }
+  .notes-heading p { margin:3px 0 0; font-size:.74rem; }
+  .note-composer { display:grid; gap:7px; margin-top:13px; padding:11px; border:1px solid var(--line); border-radius:9px; background:var(--bg); }
+  .note-composer label { font-size:.76rem; font-weight:650; }
+  .note-composer textarea, .note-edit textarea { width:100%; max-width:none; min-height:72px; resize:vertical; line-height:1.45; }
+  .note-composer-actions { align-items:flex-start; justify-content:space-between; }
+  .note-composer-actions .sub { max-width:34ch; font-size:.68rem; }
+  .note-list { display:grid; gap:0; margin-top:12px; }
+  .note-item { display:grid; gap:7px; padding:12px 1px; border-top:1px solid var(--line); }
+  .note-meta { justify-content:space-between; }
+  .note-meta strong { min-width:0; overflow:hidden; font-size:.78rem; text-overflow:ellipsis; white-space:nowrap; }
+  .note-meta .sub { flex:none; font-size:.68rem; }
+  .note-body { margin:0; overflow-wrap:anywhere; color:var(--ink); font-size:.82rem; line-height:1.5; white-space:pre-wrap; }
+  .note-edit { display:grid; gap:7px; }
+  .note-actions { justify-content:flex-end; }
+  .note-empty { margin:3px 0 0; padding:13px 0 2px; border-top:1px solid var(--line); font-size:.78rem; }
   .related-card { container-type:inline-size; overflow:hidden; padding-top:14px; }
   .related-tabs { display:flex; gap:2px; margin:0 0 14px; border-bottom:1px solid var(--line); overflow-x:auto; }
   .related-tabs button { display:flex; align-items:center; flex:none; margin-bottom:-1px; padding:8px 7px; border:0; border-bottom:2px solid transparent; background:none; color:var(--muted); font:inherit; font-size:.8rem; font-weight:600; white-space:nowrap; cursor:pointer; }

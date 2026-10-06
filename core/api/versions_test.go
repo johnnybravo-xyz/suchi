@@ -151,8 +151,10 @@ func TestUploadNewVersionCopiesOnlyFilingMetadata(t *testing.T) {
 		INSERT INTO document_correspondents(document_id,correspondent_id,role,position)
 		VALUES(?,94,'recipient',7);
 		INSERT INTO document_custom_field_values(document_id,field_id,value_text)
-		VALUES(?,95,'exact revision note')
-	`, previousID, previousID, previousID, previousID, previousID, previousID); err != nil {
+		VALUES(?,95,'exact revision value');
+		INSERT INTO notes(document_id,user_id,note,created_at,updated_at)
+		VALUES(?,1,'exact revision note',0,0)
+	`, previousID, previousID, previousID, previousID, previousID, previousID, previousID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -198,6 +200,7 @@ func TestUploadNewVersionCopiesOnlyFilingMetadata(t *testing.T) {
 		`SELECT count(*) FROM document_tags WHERE document_id=` + strconv.FormatInt(created.ID, 10) + ` AND tag_id=93`:                                                         0,
 		`SELECT count(*) FROM document_correspondents WHERE document_id=` + strconv.FormatInt(created.ID, 10) + ` AND correspondent_id=94 AND role='recipient' AND position=7`: 1,
 		`SELECT count(*) FROM document_custom_field_values WHERE document_id=` + strconv.FormatInt(created.ID, 10):                                                             0,
+		`SELECT count(*) FROM notes WHERE document_id=` + strconv.FormatInt(created.ID, 10):                                                                                    0,
 	} {
 		var got int
 		if err := d.Read.QueryRow(query).Scan(&got); err != nil {

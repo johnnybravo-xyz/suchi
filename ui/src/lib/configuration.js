@@ -22,7 +22,7 @@ export const ARCHIVE_SETTINGS_GROUPS = [
       },
       {
         name: 'metadata', label: 'Metadata', icon: 'settings',
-        description: 'Manage document labels, correspondents, storage paths, and custom fields.',
+        description: 'Manage document labels, correspondents, and custom fields.',
         href: '#/settings?tab=archive&section=metadata',
       },
     ],

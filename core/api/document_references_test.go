@@ -33,6 +33,8 @@ func seedDocumentReferences(t *testing.T, s *Server) {
 			(101,105,202),(101,106,204),(103,105,202),(102,105,202);
 
 		UPDATE documents SET version_family_key='v:source-family' WHERE id=101;
+		UPDATE documents SET archive_serial_number=42 WHERE id=101;
+		UPDATE documents SET archive_serial_number=60 WHERE id=103;
 		INSERT INTO documents(id,system_id,owner_id,jd_category_id,title,content,original_blob,original_size,mime_type,sensitivity,version_family_key,created_at,updated_at)
 		SELECT 105,system_id,owner_id,jd_category_id,'Newer source','','source-newer',original_size,mime_type,sensitivity,'v:source-family',1,1 FROM documents WHERE id=101;
 
@@ -57,10 +59,12 @@ func TestDocumentDetailProjectsTypedCustomFieldsWithoutHiddenTargets(t *testing.
 	}
 	var body struct {
 		CustomFields []struct {
-			FieldID  int64           `json:"field_id"`
-			Name     string          `json:"name"`
-			DataType string          `json:"data_type"`
-			Value    json.RawMessage `json:"value"`
+			FieldID      int64           `json:"field_id"`
+			Name         string          `json:"name"`
+			DataType     string          `json:"data_type"`
+			ExtraData    json.RawMessage `json:"extra_data"`
+			Value        json.RawMessage `json:"value"`
+			DisplayValue string          `json:"display_value"`
 		} `json:"custom_fields"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
@@ -78,6 +82,14 @@ func TestDocumentDetailProjectsTypedCustomFieldsWithoutHiddenTargets(t *testing.
 	} {
 		if got := string(values[name]); got != want {
 			t.Errorf("%s value = %s, want %s", name, got, want)
+		}
+	}
+	for _, field := range body.CustomFields {
+		if field.Name == "Amount" && field.DisplayValue != "12.5" {
+			t.Errorf("Amount display value = %q", field.DisplayValue)
+		}
+		if field.Name == "Labels" && string(field.ExtraData) != `{"choices":["a","b"]}` {
+			t.Errorf("Labels extra_data = %s", field.ExtraData)
 		}
 	}
 	if _, exists := values["Secret"]; exists {
@@ -236,6 +248,18 @@ func TestFieldPresenceQueryUsesVisibleLiveReferenceTargets(t *testing.T) {
 
 	_, ids = list(`has-field:"Local field" version:all`)
 	assertIDs("ordinary value", ids, 101)
+	_, ids = list(`field:"Local field"=memo version:all`)
+	assertIDs("text field value", ids, 101)
+	_, ids = list(`field:Amount>10 version:all`)
+	assertIDs("number field comparison", ids, 101)
+	_, ids = list(`field:Labels=b version:all`)
+	assertIDs("multi field value", ids, 101)
+	_, ids = list(`field:Active=no version:all`)
+	assertIDs("bool field value", ids, 101)
+	_, ids = list(`field:Due=2024-01-01 version:all`)
+	assertIDs("date field value", ids, 101)
+	_, ids = list(`asn:>50 version:all`)
+	assertIDs("archive number comparison", ids, 103)
 	_, ids = list(`has-field:"Secret" version:all`)
 	assertIDs("hidden reference target", ids)
 	_, ids = list(`-has-field:"Secret" version:all`)
@@ -253,6 +277,15 @@ func TestFieldPresenceQueryUsesVisibleLiveReferenceTargets(t *testing.T) {
 	if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &suggestions) != nil ||
 		len(suggestions.Results) != 1 || suggestions.Results[0].Query != "has-field:Related" {
 		t.Fatalf("field autocomplete: %d %s", recorder.Code, recorder.Body.String())
+	}
+	recorder = httptest.NewRecorder()
+	request = httptest.NewRequest("GET", "/api/autocomplete/?q="+url.QueryEscape("field:Am"), nil)
+	request = request.WithContext(auth.WithPrincipal(context.Background(), principal))
+	s.Autocomplete(recorder, request)
+	suggestions.Results = nil
+	if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &suggestions) != nil ||
+		len(suggestions.Results) != 1 || suggestions.Results[0].Query != "field:Amount=" {
+		t.Fatalf("field value autocomplete: %d %s", recorder.Code, recorder.Body.String())
 	}
 
 	if _, err := s.DB.Write.Exec(`UPDATE documents SET trashed_at=10 WHERE id=202`); err != nil {

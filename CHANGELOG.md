@@ -14,9 +14,22 @@ Notable user-visible changes to Suchi are recorded here.
   language, accepts only canonical same-instance URL forms, offers administrators
   direct link-type setup, rejects self and same-family targets, redacts hidden or
   trashed endpoints, and removes incoming values on permanent deletion.
-- Add `version:` and `has-field:` query qualifiers across Documents, Search,
-  saved Views, Calendar, and archive research, plus a saved-view control for
-  documents with or without a named custom-field value.
+- Add `version:`, `has-field:`, typed `field:`, and read-only `asn:` query
+  qualifiers across Documents, Search, saved Views, Calendar, and archive
+  research, plus a saved-view control for documents with or without a named
+  custom-field value. Imported archive-number view rules retain exact, missing,
+  greater-than, and less-than retrieval.
+- Add attributed, editable notes to Document Detail. Notes are exact-revision
+  metadata, remain read-only in Trash, enforce author/admin mutation, and are
+  accepted atomically from watched-folder sidecars.
+- Add complete typed custom-field workflows: validated select choices, protected
+  in-use definitions, type-aware Document Detail and automation controls,
+  formatted API values, atomic sidecar ingestion, and value retrieval with
+  `field:` comparisons.
+- Move filesystem-view configuration into Filing Tree as **Rendered layouts**,
+  with server-validated sample previews, per-document/default assignment,
+  named automation controls, transactional rerenders, and compatibility guards
+  for layouts that use read-only previous archive numbers.
 
 ### Fixed
 
@@ -34,11 +47,11 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Changed
 
-- Replace the Paperless-derived document-type vocabulary with ordinary
+- Replace the source-archive-derived document-type vocabulary with ordinary
   `type:<name>` tags. The stable schema upgrade migrates assignments, ACLs,
   saved-view filters, automation filters/actions, and title/storage templates;
   automations whose tag-and-type AND predicate cannot be represented are
-  suspended, and pending type-change reviews are cancelled. Paperless bundle
+  suspended, and pending type-change reviews are cancelled. Source bundle
   imports preserve source types through the same tags and report unsupported
   template expressions.
 - Replace the combined type/share selector in Documents with a dedicated
@@ -86,7 +99,7 @@ Notable user-visible changes to Suchi are recorded here.
   preserved live session for explicit provider binding.
 - Keep watched-folder ownership attached to a durable user ID across account
   email changes. Identity changes no longer rewrite or reload watcher settings;
-  owner-based custom storage paths rerender in the identity transaction.
+  owner-based rendered layouts rerender in the identity transaction.
 - Treat all correspondent reads and writes as ordered, role-bearing relations.
   Singular sender edits promote or clear only the sender role, while explicit
   multi-party edits retain recipients, CCs and other relations.

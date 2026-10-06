@@ -8,6 +8,7 @@
   } from '../lib/api.js'
   import Icon from '../lib/Icon.svelte'
   import TaxonomyImport from '../lib/TaxonomyImport.svelte'
+  import RenderedLayoutsSettings from './RenderedLayoutsSettings.svelte'
 
   let { notify, onTaxonomyChanged } = $props()
 
@@ -245,9 +246,12 @@
       <button class:on={mode === 'presets'} aria-pressed={mode === 'presets'} onclick={() => chooseMode('presets')}>Ready-made</button>
       <button class:on={mode === 'build'} aria-pressed={mode === 'build'} onclick={() => chooseMode('build')}>Build your own</button>
       <button class:on={mode === 'files'} aria-pressed={mode === 'files'} onclick={() => chooseMode('files')}>Import or export</button>
+      <button class:on={mode === 'layouts'} aria-pressed={mode === 'layouts'} onclick={() => chooseMode('layouts')}>Rendered layouts</button>
     </nav>
 
-    {#if mode === 'files'}
+    {#if mode === 'layouts'}
+      <RenderedLayoutsSettings {notify} />
+    {:else if mode === 'files'}
       <div class="file-panels">
         <section class="card file-card" aria-labelledby="import-heading">
           <div class="file-heading">

@@ -55,10 +55,12 @@ type Clause struct {
 	Field  TextField
 	Prefix bool
 
-	Filter   string
-	Operator Operator
-	Value    string
-	Quoted   bool
+	Filter           string
+	Operator         Operator
+	Value            string
+	Quoted           bool
+	FieldValue       string
+	FieldValueQuoted bool
 }
 
 type Query struct {
@@ -100,7 +102,9 @@ var filterNames = []string{
 	"lang",
 	"title",
 	"content",
+	"field",
 	"has-field",
+	"asn",
 	"added",
 	"date",
 	"date-role",
@@ -157,15 +161,24 @@ func Normalize(query Query) string {
 		} else {
 			part.WriteString(clause.Filter)
 			part.WriteByte(':')
-			if clause.Operator != OpEqual {
-				part.WriteString(string(clause.Operator))
+			writeValue := func(value string, quoted bool) {
+				if quoted {
+					part.WriteString(`"`)
+					part.WriteString(strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(value))
+					part.WriteString(`"`)
+				} else {
+					part.WriteString(escapeBare(value))
+				}
 			}
-			if clause.Quoted {
-				part.WriteString(`"`)
-				part.WriteString(strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(clause.Value))
-				part.WriteString(`"`)
+			if clause.Filter == "field" {
+				writeValue(clause.Value, clause.Quoted)
+				part.WriteString(string(clause.Operator))
+				writeValue(clause.FieldValue, clause.FieldValueQuoted)
 			} else {
-				part.WriteString(escapeBare(clause.Value))
+				if clause.Operator != OpEqual {
+					part.WriteString(string(clause.Operator))
+				}
+				writeValue(clause.Value, clause.Quoted)
 			}
 		}
 		parts = append(parts, part.String())

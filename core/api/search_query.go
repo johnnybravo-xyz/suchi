@@ -21,6 +21,32 @@ type apiQueryResolver struct {
 }
 
 func (r apiQueryResolver) Resolve(ctx context.Context, filter, value string) ([]searchquery.Candidate, error) {
+
+	if filter == "field" {
+		rows, err := r.queryer.QueryContext(ctx, `
+			SELECT id, name, data_type
+			FROM custom_fields
+			WHERE system_id = ? AND lower(name) = lower(?)
+			ORDER BY name
+			LIMIT 8
+		`, r.systemID, value)
+		if err != nil {
+			return nil, fmt.Errorf("resolve field value: %w", err)
+		}
+		defer rows.Close()
+		candidates := make([]searchquery.Candidate, 0, 1)
+		for rows.Next() {
+			var candidate searchquery.Candidate
+			if err := rows.Scan(&candidate.ID, &candidate.Label, &candidate.DataType); err != nil {
+				return nil, fmt.Errorf("scan field value: %w", err)
+			}
+			candidates = append(candidates, candidate)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("iterate field values: %w", err)
+		}
+		return candidates, nil
+	}
 	var query string
 	var args []any
 	switch filter {
@@ -190,6 +216,8 @@ func (s *Server) queryCompletions(ctx context.Context, raw string, limit int) ([
 		if !completion.Negated {
 			fixed = []string{"latest", "all", "older"}
 		}
+	case "asn":
+		fixed = []string{"none"}
 	}
 	if fixed != nil {
 		suggestions := make([]AutocompleteSuggestion, 0, len(fixed))
@@ -222,7 +250,7 @@ func (s *Server) queryCompletions(ctx context.Context, raw string, limit int) ([
 		query = `SELECT id, name, name FROM tags WHERE system_id = ? AND lower(name) LIKE lower(?) ESCAPE '\' ORDER BY name LIMIT ?`
 	case "from":
 		query = `SELECT id, name, name FROM correspondents WHERE system_id = ? AND lower(name) LIKE lower(?) ESCAPE '\' ORDER BY name LIMIT ?`
-	case "has-field":
+	case "has-field", "field":
 		query = `SELECT id, name, name FROM custom_fields WHERE system_id = ? AND lower(name) LIKE lower(?) ESCAPE '\' ORDER BY name LIMIT ?`
 	default:
 		return []AutocompleteSuggestion{}, true, nil

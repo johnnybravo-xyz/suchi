@@ -130,6 +130,9 @@ export const documentVersions = (id, params) => api.get(`/api/documents/${id}/ve
 export const documentBacklinks = (id, params) => api.get(`/api/documents/${id}/referenced-by/${qs(params)}`)
 export const setDocumentCustomField = (id, field, value) => api.put(`/api/documents/${id}/custom_fields/${field}`, { value })
 export const clearDocumentCustomField = (id, field) => api.del(`/api/documents/${id}/custom_fields/${field}`)
+export const createDocumentNote = (id, note) => api.post(`/api/documents/${id}/notes/`, { note })
+export const updateDocumentNote = (id, noteID, note) => api.patch(`/api/documents/${id}/notes/${noteID}`, { note })
+export const deleteDocumentNote = (id, noteID) => api.del(`/api/documents/${id}/notes/${noteID}`)
 
 export const search = (q, params, signal) => api.get(`/api/search/${qs({ q, ...params })}`, { signal })
 export const autocomplete = (q, limit = 8, signal) => api.get(`/api/autocomplete/${qs({ q, limit })}`, { signal })
@@ -217,7 +220,11 @@ export const createTaxon = (kind, b) => api.post(`/api/${kind}/`, b)
 export const patchTaxon = (kind, id, b) => api.patch(`/api/${kind}/${id}`, b)
 export const deleteTaxon = (kind, id) => api.del(`/api/${kind}/${id}`)
 export const deleteTags = (ids) => req('DELETE', '/api/tags/', { ids })
-export const listStoragePaths = () => api.get(`/api/storage_paths/${qs({ page_size: 500 })}`)
+export const listRenderedLayouts = () => api.get(`/api/rendered_layouts/${qs({ page_size: 500 })}`)
+export const createRenderedLayout = (body) => api.post('/api/rendered_layouts/', body)
+export const patchRenderedLayout = (id, body) => api.patch(`/api/rendered_layouts/${id}`, body)
+export const deleteRenderedLayout = (id) => api.del(`/api/rendered_layouts/${id}`)
+export const previewRenderedLayout = (template) => api.post('/api/rendered_layouts/preview', { template })
 
 // Mailbox secrets remain sealed server-side; list visibility is capability-scoped.
 export const listEmailAccounts = () => api.get('/api/email-accounts')

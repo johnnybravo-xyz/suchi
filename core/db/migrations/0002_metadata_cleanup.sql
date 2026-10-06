@@ -1,8 +1,13 @@
 -- suchi: rebuild-tables
 -- SPDX-License-Identifier: AGPL-3.0-or-later
 
--- Document types were a second flat label vocabulary inherited from Paperless.
--- Preserve every type as a namespaced tag before removing that duplicate model.
+-- Document types were a second flat label vocabulary inherited from the source
+-- archive. Preserve every type as a namespaced tag before removing that model.
+
+-- Native notes gain edit timestamps without rewriting their authorship.
+ALTER TABLE notes ADD COLUMN updated_at INTEGER;
+UPDATE notes SET updated_at = created_at WHERE updated_at IS NULL;
+
 INSERT INTO tags(
     name, slug, color, matching_algorithm, match, is_insensitive,
     is_inbox_tag, created_at, updated_at, parent_id, system_id
@@ -187,8 +192,8 @@ SET filter_json = json_set(
 )
 WHERE id IN (SELECT view_id FROM final_queries);
 
--- Paperless-style flat saved-view filters may also exist. Normalize the tag
--- list to the CSV form accepted by the API and remove the retired key.
+-- Source-style flat saved-view filters may also exist. Normalize the tag list
+-- to the CSV form accepted by the API and remove the retired key.
 UPDATE saved_views AS sv
 SET filter_json = json_remove(
     json_set(
@@ -220,7 +225,7 @@ WHERE json_valid(sv.filter_json)
 CREATE TABLE object_acls_new (
   id             INTEGER PRIMARY KEY,
   object_kind    TEXT    NOT NULL CHECK (object_kind IN (
-      'document', 'tag', 'correspondent', 'storage_path'
+      'document', 'tag', 'correspondent', 'rendered_layout'
   )),
   object_id      INTEGER NOT NULL,
   principal_kind TEXT    NOT NULL CHECK (principal_kind IN ('user', 'group')),
@@ -232,7 +237,9 @@ CREATE TABLE object_acls_new (
 ) STRICT;
 
 INSERT INTO object_acls_new(id, object_kind, object_id, principal_kind, principal_id, perm_bits, created_at, created_by)
-SELECT id, object_kind, object_id, principal_kind, principal_id, perm_bits, created_at, created_by
+SELECT id,
+       CASE object_kind WHEN 'storage_path' THEN 'rendered_layout' ELSE object_kind END,
+       object_id, principal_kind, principal_id, perm_bits, created_at, created_by
 FROM object_acls
 WHERE object_kind <> 'document_type';
 

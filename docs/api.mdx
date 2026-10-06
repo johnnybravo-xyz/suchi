@@ -23,8 +23,8 @@ carry it into bug reports. See [Errors](#errors) for the JSON error contract.
 | Auth (browser)          | `/login`, `/bootstrap`, `/setup`, OIDC `GET /oidc/login`, `GET /oidc/callback`, and `POST /oidc/email-change`                                                                            |
 | Auth and account JSON   | `POST /api/login`, `POST /api/logout`, `POST /api/token/`, `GET/POST/DELETE /api/tokens/`, `GET /api/whoami`, `PATCH /api/users/me`, `POST /api/users/me/email`                          |
 | Documents               | `POST /api/documents/`, `GET/PATCH/DELETE /api/documents/{id}`, `POST /api/documents/{id}/restore`, `GET/DELETE /api/trash/`, `DELETE /api/trash/{id}`                                      |
-| Doc extras              | `/correspondents/`, `/versions/`, `/referenced-by/`, `/custom_fields/{field}`, `/decrypt`, `/decrypt-batch`, `/pending-decryption`                                                     |
-| Taxonomy                | `/api/correspondents/`, `/api/storage_paths/`, `/api/tags/`, `/api/tags/{id}/parent`, `/api/custom_fields/`, `/api/jd/categories/`                                                    |
+| Doc extras              | `/correspondents/`, `/versions/`, `/referenced-by/`, `/notes/`, `/custom_fields/{field}`, `/decrypt`, `/decrypt-batch`, `/pending-decryption`                                          |
+| Metadata and filing     | `/api/correspondents/`, `/api/rendered_layouts/`, `/api/tags/`, `/api/tags/{id}/parent`, `/api/custom_fields/`, `/api/jd/categories/`                                                  |
 | Search + autocomplete   | `/api/search/`, `/api/autocomplete/`, `/api/languages/`                                                                                                                               |
 | Mail intake | `/api/email-accounts/*` (requires `mailboxes`; within the selected system, admins see all rows and members see their own) |
 | Saved views             | `/api/saved_views/` (setting `shared: true` requires `share_views`; GET `?include=shared` also returns other users' shared views)                                                     |
@@ -266,7 +266,7 @@ user and session. The callback then:
 A binding or email change preserves `users.id`, rotates every browser session,
 plants one replacement cookie, preserves API/mobile tokens, and requires a
 retained audit row in the same transaction. An email change also enqueues
-rerenders for custom storage paths that use the exact `owner` template variable.
+rerenders for rendered layouts that use the exact `owner` template variable.
 The numeric watched-folder owner remains attached to the same user without a
 watcher reload. Invalid or reserved email, a collision, a stale session, a
 disabled mode, a development-seeded account, or an audit failure leaves identity
@@ -443,7 +443,7 @@ with `Retry-After: 1`.
 
 The writer rechecks the canonical email, password hash, mode, development marker,
 enabled account and initiating session. It then preserves `users.id`, changes
-the email, queues rerenders for custom storage paths that use the exact `owner`
+the email, queues rerenders for rendered layouts that use the exact `owner`
 template variable, rotates every browser session, and inserts retained
 `user.email_changed` as one transaction. Failure rolls back all of those
 effects. **204 No Content** plants the replacement cookie; every old browser
@@ -716,11 +716,12 @@ success only after every returned live child has completed post-ingest.
 ### `GET /api/documents/{id}`
 
 Full projection of one document: title, extracted content (post-OCR),
-MIME, blobs, JD category, tags (slug list), correspondents, and typed custom
-field values. Trashed docs are visible with `trashed_at` set so mobile clients can render
-the undelete flow. `owner_id` identifies the document owner; trashed documents
-also include `deletes_at`, exactly 30 days after `trashed_at`. Live and restored
-documents omit both deletion timestamps.
+MIME, blobs, JD category, tags (slug list), correspondents, attributed notes,
+typed custom-field values, selected rendered layout, and an optional read-only
+previous archive number. Trashed docs are visible with `trashed_at` set so
+mobile clients can render the undelete flow. `owner_id` identifies the document
+owner; trashed documents also include `deletes_at`, exactly 30 days after
+`trashed_at`. Live and restored documents omit both deletion timestamps.
 
 `encryption_state` is `encrypted` when a password is still needed, or
 `decrypted` after a successful manual or automatic password unlock. It is
@@ -766,8 +767,15 @@ The normal sensitivity-reveal and raw-original download restrictions still apply
   ],
   "tags": ["utilities", "electricity"],
   "correspondents": [{ "id": 3, "name": "BESCOM", "role": "sender" }],
+  "archive_serial_number": 4021,
+  "rendered_layout": {
+    "id": 7,
+    "name": "Household bills by year",
+    "path": "Bills/{{ created_year }}/{{ title }}",
+    "uses_asn": false
+  },
   "custom_fields": [
-    { "field_id": 11, "name": "Account number", "data_type": "text", "value": "4821" },
+    { "field_id": 11, "name": "Account number", "data_type": "text", "extra_data": {}, "value": "4821", "display_value": "4821" },
     {
       "field_id": 12,
       "name": "Payment receipt",
@@ -781,9 +789,20 @@ The normal sensitivity-reveal and raw-original download restrictions still apply
         "jd_category_code": 31,
         "created_at": 1793491100,
         "is_latest": true
-      }
+      },
+      "extra_data": {},
+      "display_value": "Payment receipt March 2026"
     }
   ],
+  "notes": [{
+    "id": 9,
+    "user_id": 1,
+    "author": "Archive owner",
+    "note": "Ask about the tariff change.",
+    "created_at": 1793494900,
+    "updated_at": 1793494900,
+    "can_edit": true
+  }],
   "languages": "de,en",
   "languages_locked": false
 }
@@ -801,9 +820,21 @@ and folder. `added_at` is when Suchi ingested the document;
 `custom_fields` preserves each definition's declared type: strings for
 `text`/`url`/`select`, numbers for `number`/`monetary`, Unix seconds for `date`,
 booleans for `bool`, string arrays for `multi`, and a bounded exact-document
-summary for `documentlink`. A document link is omitted when its exact target is
-trashed, missing, or not visible to the caller. The response never substitutes a
-newer version and never exposes the stored target ID separately.
+summary for `documentlink`. `extra_data` carries choice definitions and
+`display_value` gives the server's formatted presentation. A document link is
+omitted when its exact target is trashed, missing, or not visible to the caller.
+The response never substitutes a newer version and never exposes the stored
+target ID separately.
+
+`notes` always belongs to this exact revision. `can_edit` reflects author/admin
+ownership; document change permission is checked again when mutating a note.
+`archive_serial_number` is omitted when absent and has no PATCH field.
+`rendered_layout` is omitted when the document uses the default JD layout.
+PATCH with `{"rendered_layout_id":7}` assigns a same-system layout; `0` returns
+to the default. A layout that uses `{{ asn }}` returns
+`409 rendered_layout_requires_archive_number` for a document without retained
+compatibility metadata. Assignment and path-visible metadata changes enqueue
+the rendered move in the document transaction.
 
 `content_source` is `device_ocr`, `server`, or empty and names the authority for
 the active `content`. Device provenance remains available after authoritative
@@ -953,8 +984,9 @@ Upload a replacement with `previous_version_id={id}`. Uses the
 The new row keeps the predecessor's system, owner, JD category, sensitivity,
 document type, explicit ACL grants, manual tags, correspondents, and its title.
 It gets fresh extraction/generated state and does not copy custom-field values,
-classifier-owned tags, accepted dates, or other exact-revision metadata. A
-conflicting requested system fails.
+document links, notes, the previous archive number, classifier-owned tags,
+accepted dates, or other exact-revision metadata. A conflicting requested system
+fails.
 
 The predecessor must be the current family head and must itself be live. A
 newer family member, including one in Trash, causes
@@ -998,7 +1030,7 @@ Scope: `documents:write`. Cap: 500 documents per call.
 | method                   | parameters                                                                                                                                                                                                                   |
 | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `set_correspondent`      | `{correspondent_id}`                                                                                                                                                                                                         |
-| `set_storage_path`       | `{storage_path_id}`                                                                                                                                                                                                          |
+| `set_rendered_layout`    | `{rendered_layout_id}`; `0` selects the default JD layout. `{{ asn }}` layouts require every selected document to have a previous archive number.                                                                    |
 | `set_jd_category`        | `{jd_category_id}`                                                                                                                                                                                                           |
 | `set_sensitivity`        | `{sensitivity}` — one of `""`, `public`, `internal`, `confidential`, `restricted`                                                                                                                                            |
 | `add_tag`                | `{tag_id}` — idempotent (INSERT OR IGNORE)                                                                                                                                                                                   |
@@ -1498,13 +1530,91 @@ accept only same-system live targets.
 Returns `204 No Content` on success. Validation returns `400`, including
 `document_link_self` and `document_link_same_family`; unrelated documents may
 still have reciprocal or cyclic named links. A trashed, inaccessible, or missing
-document or missing field returns `404`. A successful write enqueues a
-storage-path re-render if the field is referenced in the template.
+document or missing field returns `404`.
 
 ### `DELETE /api/documents/{id}/custom_fields/{field}`
 
 Remove the value row for one live, change-authorized document and field pair.
 `204` on success; trashed documents return `404` without changing values or jobs.
+
+### `POST /api/documents/{id}/notes/`
+
+Create an attributed note on one exact live revision. Body:
+`{"note":"Ask about the tariff change."}`. The caller needs document change
+permission; API tokens need `documents:write`. Notes are trimmed, must be
+non-empty, and are limited to 16 KiB. **201 Created** returns:
+
+```json
+{
+  "id": 9,
+  "user_id": 1,
+  "author": "Archive owner",
+  "note": "Ask about the tariff change.",
+  "created_at": 1793494900,
+  "updated_at": 1793494900,
+  "can_edit": true
+}
+```
+
+### `PATCH|DELETE /api/documents/{id}/notes/{note}`
+
+The note author or an administrator may update/delete a note while the exact
+document remains live and change-authorized. PATCH accepts the same
+`{"note":"..."}` body and returns its `id` and `updated_at`; DELETE returns
+**204 No Content**. Another author receives `403 forbidden`; a missing, trashed,
+or mismatched document/note pair returns `404`. Replacement versions do not copy
+notes.
+
+### `/api/custom_fields/` — field definitions
+
+GET returns the selected system's paged definitions. POST is admin-only and
+accepts `name`, one declared `data_type`, and optional `extra_data` as a JSON
+string. For example:
+
+```json
+{
+  "name": "Review status",
+  "data_type": "select",
+  "extra_data": "{\"choices\":[\"Needs review\",\"Approved\"]}"
+}
+```
+
+PATCH `/api/custom_fields/{id}` can rename a field or update choices. Choice
+fields require a non-empty array of unique, trimmed, non-empty strings. A field
+with any stored value rejects a type change with `409 data_type_in_use`; removing
+an in-use select/multi choice returns `409 choice_in_use`. Adding choices and
+renaming remain allowed. DELETE removes the definition and its values.
+
+### `/api/rendered_layouts/` — Filing Tree output
+
+Rendered layouts are named, selected-system templates for the local filesystem
+view. Internal persistence remains compatible with existing archives, but this
+is the public API and UI vocabulary.
+
+| Method | Path                                | Behavior |
+| ------ | ----------------------------------- | -------- |
+| GET    | `/api/rendered_layouts/`            | Paged authenticated list |
+| POST   | `/api/rendered_layouts/`            | Admin create; body `{"name":"Bills by year","path":"Bills/{{ created_year }}/{{ title }}"}` |
+| PATCH  | `/api/rendered_layouts/{id}`        | Sparse name/template update |
+| DELETE | `/api/rendered_layouts/{id}`        | Delete; assigned documents return to the default JD layout |
+| POST   | `/api/rendered_layouts/preview`     | Admin validation/sample rendering; body `{"template":"..."}` |
+
+Preview returns `{"path":"Bills/2026/March electricity bill","uses_asn":false}`.
+Create/update reject absolute, empty, unknown-expression, traversal, and reserved
+filing-index paths. Supported variables:
+
+- document: `title`, `doc_pk`, `created`, `created_year`, `created_month`,
+  `created_day`, `added`, `added_year`, `added_month`, `added_day`;
+- Filing Tree: `jd.area.code_start`, `jd.area.code_end`, `jd.area.name`,
+  `jd.category.code`, `jd.category.name`, `jd.system.code`, `jd.system.name`,
+  `jd.address`;
+- metadata: `correspondent`, `tag_list`, `owner`;
+- compatibility: `storage_path` (the selected layout name) and `asn`.
+
+Changing a path template queues fresh rendered moves for every live assigned
+document. Deleting a layout clears assignments and queues default-layout moves
+in the same transaction. A document, bulk action, or automation cannot assign an
+`asn` layout to a row without a previous archive number.
 
 ### `GET /api/presets/` and `GET /api/filing-sets/`
 
@@ -1952,7 +2062,7 @@ receiving a grant does not confer delegation rights. Full guide at
 | PUT    | `/api/acls/{kind}/{id}`                             | owner or admin                     |
 | DELETE | `/api/acls/{kind}/{id}?principal_kind&principal_id` | owner or admin                     |
 
-`{kind}` is one of `document|tag|correspondent|storage_path`.
+`{kind}` is one of `document|tag|correspondent|rendered_layout`.
 Grant writes accept only `perm_bits=1` (View), `3` (Edit: view + change),
 or `7` (Full control: view + change + delete). Other combinations return
 `400 bad_permissions`.

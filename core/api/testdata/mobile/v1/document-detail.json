@@ -30,5 +30,6 @@
     {"id": 3, "name": "BESCOM", "role": "sender"}
   ],
   "custom_fields": [],
+  "notes": [],
   "languages": "de,en"
 }

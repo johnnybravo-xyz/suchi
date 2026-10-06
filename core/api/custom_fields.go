@@ -50,6 +50,65 @@ var customFieldTypes = map[string]bool{
 	"monetary": true, "documentlink": true,
 }
 
+var (
+	errCustomFieldTypeInUse   = errors.New("custom field data type is in use")
+	errCustomFieldChoiceInUse = errors.New("custom field choice is in use")
+)
+
+type customFieldInputError struct {
+	code    string
+	message string
+}
+
+func (e *customFieldInputError) Error() string { return e.message }
+
+type customFieldChoices struct {
+	Choices []string `json:"choices"`
+}
+
+func normalizeCustomFieldExtra(dataType, raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		raw = "{}"
+	}
+	if !json.Valid([]byte(raw)) {
+		return "", &customFieldInputError{code: "bad_extra_data", message: "extra_data must be valid JSON"}
+	}
+	if dataType != "select" && dataType != "multi" {
+		return raw, nil
+	}
+	var extra customFieldChoices
+	if err := json.Unmarshal([]byte(raw), &extra); err != nil || len(extra.Choices) == 0 {
+		return "", &customFieldInputError{code: "bad_choices", message: "choice fields require a non-empty choices array"}
+	}
+	seen := make(map[string]struct{}, len(extra.Choices))
+	for i, choice := range extra.Choices {
+		choice = strings.TrimSpace(choice)
+		if choice == "" {
+			return "", &customFieldInputError{code: "bad_choices", message: "choices must not be empty"}
+		}
+		if _, exists := seen[choice]; exists {
+			return "", &customFieldInputError{code: "bad_choices", message: "choices must be unique"}
+		}
+		seen[choice] = struct{}{}
+		extra.Choices[i] = choice
+	}
+	normalized, err := json.Marshal(extra)
+	if err != nil {
+		return "", err
+	}
+	return string(normalized), nil
+}
+
+func writeCustomFieldInputError(s *Server, w http.ResponseWriter, err error) bool {
+	var inputErr *customFieldInputError
+	if !errors.As(err, &inputErr) {
+		return false
+	}
+	s.writeError(w, http.StatusBadRequest, inputErr.code, inputErr.message)
+	return true
+}
+
 // ListCustomFieldDefs — GET /api/custom_fields/.
 func (s *Server) ListCustomFieldDefs(w http.ResponseWriter, r *http.Request) {
 	principal := s.requireAuth(w, r)
@@ -129,17 +188,21 @@ func (s *Server) CreateCustomFieldDef(w http.ResponseWriter, r *http.Request) {
 			"data_type must be one of text, number, date, bool, select, multi, url, monetary, documentlink")
 		return
 	}
-	extra := "{}"
-	if in.ExtraData != nil && strings.TrimSpace(*in.ExtraData) != "" {
-		if !json.Valid([]byte(*in.ExtraData)) {
-			s.writeError(w, http.StatusBadRequest, "bad_extra_data", "extra_data must be valid JSON")
+	rawExtra := "{}"
+	if in.ExtraData != nil {
+		rawExtra = *in.ExtraData
+	}
+	extra, err := normalizeCustomFieldExtra(*in.DataType, rawExtra)
+	if err != nil {
+		if writeCustomFieldInputError(s, w, err) {
 			return
 		}
-		extra = *in.ExtraData
+		s.serverErr(w, "custom_fields.validate", err)
+		return
 	}
 	now := time.Now().Unix()
 	var id int64
-	err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		current, err := s.currentWriterPrincipal(r.Context(), tx, principal, systemID)
 		if err != nil {
 			return err
@@ -169,11 +232,8 @@ func (s *Server) CreateCustomFieldDef(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusCreated, map[string]any{"id": id})
 }
 
-// UpdateCustomFieldDef — PATCH /api/custom_fields/{id}. Admin-only.
-// data_type changes are ACCEPTED but the ecosystem doesn't rewrite
-// existing values in `document_custom_field_values` — operators are
-// expected to know what they're doing (or delete the field and
-// recreate).
+// UpdateCustomFieldDef serves PATCH /api/custom_fields/{id}. Data types become
+// immutable once a document has a value, and active choices cannot be removed.
 func (s *Server) UpdateCustomFieldDef(w http.ResponseWriter, r *http.Request) {
 	principal := s.requireAdmin(w, r)
 	if principal == nil {
@@ -193,36 +253,22 @@ func (s *Server) UpdateCustomFieldDef(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
-	sets := []string{}
-	args := []any{}
-	if in.Name != nil {
-		sets = append(sets, "name = ?")
-		args = append(args, strings.TrimSpace(*in.Name))
-	}
-	if in.DataType != nil {
-		if !customFieldTypes[*in.DataType] {
-			s.writeError(w, http.StatusBadRequest, "bad_data_type",
-				"data_type not in the allowed set")
-			return
-		}
-		sets = append(sets, "data_type = ?")
-		args = append(args, *in.DataType)
-	}
-	if in.ExtraData != nil {
-		if !json.Valid([]byte(*in.ExtraData)) {
-			s.writeError(w, http.StatusBadRequest, "bad_extra_data", "extra_data must be valid JSON")
-			return
-		}
-		sets = append(sets, "extra_data = ?")
-		args = append(args, *in.ExtraData)
-	}
-	if len(sets) == 0 {
+	if in.Name == nil && in.DataType == nil && in.ExtraData == nil {
 		s.writeError(w, http.StatusBadRequest, "no_fields", "no updateable fields in body")
 		return
 	}
-	sets = append(sets, "updated_at = ?")
-	args = append(args, time.Now().Unix())
-	args = append(args, id)
+	if in.Name != nil && strings.TrimSpace(*in.Name) == "" {
+		s.writeError(w, http.StatusBadRequest, "missing_name", "name is required")
+		return
+	}
+	if in.DataType != nil && !customFieldTypes[*in.DataType] {
+		s.writeError(w, http.StatusBadRequest, "bad_data_type", "data_type not in the allowed set")
+		return
+	}
+	if in.ExtraData != nil && !json.Valid([]byte(*in.ExtraData)) {
+		s.writeError(w, http.StatusBadRequest, "bad_extra_data", "extra_data must be valid JSON")
+		return
+	}
 
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		current, err := s.currentWriterPrincipal(r.Context(), tx, principal, systemID)
@@ -232,30 +278,124 @@ func (s *Server) UpdateCustomFieldDef(w http.ResponseWriter, r *http.Request) {
 		if current.Role != "admin" {
 			return errNotFound
 		}
-		res, err := tx.ExecContext(r.Context(),
+		var currentType, currentExtra string
+		if err := tx.QueryRowContext(r.Context(),
+			`SELECT data_type, extra_data FROM custom_fields WHERE id = ? AND system_id = ?`,
+			id, systemID).Scan(&currentType, &currentExtra); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return errNotFound
+			}
+			return err
+		}
+
+		nextType := currentType
+		if in.DataType != nil {
+			nextType = *in.DataType
+		}
+		nextExtra := currentExtra
+		if in.ExtraData != nil {
+			nextExtra = *in.ExtraData
+		}
+		nextExtra, err = normalizeCustomFieldExtra(nextType, nextExtra)
+		if err != nil {
+			return err
+		}
+
+		if nextType != currentType {
+			var values int
+			if err := tx.QueryRowContext(r.Context(),
+				`SELECT count(*) FROM document_custom_field_values WHERE field_id = ?`, id).Scan(&values); err != nil {
+				return err
+			}
+			if values != 0 {
+				return errCustomFieldTypeInUse
+			}
+		}
+		if nextType == currentType && (currentType == "select" || currentType == "multi") && nextExtra != currentExtra {
+			var before, after customFieldChoices
+			if err := json.Unmarshal([]byte(currentExtra), &before); err != nil {
+				return err
+			}
+			if err := json.Unmarshal([]byte(nextExtra), &after); err != nil {
+				return err
+			}
+			allowed := make(map[string]struct{}, len(after.Choices))
+			for _, choice := range after.Choices {
+				allowed[choice] = struct{}{}
+			}
+			removed := make([]string, 0)
+			for _, choice := range before.Choices {
+				if _, exists := allowed[choice]; !exists {
+					removed = append(removed, choice)
+				}
+			}
+			if len(removed) != 0 {
+				removedJSON, err := json.Marshal(removed)
+				if err != nil {
+					return err
+				}
+				var used bool
+				query := `SELECT EXISTS (
+					SELECT 1
+					FROM document_custom_field_values v
+					JOIN json_each(?) removed
+					  ON v.value_text = removed.value
+					WHERE v.field_id = ?
+				)`
+				if currentType == "multi" {
+					query = `SELECT EXISTS (
+						SELECT 1
+						FROM document_custom_field_values v
+						JOIN json_each(v.value_text) selected
+						JOIN json_each(?) removed ON selected.value = removed.value
+						WHERE v.field_id = ?
+					)`
+				}
+				if err := tx.QueryRowContext(r.Context(), query, string(removedJSON), id).Scan(&used); err != nil {
+					return err
+				}
+				if used {
+					return errCustomFieldChoiceInUse
+				}
+			}
+		}
+
+		sets := make([]string, 0, 4)
+		args := make([]any, 0, 5)
+		if in.Name != nil {
+			sets = append(sets, "name = ?")
+			args = append(args, strings.TrimSpace(*in.Name))
+		}
+		if in.DataType != nil {
+			sets = append(sets, "data_type = ?")
+			args = append(args, nextType)
+		}
+		if in.ExtraData != nil || (in.DataType != nil && nextExtra != currentExtra) {
+			sets = append(sets, "extra_data = ?")
+			args = append(args, nextExtra)
+		}
+		sets = append(sets, "updated_at = ?")
+		args = append(args, time.Now().Unix(), id)
+		_, err = tx.ExecContext(r.Context(),
 			"UPDATE custom_fields SET "+strings.Join(sets, ", ")+" WHERE id = ?", args...)
-		if err != nil {
-			return err
-		}
-		n, err := res.RowsAffected()
-		if err != nil {
-			return err
-		}
-		if n == 0 {
-			return errNotFound
-		}
-		return nil
+		return err
 	})
-	if err != nil {
-		if errors.Is(err, errNotFound) {
-			s.writeError(w, http.StatusNotFound, "not_found", "no such custom field")
-			return
-		}
-		if isUniqueViolation(err) {
-			s.writeError(w, http.StatusConflict, "conflict",
-				"a custom field with that name already exists")
-			return
-		}
+	switch {
+	case writeCustomFieldInputError(s, w, err):
+		return
+	case errors.Is(err, errNotFound):
+		s.writeError(w, http.StatusNotFound, "not_found", "no such custom field")
+		return
+	case errors.Is(err, errCustomFieldTypeInUse):
+		s.writeError(w, http.StatusConflict, "data_type_in_use", "data_type cannot change while documents use this field")
+		return
+	case errors.Is(err, errCustomFieldChoiceInUse):
+		s.writeError(w, http.StatusConflict, "choice_in_use", "choices in use by documents cannot be removed")
+		return
+	case isUniqueViolation(err):
+		s.writeError(w, http.StatusConflict, "conflict", "a custom field with that name already exists")
+		return
+	case err != nil:
 		s.serverErr(w, "custom_fields.update", err)
 		return
 	}

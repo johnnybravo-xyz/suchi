@@ -126,6 +126,24 @@ func TestIntakeSystemIsolationAndWriterMembership(t *testing.T) {
 		t.Fatalf("rejected intake changed document rows: %d", count)
 	}
 
+	if _, err := d.Write.ExecContext(ctx, `
+		INSERT INTO custom_fields(id,system_id,name,data_type,extra_data,created_at,updated_at)
+		VALUES(101,1,'Review score','number','{}',0,0)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := watchers[0].ingest(ctx, path, &sidecar.V1{
+		Version: 1, JDSystem: "S01", CustomFields: map[string]any{"Unknown field": "value"},
+	}); err == nil || !strings.Contains(err.Error(), `custom field "Unknown field" is not defined`) {
+		t.Fatalf("unknown sidecar custom field: %v", err)
+	}
+	if err := d.Read.QueryRowContext(ctx, `SELECT COUNT(*) FROM documents`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("invalid custom field leaked a document: %d", count)
+	}
+
 	// Fail at the final outbox insert, after the new row, source and sidecar
 	// metadata have been written. None may commit without its processing job.
 	if _, err := d.Write.ExecContext(ctx, `
@@ -135,7 +153,10 @@ func TestIntakeSystemIsolationAndWriterMembership(t *testing.T) {
 	`); err != nil {
 		t.Fatal(err)
 	}
-	side := &sidecar.V1{Version: 1, JDSystem: "S01", Correspondent: "Atomic sender", Tags: []string{"Atomic tag"}}
+	side := &sidecar.V1{
+		Version: 1, JDSystem: "S01", Correspondent: "Atomic sender", Tags: []string{"Atomic tag"},
+		CustomFields: map[string]any{"Review score": 7.5},
+	}
 	if _, _, err := watchers[0].ingest(ctx, path, side); err == nil || !strings.Contains(err.Error(), "test outbox unavailable") {
 		t.Fatalf("expected final outbox failure, got %v", err)
 	}
@@ -166,9 +187,12 @@ func TestIntakeSystemIsolationAndWriterMembership(t *testing.T) {
 			JOIN jobs j ON j.doc_id = d.id AND j.system_id = d.system_id
 			JOIN document_correspondents dc ON dc.document_id=d.id AND dc.role='sender'
 			JOIN correspondents c ON c.id = dc.correspondent_id AND c.system_id = d.system_id
+			JOIN document_custom_field_values cfv ON cfv.document_id=d.id
+			JOIN custom_fields cf ON cf.id=cfv.field_id AND cf.system_id=d.system_id
 			JOIN document_tags dt ON dt.document_id = d.id
 			JOIN tags t ON t.id = dt.tag_id AND t.system_id = d.system_id
 			WHERE d.id = ? AND d.system_id = 1 AND c.name = 'Atomic sender' AND t.name = 'Atomic tag'
+			  AND cf.name = 'Review score' AND cfv.value_number = 7.5
 		)
 	`, newID).Scan(&committed); err != nil {
 		t.Fatal(err)

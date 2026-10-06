@@ -17,8 +17,8 @@
 //     same bundle re-imports nothing (legacy_id is UNIQUE).
 //   - No partial state: each document import is a single transaction
 //     that writes doc row + junction rows + notes together.
-//   - Verbatim source metadata where Suchi has an equivalent. Paperless
-//     document types become `type:<name>` tags.
+//   - Verbatim source metadata where Suchi has an equivalent. Source document
+//     types become `type:<name>` tags.
 //   - Blobs land in the CAS by content hash. Two docs with identical
 //     bytes will dedup in the CAS layer even if the source kept both.
 //

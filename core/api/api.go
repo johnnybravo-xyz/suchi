@@ -282,17 +282,18 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/tags/{id}", s.DeleteTag)
 	mux.HandleFunc("PATCH /api/tags/{id}/parent", s.SetTagParent)
 
-	// Taxonomy CRUD (correspondents and storage paths). Shared shape via
+	// Taxonomy CRUD (correspondents and rendered layouts). Shared shape via
 	// core/api/taxonomy_crud.go. Admin-only mutation; any authed user can list.
 	mux.HandleFunc("GET /api/correspondents/", s.ListCorrespondents)
 	mux.HandleFunc("POST /api/correspondents/", s.CreateCorrespondent)
 	mux.HandleFunc("PATCH /api/correspondents/{id}", s.UpdateCorrespondent)
 	mux.HandleFunc("DELETE /api/correspondents/{id}", s.DeleteCorrespondent)
 
-	mux.HandleFunc("GET /api/storage_paths/", s.ListStoragePaths)
-	mux.HandleFunc("POST /api/storage_paths/", s.CreateStoragePath)
-	mux.HandleFunc("PATCH /api/storage_paths/{id}", s.UpdateStoragePath)
-	mux.HandleFunc("DELETE /api/storage_paths/{id}", s.DeleteStoragePath)
+	mux.HandleFunc("GET /api/rendered_layouts/", s.ListRenderedLayouts)
+	mux.HandleFunc("POST /api/rendered_layouts/", s.CreateRenderedLayout)
+	mux.HandleFunc("POST /api/rendered_layouts/preview", s.PreviewRenderedLayout)
+	mux.HandleFunc("PATCH /api/rendered_layouts/{id}", s.UpdateRenderedLayout)
+	mux.HandleFunc("DELETE /api/rendered_layouts/{id}", s.DeleteRenderedLayout)
 
 	// Custom field DEFINITIONS (schema). Per-doc values stay at
 	// PUT/DELETE /api/documents/{id}/custom_fields/{field} below.
@@ -342,6 +343,11 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/documents/{id}/versions/", s.ListVersions)
 	mux.HandleFunc("POST /api/documents/{id}/versions/", s.UploadNewVersion)
 	mux.HandleFunc("GET /api/documents/{id}/referenced-by/", s.ListReferencedBy)
+
+	// Attributed notes belong to one exact document revision.
+	mux.HandleFunc("POST /api/documents/{id}/notes/", s.CreateDocumentNote)
+	mux.HandleFunc("PATCH /api/documents/{id}/notes/{note}", s.UpdateDocumentNote)
+	mux.HandleFunc("DELETE /api/documents/{id}/notes/{note}", s.DeleteDocumentNote)
 
 	// Custom-field values — typed write + delete per (doc, field).
 	mux.HandleFunc("PUT /api/documents/{id}/custom_fields/{field}", s.SetCustomField)

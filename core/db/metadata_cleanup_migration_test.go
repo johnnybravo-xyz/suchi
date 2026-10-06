@@ -68,7 +68,8 @@ func TestMetadataCleanupMigratesTypesAndPreservesNotes(t *testing.T) {
 		VALUES(70,1,1,'Invoices','{"q":"type:\"Invoice\"","document_type__id":10,"tags__id__in":"20"}',1,1);
 		INSERT INTO object_acls(id,object_kind,object_id,principal_kind,principal_id,perm_bits,created_at,created_by) VALUES
 			(80,'tag',22,'user',1,1,1,1),
-			(81,'document_type',10,'user',1,2,2,1);
+			(81,'document_type',10,'user',1,2,2,1),
+			(82,'storage_path',60,'user',1,3,3,1);
 
 		INSERT INTO approval_defs(id,system_id,slug,version,spec_json,created_at)
 		VALUES(90,1,'document-change',1,'{}',1);
@@ -99,6 +100,7 @@ func TestMetadataCleanupMigratesTypesAndPreservesNotes(t *testing.T) {
 	assertMigrationText(t, d, `SELECT json_extract(filter_json,'$.tags__id__in') FROM saved_views WHERE id=70`, `20,22`)
 	assertMigrationScalar(t, d, `SELECT json_type(filter_json,'$.document_type__id') IS NULL FROM saved_views WHERE id=70`, 1)
 	assertMigrationScalar(t, d, `SELECT perm_bits FROM object_acls WHERE object_kind='tag' AND object_id=22 AND principal_kind='user' AND principal_id=1`, 3)
+	assertMigrationScalar(t, d, `SELECT perm_bits FROM object_acls WHERE object_kind='rendered_layout' AND object_id=60 AND principal_kind='user' AND principal_id=1`, 3)
 	assertMigrationText(t, d, `SELECT state FROM approval_runs WHERE id=91`, `cancelled`)
 	assertMigrationText(t, d, `SELECT status FROM approval_tasks WHERE id=92`, `expired`)
 }

@@ -160,8 +160,9 @@ transaction, gives a previously standalone row and its replacement one random
 `v:` family key, inserts the new source and `post-ingest` job with the row, and
 copies only continuity metadata: system, owner, filing category, sensitivity,
 explicit ACL grants, manual tags, correspondents, and title. Extraction state,
-accepted intelligence, classifier-owned tags, custom-field values, and other
-exact-revision state start fresh. The original predecessor
+accepted intelligence, classifier-owned tags, custom-field values/document
+links, notes, the previous archive number, and other exact-revision state start
+fresh. The original predecessor
 row and every immutable blob remain unchanged. Idempotency receipts and the
 predecessor/hash fallback recover a lost successful response without creating a
 second version.
@@ -201,6 +202,44 @@ valid named relationships, but no API recursively traverses them.
 Verify these boundaries with `go test ./core/api ./core/customfield ./core/db
 ./core/searchquery ./core/trash ./core/authz` and the version/reference browser
 workflow in `ui/tests/document-versions-references.spec.js`.
+
+### Typed metadata and rendered layouts
+
+`core/api/document_notes.go` owns attributed, exact-revision notes. Document
+Detail projects them with author/admin edit authority. Create, update, and delete
+recheck the document ACL and current writer inside the single-write transaction;
+replacement creates no note rows for the new revision.
+
+`core/api/custom_fields.go` owns definitions and protects stored values from
+schema drift: choice fields require normalized choices, a populated field cannot
+change type, and an in-use choice cannot disappear. `core/customfield` remains
+the single validation/write/render dispatch for API values, filesystem sidecars,
+automations, and imported values. `document_references.go` projects typed raw
+values, formatted display values, and choice metadata while retaining exact-link
+ACL behavior. `core/searchquery` resolves `field:` against the system-local
+definition before compiling the matching typed column; `has-field:` remains the
+presence operator.
+
+Rendered layouts are Filing Tree output. The public boundary is
+`/api/rendered_layouts/`; `core/api/taxonomy_crud.go` validates templates and
+serves sample previews. Existing archives retain the internal `storage_paths`
+table, `documents.storage_path_id`, and persisted automation action names. The
+public bulk method and ACL kind are `set_rendered_layout` and
+`rendered_layout`. A document with no selection uses the default JD projection.
+Document PATCH, bulk actions, automations, template edits, and layout deletion
+enqueue rendered moves in the same transaction as their state change.
+
+`archive_serial_number` is read-only compatibility metadata. Document Detail
+projects it as **Previous archive number**; no PATCH field exists.
+`core/searchquery` supports numeric comparisons and null retrieval through
+`asn:`, and the source-bundle saved-view importer maps exact, missing,
+greater-than, and less-than rules to that query syntax. A layout using the exact
+`{{ asn }}` variable is marked in previews/lists and cannot be assigned to a
+document without the value. Replacement versions deliberately do not copy it.
+
+Verify these boundaries with `go test ./core/api ./core/automations
+./core/customfield ./core/db ./core/importer/bundle ./core/searchquery` and the
+Document Detail/Filing Tree browser workflows.
 
 ## Storage and transaction invariants
 
@@ -344,7 +383,7 @@ them by path.
 Stable migration 0002 removes the duplicate document-type vocabulary after
 mapping each row and every live document, ACL, saved-view, automation, and
 template reference to a `type:<name>` tag. Unrepresentable tag-and-type
-automation conjunctions suspend rather than broadening. Paperless source types
+automation conjunctions suspend rather than broadening. Source-archive types
 are translated at the importer boundary; no native type schema or API remains.
 
 `migrations.Prepare` delegates core admission to `db.PrepareStable`, which
@@ -464,8 +503,8 @@ These gates remain distinct:
   session preparation, and OIDC network exchange happen before the writer.
   Inside one write transaction the handler rechecks the canonical user, mode,
   initiating session, and local password hash or OIDC binding; updates the same
-  user ID; queues rerenders for that user's custom storage paths that use the
-  exact `owner` template variable; rotates browser sessions when identity
+  user ID; queues rerenders for that user's rendered layouts that use the exact
+  `owner` template variable; rotates browser sessions when identity
   changed; and writes the retained audit event. Watched-folder ownership is a
   numeric user ID, so an email change neither rewrites its setting nor reloads
   the watcher. A no-change OIDC check performs no rotation or false audit write.

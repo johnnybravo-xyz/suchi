@@ -64,6 +64,40 @@ func TestResolveAndCompile(t *testing.T) {
 	}
 }
 
+func TestCompileTypedCustomFieldsAndArchiveNumbers(t *testing.T) {
+	parsed, err := Parse(`field:"Invoice amount">=100 field:Regions=north field:Approved=yes asn:<500`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := Resolve(context.Background(), parsed, fakeResolver{values: map[string][]Candidate{
+		"field:Invoice amount": {{ID: 10, Label: "Invoice amount", DataType: "monetary"}},
+		"field:Regions":        {{ID: 11, Label: "Regions", DataType: "multi"}},
+		"field:Approved":       {{ID: 12, Label: "Approved", DataType: "bool"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := Compile(resolved)
+	if len(plan.Predicates) != 4 {
+		t.Fatalf("predicates=%+v", plan.Predicates)
+	}
+	if !strings.Contains(plan.Predicates[0].SQL, "value_number >= ?") ||
+		!reflect.DeepEqual(plan.Predicates[0].Args, []any{int64(10), float64(100)}) {
+		t.Fatalf("money predicate=%+v", plan.Predicates[0])
+	}
+	if !strings.Contains(plan.Predicates[1].SQL, "json_each") ||
+		!reflect.DeepEqual(plan.Predicates[1].Args, []any{int64(11), "north"}) {
+		t.Fatalf("multi predicate=%+v", plan.Predicates[1])
+	}
+	if !reflect.DeepEqual(plan.Predicates[2].Args, []any{int64(12), 1}) {
+		t.Fatalf("bool predicate=%+v", plan.Predicates[2])
+	}
+	if plan.Predicates[3].SQL != "d.archive_serial_number < ?" ||
+		!reflect.DeepEqual(plan.Predicates[3].Args, []any{int64(500)}) {
+		t.Fatalf("asn predicate=%+v", plan.Predicates[3])
+	}
+}
+
 func TestCompileAcceptedIntelligenceFilters(t *testing.T) {
 	parsed, err := Parse(`date:>=2026-09-01 date-role:renewal is:dated`)
 	if err != nil {

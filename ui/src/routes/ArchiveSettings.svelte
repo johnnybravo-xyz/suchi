@@ -46,7 +46,7 @@
       const count = rows(users.value).length
       next.users = status(`${count} ${count === 1 ? 'user' : 'users'}`, 'Roles and archive capabilities')
     }
-    next.metadata = status('4 catalogs', 'Tags, correspondents, storage paths, and fields')
+    next.metadata = status('3 catalogs', 'Tags, correspondents, and custom fields')
     if (ingest.status === 'fulfilled') {
       const directory = ingest.value?.fs_watch_dir || ''
       next.sources = status(directory ? 'Active' : 'Not set', directory || 'Uploads and API remain available', directory ? 'ok' : 'warn')

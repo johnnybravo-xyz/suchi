@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -230,9 +231,29 @@ func buildFilterJSON(
 			mapped++
 			worst = worsten(worst, OutcomePartial)
 			reasons = append(reasons, "q matches title+content combined")
-		case 2, 18, 23, 24: // ASN filters
-			failedRules++
-			report.Followup("saved_view ASN filter")
+		case 2, 18, 23, 24: // archive serial number: exact, empty, greater, less
+			if r.RuleType == 18 {
+				qParts = append(qParts, "asn:none")
+				mapped++
+				continue
+			}
+			if r.Value == nil {
+				failedRules++
+				continue
+			}
+			value, err := strconv.ParseInt(strings.TrimSpace(*r.Value), 10, 64)
+			if err != nil {
+				failedRules++
+				continue
+			}
+			operator := ""
+			if r.RuleType == 23 {
+				operator = ">"
+			} else if r.RuleType == 24 {
+				operator = "<"
+			}
+			qParts = append(qParts, fmt.Sprintf("asn:%s%d", operator, value))
+			mapped++
 		case 3: // correspondent is
 			if r.Value != nil {
 				if id, ok := remapIDString(corMap, *r.Value); ok {

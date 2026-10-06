@@ -43,10 +43,10 @@ const (
 type Kind string
 
 const (
-	KindDocument      Kind = "document"
-	KindTag           Kind = "tag"
-	KindCorrespondent Kind = "correspondent"
-	KindStoragePath   Kind = "storage_path"
+	KindDocument       Kind = "document"
+	KindTag            Kind = "tag"
+	KindCorrespondent  Kind = "correspondent"
+	KindRenderedLayout Kind = "rendered_layout"
 )
 
 // Principal carries the actor, precomputed groups, and request/token boundaries.
@@ -366,7 +366,7 @@ func ownerColumnFor(kind Kind) (col, table string, ok bool) {
 		return "owner_id", "documents", true
 	case KindCorrespondent:
 		return "owner_id", "correspondents", true
-	case KindStoragePath:
+	case KindRenderedLayout:
 		return "owner_id", "storage_paths", true
 	}
 	return "", "", false

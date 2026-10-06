@@ -31,10 +31,12 @@ type DocumentReferenceSummary struct {
 // DocumentCustomFieldValue preserves the field's declared type. Document-link
 // values contain a DocumentReferenceSummary instead of a raw target ID.
 type DocumentCustomFieldValue struct {
-	FieldID  int64  `json:"field_id"`
-	Name     string `json:"name"`
-	DataType string `json:"data_type"`
-	Value    any    `json:"value"`
+	FieldID      int64           `json:"field_id"`
+	Name         string          `json:"name"`
+	DataType     string          `json:"data_type"`
+	ExtraData    json.RawMessage `json:"extra_data"`
+	Value        any             `json:"value"`
+	DisplayValue string          `json:"display_value"`
 }
 
 // DocumentBacklink identifies both the visible source document and the named
@@ -46,15 +48,16 @@ type DocumentBacklink struct {
 }
 
 type storedCustomFieldValue struct {
-	FieldID  int64
-	Name     string
-	DataType string
-	Row      customfield.ValueRow
+	FieldID   int64
+	Name      string
+	DataType  string
+	ExtraData string
+	Row       customfield.ValueRow
 }
 
 func (s *Server) loadCustomFieldValues(ctx context.Context, p *pluginapi.Principal, documentID int64) ([]DocumentCustomFieldValue, error) {
 	rows, err := s.DB.Read.QueryContext(ctx, `
-		SELECT f.id, f.name, f.data_type,
+		SELECT f.id, f.name, f.data_type, f.extra_data,
 		       v.value_text, v.value_number, v.value_int, v.value_bool, v.value_date
 		FROM document_custom_field_values v
 		JOIN custom_fields f ON f.id = v.field_id
@@ -70,7 +73,7 @@ func (s *Server) loadCustomFieldValues(ctx context.Context, p *pluginapi.Princip
 	targetIDs := make([]int64, 0)
 	for rows.Next() {
 		var value storedCustomFieldValue
-		if err := rows.Scan(&value.FieldID, &value.Name, &value.DataType,
+		if err := rows.Scan(&value.FieldID, &value.Name, &value.DataType, &value.ExtraData,
 			&value.Row.Text, &value.Row.Number, &value.Row.Int, &value.Row.Bool, &value.Row.Date); err != nil {
 			return nil, err
 		}
@@ -98,7 +101,8 @@ func (s *Server) loadCustomFieldValues(ctx context.Context, p *pluginapi.Princip
 				continue
 			}
 			out = append(out, DocumentCustomFieldValue{
-				FieldID: value.FieldID, Name: value.Name, DataType: value.DataType, Value: target,
+				FieldID: value.FieldID, Name: value.Name, DataType: value.DataType,
+				ExtraData: json.RawMessage(value.ExtraData), Value: target, DisplayValue: target.Title,
 			})
 			continue
 		}
@@ -108,7 +112,9 @@ func (s *Server) loadCustomFieldValues(ctx context.Context, p *pluginapi.Princip
 		}
 		if ok {
 			out = append(out, DocumentCustomFieldValue{
-				FieldID: value.FieldID, Name: value.Name, DataType: value.DataType, Value: typed,
+				FieldID: value.FieldID, Name: value.Name, DataType: value.DataType,
+				ExtraData: json.RawMessage(value.ExtraData), Value: typed,
+				DisplayValue: customfield.Lookup(value.DataType).Render(value.Row),
 			})
 		}
 	}

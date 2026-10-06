@@ -104,6 +104,39 @@ func TestParseRejectedQueries(t *testing.T) {
 	}
 }
 
+func TestParseCustomFieldAndArchiveNumberFilters(t *testing.T) {
+	input := `field:"Invoice amount">=100 field:Status="Needs review" asn:>42 asn:none`
+	parsed, err := Parse(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Clauses) != 4 {
+		t.Fatalf("clauses=%+v", parsed.Clauses)
+	}
+	amount := parsed.Clauses[0]
+	if amount.Filter != "field" || amount.Value != "Invoice amount" || amount.FieldValue != "100" ||
+		amount.Operator != OpGreaterEqual || !amount.Quoted {
+		t.Fatalf("amount clause=%+v", amount)
+	}
+	status := parsed.Clauses[1]
+	if status.Filter != "field" || status.Value != "Status" || status.FieldValue != "Needs review" ||
+		status.Operator != OpEqual || !status.FieldValueQuoted {
+		t.Fatalf("status clause=%+v", status)
+	}
+	if parsed.Clauses[2].Filter != "asn" || parsed.Clauses[2].Operator != OpGreater ||
+		parsed.Clauses[2].Value != "42" || parsed.Clauses[3].Value != "none" {
+		t.Fatalf("asn clauses=%+v", parsed.Clauses[2:])
+	}
+	normalized := Normalize(parsed)
+	reparsed, err := Parse(normalized)
+	if err != nil {
+		t.Fatalf("normalized %q: %v", normalized, err)
+	}
+	if Normalize(reparsed) != normalized {
+		t.Fatalf("normalization is not stable: %q then %q", normalized, Normalize(reparsed))
+	}
+}
+
 func TestParseAcceptsWhitespaceControlCharacters(t *testing.T) {
 	parsed, err := Parse("annual\treport\n")
 	if err != nil {

@@ -24,11 +24,11 @@ const (
 	// StableSchemaVersion is the current core schema version in the stable-v1 lineage.
 	StableSchemaVersion = 2
 
-	stableLineage                   = "stable-v1"
-	finalBetaLineage                = "final-beta-schema-3"
+	stableLineage    = "stable-v1"
+	finalBetaLineage = "final-beta-schema-3"
 
 	stableV1Fingerprint             = "9d2a6320eae1582b0f294caa6ed518b5a73ab3dbe6597c9ca1a36cc563e03240"
-	stableFingerprint               = "7f1dd526a6d6d842599d18ef0ed3877bc458610200072e17c34bf3133b421421"
+	stableFingerprint               = "645e7798d663fff83d120182f661e7148fbd68d263517de9d44783d80aaebae3"
 	preIdentityStableFingerprint    = "5d6ac98308eb644b030092178792a46f36e6f8f5041411f020ed2dcf216f46c2"
 	betaOneFingerprint              = "68089660de648a4fcc136bcefc105edc5d29dc4de59dad482124914ea626fb2b"
 	betaTwoFingerprint              = "a341b731c93a7270e3440a18f58911df80b2289bf44cd3baeecff4a2b2b0071c"

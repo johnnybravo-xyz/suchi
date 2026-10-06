@@ -1,17 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Custom-field value writer and deleter endpoints. Per-document values
-// have no read projection yet; future reads must recheck document-link
-// target visibility. Typed validation lives in core/customfield.
+// Custom-field value writer and deleter endpoints. Typed reads are projected
+// on Document Detail; document-link reads recheck target visibility.
+// Validation and typed storage live in core/customfield.
 //
 // Endpoints:
 //   PUT    /api/documents/{id}/custom_fields/{field}   body: {"value": <any>}
 //   DELETE /api/documents/{id}/custom_fields/{field}
 //
 // {field} accepts the numeric field id OR the field name (URL-decoded).
-// Trailing enqueue: any successful write enqueues a "render" job so
-// storage-path templates that reference the field can update the
-// symlink tree.
 
 package api
 
@@ -28,17 +25,14 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/customfield"
-	"github.com/johnnybravo-xyz/suchi/core/render/view"
 )
 
 type setCustomFieldRequest struct {
 	Value any `json:"value"`
 }
 
-// SetCustomField writes one typed custom-field value. Idempotent
-// upsert — repeat calls with the same value are no-ops from the
-// caller's perspective (the DB writes a fresh row but the render job
-// dedupes to a no-op move).
+// SetCustomField writes one typed custom-field value. Repeating the same value
+// preserves the same observable state.
 func (s *Server) SetCustomField(w http.ResponseWriter, r *http.Request) {
 	if !auth.RequireScope(w, r, auth.ScopeDocumentsWrite) {
 		return
@@ -109,7 +103,7 @@ func (s *Server) SetCustomField(w http.ResponseWriter, r *http.Request) {
 		} else if err := handler.Write(r.Context(), tx, docID, fieldID, typed); err != nil {
 			return err
 		}
-		return view.EnqueueMove(r.Context(), tx, docID)
+		return nil
 	})
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -178,7 +172,7 @@ func (s *Server) DeleteCustomField(w http.ResponseWriter, r *http.Request) {
 			docID, fieldID); err != nil {
 			return err
 		}
-		return view.EnqueueMove(r.Context(), tx, docID)
+		return nil
 	})
 	switch {
 	case errors.Is(err, sql.ErrNoRows):

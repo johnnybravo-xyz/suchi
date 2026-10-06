@@ -137,6 +137,10 @@ func compileFilter(clause ResolvedClause) Predicate {
 			SQL:  "EXISTS (SELECT 1 FROM document_correspondents sq_dc WHERE sq_dc.document_id = d.id AND sq_dc.correspondent_id = ?)",
 			Args: []any{clause.ID},
 		}
+	case "field":
+		return compileCustomField(clause)
+	case "asn":
+		return compileASN(clause)
 	case "sensitivity":
 		if clause.Negated {
 			return Predicate{SQL: "COALESCE(d.sensitivity, '') != ?", Args: []any{clause.Value}}
@@ -194,6 +198,54 @@ func compileDate(clause ResolvedClause) Predicate {
 		sql = "NOT " + sql
 	}
 	return Predicate{SQL: sql, Args: []any{clause.Value}}
+}
+
+func compileCustomField(clause ResolvedClause) Predicate {
+	const prefix = "SELECT 1 FROM document_custom_field_values sq_cfv WHERE sq_cfv.document_id = d.id AND sq_cfv.field_id = ?"
+	var (
+		sql  string
+		args = []any{clause.ID}
+	)
+	switch clause.FieldDataType {
+	case "number", "monetary":
+		sql = prefix + " AND sq_cfv.value_number " + string(clause.Operator) + " ?"
+		args = append(args, clause.Number)
+	case "date":
+		sql = prefix + " AND sq_cfv.value_date " + string(clause.Operator) + " ?"
+		args = append(args, clause.Timestamp)
+	case "bool":
+		sql = prefix + " AND sq_cfv.value_bool = ?"
+		value := 0
+		if clause.Boolean {
+			value = 1
+		}
+		args = append(args, value)
+	case "multi":
+		sql = prefix + " AND EXISTS (SELECT 1 FROM json_each(sq_cfv.value_text) WHERE value = ? COLLATE NOCASE)"
+		args = append(args, clause.FieldValue)
+	default:
+		sql = prefix + " AND sq_cfv.value_text = ? COLLATE NOCASE"
+		args = append(args, clause.FieldValue)
+	}
+	sql = "EXISTS (" + sql + ")"
+	if clause.Negated {
+		sql = "NOT " + sql
+	}
+	return Predicate{SQL: sql, Args: args}
+}
+
+func compileASN(clause ResolvedClause) Predicate {
+	if clause.Value == "none" {
+		if clause.Negated {
+			return Predicate{SQL: "d.archive_serial_number IS NOT NULL"}
+		}
+		return Predicate{SQL: "d.archive_serial_number IS NULL"}
+	}
+	sql := "d.archive_serial_number " + string(clause.Operator) + " ?"
+	if clause.Negated {
+		sql = "NOT (" + sql + ")"
+	}
+	return Predicate{SQL: sql, Args: []any{clause.Integer}}
 }
 
 func compileIs(clause ResolvedClause) Predicate {

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// CRUD for the matcher-style correspondent and storage-path resources.
-// They share matcher fields; storage paths add the rendered-view template.
-// Custom fields live separately because they have typed values and JSON extras.
+// CRUD for correspondents and rendered layouts. Their database tables retain
+// compatibility names; custom fields live separately because they have typed
+// values and JSON extras.
 //
 // Every list endpoint wears the DRF pagination envelope. Create and update are
 // admin-only; list and get are open to any authenticated user.
@@ -10,15 +10,20 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
+	renderpaths "github.com/johnnybravo-xyz/suchi/core/render/paths"
+	"github.com/johnnybravo-xyz/suchi/core/render/view"
 	"github.com/johnnybravo-xyz/suchi/core/slug"
 )
 
@@ -31,19 +36,20 @@ func kindForTable(table string) authz.Kind {
 	case "correspondents":
 		return authz.KindCorrespondent
 	case "storage_paths":
-		return authz.KindStoragePath
+		return authz.KindRenderedLayout
 	}
 	return ""
 }
 
 // TaxonomyRow is the JSON projection every matcher-style resource
-// returns. storage_paths includes the extra Path field; the others
-// leave it empty and it's omitted via omitempty.
+// returns. Rendered layouts include their template and compatibility-variable
+// marker; the others omit both.
 type TaxonomyRow struct {
 	ID                int64  `json:"id"`
 	Name              string `json:"name"`
 	Slug              string `json:"slug"`
-	Path              string `json:"path,omitempty"` // storage_paths only
+	Path              string `json:"path,omitempty"`
+	UsesASN           bool   `json:"uses_asn,omitempty"`
 	MatchingAlgorithm int    `json:"matching_algorithm"`
 	Match             string `json:"match"`
 	IsInsensitive     bool   `json:"is_insensitive"`
@@ -77,19 +83,77 @@ func (s *Server) DeleteCorrespondent(w http.ResponseWriter, r *http.Request) {
 	s.taxonomyDelete(w, r, "correspondents")
 }
 
-// ---------- Storage paths ----------
+// ---------- Rendered layouts ----------
 
-func (s *Server) ListStoragePaths(w http.ResponseWriter, r *http.Request) {
+func (s *Server) ListRenderedLayouts(w http.ResponseWriter, r *http.Request) {
 	s.taxonomyList(w, r, "storage_paths", true)
 }
-func (s *Server) CreateStoragePath(w http.ResponseWriter, r *http.Request) {
+func (s *Server) CreateRenderedLayout(w http.ResponseWriter, r *http.Request) {
 	s.taxonomyCreate(w, r, "storage_paths", true)
 }
-func (s *Server) UpdateStoragePath(w http.ResponseWriter, r *http.Request) {
+func (s *Server) UpdateRenderedLayout(w http.ResponseWriter, r *http.Request) {
 	s.taxonomyUpdate(w, r, "storage_paths", true)
 }
-func (s *Server) DeleteStoragePath(w http.ResponseWriter, r *http.Request) {
+func (s *Server) DeleteRenderedLayout(w http.ResponseWriter, r *http.Request) {
 	s.taxonomyDelete(w, r, "storage_paths")
+}
+
+type renderedLayoutPreviewRequest struct {
+	Template string `json:"template"`
+}
+
+type renderedLayoutPreview struct {
+	Path    string `json:"path"`
+	UsesASN bool   `json:"uses_asn"`
+}
+
+// PreviewRenderedLayout validates a template and renders a representative
+// filing path without touching the filesystem.
+func (s *Server) PreviewRenderedLayout(w http.ResponseWriter, r *http.Request) {
+	principal := s.requireAdmin(w, r)
+	if principal == nil {
+		return
+	}
+	if _, ok := s.requireSystem(w, r, principal); !ok {
+		return
+	}
+	var in renderedLayoutPreviewRequest
+	if err := decodeJSON(r, &in); err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	path, usesASN, err := previewRenderedLayout(in.Template)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_template", err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, renderedLayoutPreview{Path: path, UsesASN: usesASN})
+}
+
+func previewRenderedLayout(template string) (string, bool, error) {
+	template = strings.TrimSpace(template)
+	rendered, err := renderpaths.Render(template, renderpaths.Context{
+		Title: "March electricity bill", DocPK: 1842, Correspondent: "City Energy",
+		StoragePath: "Household bills", Tags: []string{"utilities", "electricity"},
+		Created: "2026-03-02", Added: "2026-03-03", Owner: "archive@example.com", ASN: "4021",
+		JDAreaCodeStart: 10, JDAreaCodeEnd: 19, JDAreaName: "Home",
+		JDCategoryCode: 13, JDCategoryName: "Utilities", JDSystemCode: "S01",
+		JDSystemName: "Home archive", JDAddress: "S01.13.1842",
+	})
+	if err != nil {
+		return "", false, err
+	}
+	if filepath.IsAbs(rendered) {
+		return "", false, errors.New("rendered layout must be relative")
+	}
+	rendered = filepath.ToSlash(renderpaths.SanitizePath(rendered))
+	if strings.TrimSpace(rendered) == "" || rendered == "." {
+		return "", false, errors.New("rendered layout produces an empty path")
+	}
+	if renderpaths.IsIndexPath(rendered) {
+		return "", false, fmt.Errorf("%q is reserved for the filing index", renderpaths.IndexDirectory)
+	}
+	return rendered, renderpaths.UsesVariable(template, "asn"), nil
 }
 
 // ---------- shared implementation ----------
@@ -168,6 +232,9 @@ func (s *Server) taxonomyList(w http.ResponseWriter, r *http.Request, table stri
 			}
 		}
 		v.IsInsensitive = isInsens == 1
+		if withPath {
+			v.UsesASN = renderpaths.UsesVariable(v.Path, "asn")
+		}
 		out = append(out, v)
 	}
 	if err := rows.Err(); err != nil {
@@ -203,8 +270,14 @@ func (s *Server) taxonomyCreate(w http.ResponseWriter, r *http.Request, table st
 		return
 	}
 	if withPath && (in.Path == nil || strings.TrimSpace(*in.Path) == "") {
-		s.writeError(w, http.StatusBadRequest, "missing_path", "path is required for storage_paths")
+		s.writeError(w, http.StatusBadRequest, "missing_template", "template is required for rendered layouts")
 		return
+	}
+	if withPath {
+		if _, _, err := previewRenderedLayout(*in.Path); err != nil {
+			s.writeError(w, http.StatusBadRequest, "bad_template", err.Error())
+			return
+		}
 	}
 	name := strings.TrimSpace(*in.Name)
 	var sl string
@@ -308,6 +381,14 @@ func (s *Server) taxonomyUpdate(w http.ResponseWriter, r *http.Request, table st
 	if withPath && in.Path != nil {
 		sets = append(sets, "path = ?")
 		args = append(args, strings.TrimSpace(*in.Path))
+		if strings.TrimSpace(*in.Path) == "" {
+			s.writeError(w, http.StatusBadRequest, "missing_template", "template must not be empty")
+			return
+		}
+		if _, _, err := previewRenderedLayout(*in.Path); err != nil {
+			s.writeError(w, http.StatusBadRequest, "bad_template", err.Error())
+			return
+		}
 	}
 	if in.MatchingAlgorithm != nil {
 		sets = append(sets, "matching_algorithm = ?")
@@ -354,6 +435,20 @@ func (s *Server) taxonomyUpdate(w http.ResponseWriter, r *http.Request, table st
 		if n == 0 {
 			return errNotFound
 		}
+		if withPath {
+			enqueue := in.Path != nil
+			if !enqueue && in.Name != nil {
+				var template string
+				if err := tx.QueryRowContext(r.Context(),
+					`SELECT path FROM storage_paths WHERE id = ?`, id).Scan(&template); err != nil {
+					return err
+				}
+				enqueue = renderpaths.UsesVariable(template, "storage_path")
+			}
+			if enqueue {
+				return enqueueRenderedLayoutDocuments(r.Context(), tx, id)
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -399,6 +494,28 @@ func (s *Server) taxonomyDelete(w http.ResponseWriter, r *http.Request, table st
 		if !allowed {
 			return errNotFound
 		}
+		var renderedDocuments []int64
+		if table == "storage_paths" {
+			rows, err := tx.QueryContext(r.Context(),
+				`SELECT id FROM documents WHERE storage_path_id = ? AND trashed_at IS NULL ORDER BY id`, id)
+			if err != nil {
+				return err
+			}
+			for rows.Next() {
+				var documentID int64
+				if err := rows.Scan(&documentID); err != nil {
+					_ = rows.Close()
+					return err
+				}
+				renderedDocuments = append(renderedDocuments, documentID)
+			}
+			if err := rows.Close(); err != nil {
+				return err
+			}
+			if err := rows.Err(); err != nil {
+				return err
+			}
+		}
 		res, err := tx.ExecContext(r.Context(),
 			"DELETE FROM "+table+" WHERE id = ?", id)
 		if err != nil {
@@ -411,6 +528,11 @@ func (s *Server) taxonomyDelete(w http.ResponseWriter, r *http.Request, table st
 		if n == 0 {
 			return errNotFound
 		}
+		for _, documentID := range renderedDocuments {
+			if err := view.EnqueueMove(r.Context(), tx, documentID); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -422,6 +544,35 @@ func (s *Server) taxonomyDelete(w http.ResponseWriter, r *http.Request, table st
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func enqueueRenderedLayoutDocuments(ctx context.Context, tx *sql.Tx, layoutID int64) error {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT id FROM documents WHERE storage_path_id = ? AND trashed_at IS NULL ORDER BY id`, layoutID)
+	if err != nil {
+		return err
+	}
+	var documentIDs []int64
+	for rows.Next() {
+		var documentID int64
+		if err := rows.Scan(&documentID); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		documentIDs = append(documentIDs, documentID)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, documentID := range documentIDs {
+		if err := view.EnqueueMove(ctx, tx, documentID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // isUniqueViolation is defined in core/api/setup.go; reused here.

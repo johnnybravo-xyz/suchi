@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"strconv"
@@ -141,6 +142,64 @@ func TestCustomFieldDef_NonAdminRefused(t *testing.T) {
 	}
 	if rec.Code != 403 {
 		t.Fatalf("create: status=%d body=%s — expected 403", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCustomFieldDefinitionProtectsTypedValuesAndActiveChoices(t *testing.T) {
+	s, mux := newSystemsBoundaryServer(t)
+	seedSystemsBoundary(t, s)
+	if _, err := s.DB.Write.Exec(`
+		INSERT INTO custom_fields(id,system_id,name,data_type,extra_data,created_at,updated_at)
+		VALUES
+			(120,1,'Priority','select','{"choices":["low","high"]}',0,0),
+			(121,1,'Regions','multi','{"choices":["north","south"]}',0,0);
+		INSERT INTO document_custom_field_values(document_id,field_id,value_text)
+		VALUES
+			(101,120,'high'),
+			(101,121,'["north","south"]');
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	assertError := func(method, path, body string, status int, code string) {
+		t.Helper()
+		response := systemsBoundaryRequest(mux, method, path, body, adminPrincipal(1))
+		var problem struct {
+			Code string `json:"code"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &problem); err != nil {
+			t.Fatalf("%s %s: decode %q: %v", method, path, response.Body.String(), err)
+		}
+		if response.Code != status || problem.Code != code {
+			t.Fatalf("%s %s: status=%d code=%q body=%s; want %d %q",
+				method, path, response.Code, problem.Code, response.Body.String(), status, code)
+		}
+	}
+
+	assertError("POST", "/api/custom_fields/?system=S01",
+		`{"name":"Incomplete choice","data_type":"select"}`,
+		http.StatusBadRequest, "bad_choices")
+	assertError("PATCH", "/api/custom_fields/120?system=S01",
+		`{"data_type":"text"}`,
+		http.StatusConflict, "data_type_in_use")
+	assertError("PATCH", "/api/custom_fields/120?system=S01",
+		`{"extra_data":"{\"choices\":[\"low\"]}"}`,
+		http.StatusConflict, "choice_in_use")
+	assertError("PATCH", "/api/custom_fields/121?system=S01",
+		`{"extra_data":"{\"choices\":[\"north\"]}"}`,
+		http.StatusConflict, "choice_in_use")
+
+	updated := systemsBoundaryRequest(mux, "PATCH", "/api/custom_fields/120?system=S01",
+		`{"extra_data":"{\"choices\":[\"low\",\"high\",\"urgent\"]}"}`, adminPrincipal(1))
+	if updated.Code != http.StatusOK {
+		t.Fatalf("add choice: status=%d body=%s", updated.Code, updated.Body.String())
+	}
+	var extra string
+	if err := s.DB.Read.QueryRow(`SELECT extra_data FROM custom_fields WHERE id=120`).Scan(&extra); err != nil {
+		t.Fatal(err)
+	}
+	if extra != `{"choices":["low","high","urgent"]}` {
+		t.Fatalf("extra_data = %s", extra)
 	}
 }
 

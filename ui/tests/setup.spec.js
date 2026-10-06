@@ -584,6 +584,7 @@ async function mockAPI(page, options = {}) {
     archive_auto_threshold: 0.9,
   }
   let trashDocuments = [...(options.trashDocuments || [])]
+  let renderedLayouts = (options.renderedLayouts || []).map(layout => ({ ...layout }))
   const restoredDocuments = new Set()
   await page.route('**/preview/**', async route => {
     await route.fulfill({
@@ -618,6 +619,7 @@ async function mockAPI(page, options = {}) {
     const trashDocument = path.match(/^\/api\/trash\/(\d+)$/)
     const restoreDocument = path.match(/^\/api\/documents\/(\d+)\/restore$/)
     const savedView = path.match(/^\/api\/saved_views\/(\d+)$/)
+    const renderedLayout = path.match(/^\/api\/rendered_layouts\/(\d+)$/)
     if (thumb && options.thumbnailFailures) {
       if (options.thumbnailFailures.includes(Number(thumb[1]))) {
         if (options.thumbnailDelay) {
@@ -682,6 +684,33 @@ async function mockAPI(page, options = {}) {
         : (options.jdCategories || []),
     }
     else if (path === '/api/custom_fields/') body = { results: options.customFields || [] }
+    else if (path === '/api/rendered_layouts/preview' && request.method() === 'POST') {
+      const template = request.postDataJSON().template
+      const usesASN = template.includes('{{ asn }}')
+      body = {
+        path: usesASN ? 'Legacy/4021/March electricity bill' : '10-19 Home/13 Utilities',
+        uses_asn: usesASN,
+      }
+    }
+    else if (path === '/api/rendered_layouts/' && request.method() === 'POST') {
+      const input = request.postDataJSON()
+      const id = Math.max(0, ...renderedLayouts.map(layout => layout.id)) + 1
+      renderedLayouts.push({ id, name: input.name, path: input.path, uses_asn: input.path.includes('{{ asn }}') })
+      body = { id }
+    }
+    else if (path === '/api/rendered_layouts/') body = { results: renderedLayouts }
+    else if (renderedLayout && request.method() === 'PATCH') {
+      const input = request.postDataJSON()
+      renderedLayouts = renderedLayouts.map(layout => Number(layout.id) === Number(renderedLayout[1])
+        ? { ...layout, ...input, uses_asn: (input.path ?? layout.path).includes('{{ asn }}') }
+        : layout)
+      body = { id: Number(renderedLayout[1]) }
+    }
+    else if (renderedLayout && request.method() === 'DELETE') {
+      renderedLayouts = renderedLayouts.filter(layout => Number(layout.id) !== Number(renderedLayout[1]))
+      await route.fulfill({ status: 204, body: '' })
+      return
+    }
     else if (path === '/api/presets/') body = { results: presets }
     else if (path === '/api/filing-sets/') body = filingSetCatalog
     else if (path === '/api/admin/taxonomy/import' && options.taxonomyImport) {
@@ -725,7 +754,7 @@ async function mockAPI(page, options = {}) {
     }
     else if (path === '/api/automations/schema') body = {
       triggers: [{ code: 2, type: 'document_added', name: 'After a new document lands' }],
-      actions: [{ kind: 'assign_tags', name: 'Add tags', params: [{ name: 'tag_ids' }] }],
+      actions: options.automationActions || [{ kind: 'assign_tags', name: 'Add tags', params: [{ name: 'tag_ids' }] }],
     }
     else if (path === '/api/admin/settings/llm') {
       if (request.method() === 'PATCH') {
@@ -1721,6 +1750,71 @@ test('offers ready-made trees, focused sets, and file tools without blocking oth
   await expect(page.getByRole('heading', { name: 'Export this filing tree' })).toBeVisible()
   await page.getByRole('link', { name: 'Classification', exact: true }).click()
   await expect(page.getByRole('button', { name: 'Local model' })).toBeVisible()
+})
+
+test('creates, previews, and deletes Filing Tree rendered layouts', async ({ page }) => {
+  await mockAPI(page, {
+    renderedLayouts: [{
+      id: 4, name: 'Bills by year',
+      path: 'Bills/{{ created_year }}/{{ title }}', uses_asn: false,
+    }],
+  })
+  await page.goto('/#/settings?tab=archive&section=filing-tree')
+  await page.getByRole('button', { name: 'Rendered layouts' }).click()
+
+  await expect(page.getByRole('heading', { name: 'Rendered layouts' })).toBeVisible()
+  await expect(page.getByText('Bills by year', { exact: true })).toBeVisible()
+  await expect(page.getByText('10-19 Home/13 Utilities', { exact: true })).toBeVisible()
+
+  await page.getByLabel('Layout name').fill('Imported folders')
+  await page.getByLabel('Path template').fill('Legacy/{{ asn }}/{{ title }}')
+  await expect(page.getByText('Legacy/4021/March electricity bill', { exact: true })).toBeVisible()
+  await expect(page.getByText('Uses previous archive number', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Create layout' }).click()
+
+  const saved = page.getByRole('region', { name: 'Saved layouts' })
+  await expect(saved.getByText('Imported folders', { exact: true })).toBeVisible()
+  const imported = saved.locator('.layout-row').filter({ hasText: 'Imported folders' })
+  await imported.getByRole('button', { name: 'Delete' }).click()
+  const confirmation = page.getByRole('alertdialog', { name: 'Delete rendered layout?' })
+  await expect(confirmation).toBeVisible()
+  await confirmation.getByRole('button', { name: 'Delete layout' }).click()
+  await expect(saved.getByText('Imported folders', { exact: true })).toHaveCount(0)
+})
+
+test('uses named rendered-layout and typed custom-field automation controls', async ({ page }) => {
+  await mockAPI(page, {
+    renderedLayouts: [{ id: 4, name: 'Bills by year', path: 'Bills/{{ created_year }}/{{ title }}', uses_asn: false }],
+    customFields: [
+      { id: 12, name: 'Review status', data_type: 'select', extra_data: JSON.stringify({ choices: ['Needs review', 'Approved'] }) },
+      { id: 13, name: 'Invoice amount', data_type: 'number', extra_data: '{}' },
+    ],
+    automationActions: [
+      { kind: 'assign_storage_path', name: 'Assign rendered layout', params: [{ name: 'storage_path_id', type: 'id', target_kind: 'rendered_layout' }] },
+      { kind: 'assign_custom_field', name: 'Set custom field', params: [{ name: 'field_id', type: 'id', target_kind: 'custom_field' }, { name: 'value', type: 'value' }] },
+    ],
+    automations: [{
+      id: 19, name: 'Prepare imported bills', enabled: true, order: 0,
+      triggers: [{ type: 2 }],
+      actions: [
+        { id: 1, type: 'assign_storage_path', params: { storage_path_id: 4 } },
+        { id: 2, type: 'assign_custom_field', params: { field_id: 12, value: 'Needs review' } },
+      ],
+    }],
+  })
+  await page.goto('/#/automations')
+
+  const row = page.locator('#automation-19')
+  await expect(row.getByText('Assign rendered layout → Bills by year', { exact: true })).toBeVisible()
+  await expect(row.getByText('Set Review status → Needs review', { exact: true })).toBeVisible()
+  await row.getByRole('button', { name: 'Edit' }).click()
+
+  await expect(page.getByRole('combobox', { name: 'Rendered layout' })).toHaveValue('4')
+  const fields = page.getByRole('combobox', { name: 'Custom field', exact: true })
+  await expect(fields).toHaveValue('12')
+  await expect(page.getByRole('combobox', { name: 'Custom field value' })).toHaveValue('Needs review')
+  await fields.selectOption('13')
+  await expect(page.getByRole('spinbutton', { name: 'Custom field value' })).toBeVisible()
 })
 
 test('reviews category mappings and applies the operator choice', async ({ page }) => {

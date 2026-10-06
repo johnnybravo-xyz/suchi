@@ -87,7 +87,7 @@ func parseFilter(tokens []token, index int, clause Clause) (Clause, int, error) 
 				fmt.Sprintf("filter %s requires a value after %s", name, op), nil)
 		}
 	}
-	if op != OpEqual && name != "added" && name != "date" {
+	if op != OpEqual && name != "added" && name != "date" && name != "asn" {
 		return Clause{}, 0, filterError(tokens[index-1].start, name,
 			fmt.Sprintf("comparisons are not supported for %s", name), nil)
 	}
@@ -100,6 +100,45 @@ func parseFilter(tokens []token, index int, clause Clause) (Clause, int, error) 
 	if value.text == "" {
 		return Clause{}, 0, filterError(value.start, name,
 			fmt.Sprintf("filter %s does not accept an empty value", name), nil)
+	}
+
+	if name == "field" {
+		if op != OpEqual {
+			return Clause{}, 0, filterError(value.start, name,
+				"put the comparison operator after the custom field name", nil)
+		}
+		operatorIndex := index + 1
+		if operatorIndex >= len(tokens) || tokens[operatorIndex].kind != tokenComparison {
+			return Clause{}, 0, filterError(value.start, name,
+				`field requires a comparison, for example field:"Status"="Paid"`, nil)
+		}
+		fieldOperator, ok := parseOperator(tokens[operatorIndex].text)
+		if !ok {
+			return Clause{}, 0, filterError(tokens[operatorIndex].start, name, "invalid comparison operator", nil)
+		}
+		fieldValueIndex := operatorIndex + 1
+		if fieldValueIndex >= len(tokens) {
+			return Clause{}, 0, filterError(tokens[operatorIndex].start, name,
+				"field comparison requires a value", nil)
+		}
+		fieldValue := tokens[fieldValueIndex]
+		if fieldValue.kind != tokenWord && fieldValue.kind != tokenQuoted {
+			return Clause{}, 0, filterError(fieldValue.start, name,
+				"field comparison has an invalid value", nil)
+		}
+		if fieldValue.text == "" {
+			return Clause{}, 0, filterError(fieldValue.start, name,
+				"field comparison does not accept an empty value", nil)
+		}
+		clause.Prefix = false
+		clause.Kind = ClauseFilter
+		clause.Filter = name
+		clause.Operator = fieldOperator
+		clause.Value = value.text
+		clause.Quoted = value.kind == tokenQuoted
+		clause.FieldValue = fieldValue.text
+		clause.FieldValueQuoted = fieldValue.kind == tokenQuoted
+		return clause, fieldValueIndex + 1, nil
 	}
 
 	if name == "title" || name == "content" {

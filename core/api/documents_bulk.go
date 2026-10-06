@@ -6,7 +6,7 @@
 // Wire shape:
 //
 //	{ "documents": [1, 2, 3],
-//	  "method": "set_correspondent" | "set_storage_path" | "add_tag"
+//	  "method": "set_correspondent" | "set_rendered_layout" | "add_tag"
 //	          | "remove_tag" | "modify_tags"
 //	          | "delete" | "restore"
 //	          | "set_sensitivity" | "set_jd_category"
@@ -39,6 +39,8 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
+	renderpaths "github.com/johnnybravo-xyz/suchi/core/render/paths"
+	"github.com/johnnybravo-xyz/suchi/core/render/view"
 	"github.com/johnnybravo-xyz/suchi/core/rescan"
 	"github.com/johnnybravo-xyz/suchi/core/taxonomy"
 	"github.com/johnnybravo-xyz/suchi/core/trash"
@@ -165,6 +167,10 @@ func (s *Server) BulkEdit(w http.ResponseWriter, r *http.Request) {
 				"unknown method "+body.Method)
 			return
 		}
+		if errors.Is(err, errRenderedLayoutNeedsASN) {
+			s.writeError(w, http.StatusConflict, "rendered_layout_requires_archive_number", "this rendered layout requires a previous archive number")
+			return
+		}
 		if errors.Is(err, errBadParams) {
 			s.writeError(w, http.StatusBadRequest, "bad_parameters", err.Error())
 			return
@@ -243,12 +249,12 @@ func (s *Server) applyBulkEdit(r *http.Request, tx *sql.Tx, systemID int64, meth
 			append([]any{now}, args...)...,
 		)
 		return err
-	case "set_storage_path", "set_jd_category":
-		column, table := "storage_path_id", "storage_paths"
+	case "set_rendered_layout", "set_jd_category":
+		column, table, parameter := "storage_path_id", "storage_paths", "rendered_layout_id"
 		if method == "set_jd_category" {
-			column, table = "jd_category_id", "jd_categories"
+			column, table, parameter = "jd_category_id", "jd_categories", "jd_category_id"
 		}
-		value, err := paramInt64(params, column)
+		value, err := paramInt64(params, parameter)
 		if err != nil {
 			return err
 		}
@@ -259,7 +265,31 @@ func (s *Server) applyBulkEdit(r *http.Request, tx *sql.Tx, systemID int64, meth
 				return err
 			}
 			if !exists {
-				return fmt.Errorf("%w: %s is unavailable in this filing system", errBadParams, column)
+				return fmt.Errorf("%w: %s is unavailable in this filing system", errBadParams, parameter)
+			}
+			if method == "set_rendered_layout" {
+				var template string
+				if err := tx.QueryRowContext(r.Context(), `SELECT path FROM storage_paths WHERE id=?`, value).Scan(&template); err != nil {
+					return err
+				}
+				if renderpaths.UsesVariable(template, "asn") {
+					checkArgs := make([]any, 0, len(ids))
+					for _, id := range ids {
+						checkArgs = append(checkArgs, id)
+					}
+					var missing bool
+					if err := tx.QueryRowContext(r.Context(), `
+						SELECT EXISTS(
+							SELECT 1 FROM documents
+							WHERE id IN (`+placeholders+`) AND archive_serial_number IS NULL
+						)
+					`, checkArgs...).Scan(&missing); err != nil {
+						return err
+					}
+					if missing {
+						return errRenderedLayoutNeedsASN
+					}
+				}
 			}
 			target = value
 		} else if method == "set_jd_category" {
@@ -269,8 +299,17 @@ func (s *Server) applyBulkEdit(r *http.Request, tx *sql.Tx, systemID int64, meth
 		for _, id := range ids {
 			args = append(args, id)
 		}
-		_, err = tx.ExecContext(r.Context(), "UPDATE documents SET "+column+"=?, updated_at=? WHERE id IN ("+placeholders+")", args...)
-		return err
+		if _, err = tx.ExecContext(r.Context(), "UPDATE documents SET "+column+"=?, updated_at=? WHERE id IN ("+placeholders+")", args...); err != nil {
+			return err
+		}
+		if method == "set_rendered_layout" {
+			for _, id := range ids {
+				if err := view.EnqueueMove(r.Context(), tx, id); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
 	case "set_sensitivity":
 		value, ok := params["sensitivity"].(string)
 		if !ok || !SensitivityLevels[value] {

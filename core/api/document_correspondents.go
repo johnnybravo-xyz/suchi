@@ -99,7 +99,7 @@ func (s *Server) AddDocCorrespondent(w http.ResponseWriter, r *http.Request) {
 		); err != nil {
 			return err
 		}
-		// Enqueue a storage-path re-render — correspondent is a
+		// Enqueue a rendered-layout refresh: correspondent is a
 		// template-visible field, so the symlink may need to move.
 		return view.EnqueueMove(r.Context(), tx, docID)
 	})

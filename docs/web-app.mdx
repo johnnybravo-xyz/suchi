@@ -52,10 +52,20 @@ Document detail keeps **All documents** on the left and groups Download, access,
 sharing, phone, and Trash actions on the right. Live documents show **Similar
 documents**, **Linked documents**, and **Versions** in one tabbed card; the first
 tab is selected whenever a document opens. **Linked documents** separates links
-added on the open document from links added elsewhere, while ordinary typed
-custom fields remain in the metadata card. On wide screens the preview and
-detail column keep one viewport-filling height; longer metadata and extracted
-text scroll inside the detail column instead of resizing the document view.
+added on the open document from links added elsewhere. Ordinary custom fields
+stay in the metadata card with controls matching their declared type.
+
+The **Notes** card adds attributed working context to this exact revision.
+Authors can edit/delete their own notes and administrators can moderate any
+note; Trash is read-only. Notes and typed custom fields do not copy to a
+replacement version. **Previous archive number** appears only when retained by
+an import and cannot be edited. The **Rendered layout** selector offers
+**Default JD layout** plus Filing Tree-owned layouts. A compatibility layout
+using the previous archive number is unavailable when the document has none.
+
+On wide screens the preview and detail column keep one viewport-filling height;
+longer metadata, notes, and extracted text scroll inside the detail column
+instead of resizing the document view.
 
 The top bar provides search, **Upload** and theme controls. The search menu matches
 **Commands** and **Pages**; **Search everything for** submits its complete text.
@@ -306,15 +316,20 @@ When OIDC is configured, People cannot create password accounts: users
 self-provision through browser sign-in only when their verified provider email
 is unused. `ADMIN_EMAIL` can grant the first matching provisioned identity the
 administrator role; it does not find or merge a returning account.
-**Metadata** manages tags, correspondents, storage paths and custom fields
-through one type selector. Metadata types have navigable URLs, so reload and
-Back/Forward restore the selected catalog. Metadata is scoped to the current
-filing system; People is server-wide.
+**Metadata** manages tags, correspondents, and custom fields through one type
+selector. Metadata types have navigable URLs, so reload and Back/Forward restore
+the selected catalog. Metadata is scoped to the current filing system; People is
+server-wide.
 
-**Filing tree** imports and exports HuML or TOML taxonomy files. Preview precedes
-Apply; export explicitly offers starter rules or tree only. **What is included?**
-explains why neither replaces a [full backup](/backup-restore). Both
-**Automations** entry points open the same main editor.
+**Filing tree** owns presets, custom tree construction, taxonomy import/export,
+and **Rendered layouts**. A layout editor shows the supported variables and a
+server-rendered sample path before save. Saved rows can be edited or deleted;
+deleting returns assigned documents to the default JD layout. Preview precedes
+taxonomy Apply; export explicitly offers starter rules or tree only. **What is
+included?** explains why neither replaces a [full backup](/backup-restore). Both
+**Automations** entry points open the same main editor. Rendered-layout actions
+use names rather than numeric IDs; custom-field actions use the chosen field's
+real type.
 
 After introduction, **Filing system · CODE** edits a nonblank name of at most 80
 characters and the complete direct membership set, including off-page people.

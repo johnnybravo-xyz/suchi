@@ -6,8 +6,8 @@
 // full walkthrough.
 //
 // The selling point: "you can always come back to change this."
-// Swap Suchi Presets, edit storage-path templates, tune automations, then
-// hit this to make the change stick across the existing corpus.
+// Swap filing-tree presets, edit rendered-layout templates, tune automations,
+// then hit this to make the change stick across the existing corpus.
 
 package api
 
