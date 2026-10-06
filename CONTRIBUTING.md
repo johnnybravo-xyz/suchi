@@ -5,7 +5,7 @@ still pre-1.0, so prefer clear designs over compatibility layers.
 
 ## Get started
 
-The workspace uses Go 1.27.0 or newer. UI changes also require Bun 1.4.1.
+The workspace uses Go 1.27.0 or newer and Bun 1.4.1.
 
 ```sh
 git clone git@github.com:johnnybravo-xyz/suchi.git
@@ -35,7 +35,7 @@ Before requesting review:
 - Add focused tests for changed behavior.
 - Run `make smoke` for runtime, configuration, or deployment changes.
 - Update user documentation and `CHANGELOG.md` with user-visible changes.
-- Rebuild and commit the embedded SPA with `make ui` for UI changes.
+- Run `make ui` after frontend changes; generated SPA assets remain ignored.
 
 Do not mix unrelated refactors into a feature or fix. A new package should own
 a distinct responsibility, not merely shorten another file.
@@ -69,9 +69,10 @@ The main ownership boundaries are:
 ## Useful checks
 
 ```sh
-make test         # all Go modules
-make ui-check     # Svelte checks, tests, build, and embedded bundle diff
-make smoke        # build and probe a running server
+make ui           # generate the ignored frontend bundle and build manifest
+make test         # verify the bundle, then test every Go module
+make ui-check     # Svelte checks/tests/build plus manifest and tracking guards
+make smoke        # build and probe a running server and its embedded SPA
 make bench-check  # binary, startup, memory, and goroutine guardrails
 make license-check  # every source file declares its licence
 make security-check # release-time Go and frontend advisory scan
@@ -84,6 +85,22 @@ changing concurrency. The module checks include the standalone benchmark tools.
 
 `make smoke` waits for a fresh server to become ready and removes its temporary
 data on exit. Set `PORT` to use a different local port.
+
+Production binaries are built with the `embedded_ui` tag. `make build`,
+`make run`, and `make smoke` regenerate the bundle first. A direct untagged Go
+build is development-only: server startup verifies `core/ui/spa/dist` against
+the current frontend sources and panics with `make ui` guidance when it is
+missing or stale.
+
+Maintainers can run the complete GitHub-hosted validation from **Actions →
+checks → Run workflow**. Enter an open pull-request number to check its exact
+head revision, or leave the field blank to check the branch or tag selected in
+the workflow form. Only the repository owner is authorized to execute this
+manual workflow. From the command line, use:
+
+```sh
+gh workflow run checks.yml --ref main -f pr_number=123
+```
 
 Tests should cover the contract being changed: authorization and refusal cases
 for handlers, validated input and output for pipeline steps, and live reload or

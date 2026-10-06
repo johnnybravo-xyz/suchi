@@ -1,1 +1,0 @@
-import{Jn as e,Kn as t,sr as n,wn as r,yr as i}from"./shell-ogWFAae1.js";import a from"./UploadBox-JiYuScur.js";var o=e(`<div class="upload-wrap"><!></div>`);function s(e,s){let c=r(s,`jdCategories`,19,()=>[]);var l=o(),u=n(l);a(u,{get notify(){return s.notify},get jdCategories(){return c()}}),i(l),t(e,l)}export{s as default};

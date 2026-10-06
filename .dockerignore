@@ -3,7 +3,10 @@
 .agents
 .codex
 dist
-ui
+ui/node_modules
+ui/dist
+ui/playwright-report
+ui/test-results
 docs
 deploy
 hooks

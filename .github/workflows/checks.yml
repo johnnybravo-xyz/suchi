@@ -1,24 +1,185 @@
 name: checks
 
 # Repository validation is intentionally opt-in. A maintainer can run this
-# workflow from the Actions tab against the branch or tag they want to check.
-# The called workflows have no automatic triggers of their own.
+# workflow from the Actions tab against a branch/tag or enter a pull-request
+# number to test that PR's immutable head revision. Reusable workflow definitions
+# still come from the selected repository ref, not from the PR.
 
 on:
   workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'Pull request number to check; leave blank to check the selected branch or tag'
+        required: false
+        type: string
 
-permissions:
-  contents: read
+concurrency:
+  group: checks-${{ github.actor }}-${{ inputs.pr_number || github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
 
 jobs:
+  resolve-target:
+    name: resolve target
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: write
+    outputs:
+      is_pr: ${{ steps.target.outputs.is_pr }}
+      target_label: ${{ steps.target.outputs.target_label }}
+      target_ref: ${{ steps.target.outputs.target_ref }}
+      target_sha: ${{ steps.target.outputs.target_sha }}
+    steps:
+      - name: Authorize repository owner
+        env:
+          ACTOR: ${{ github.actor }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          if [[ "$ACTOR" != "$OWNER" ]]; then
+            echo "::error::Only repository owner @$OWNER may run the full checks workflow."
+            exit 1
+          fi
+
+      - name: Resolve target revision
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$PR_NUMBER" ]]; then
+            {
+              echo "is_pr=false"
+              echo "target_label=$GITHUB_REF_NAME"
+              echo "target_ref=$GITHUB_SHA"
+              echo "target_sha=$GITHUB_SHA"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ ! "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::pr_number must be a positive integer."
+            exit 1
+          fi
+
+          pr_json="$(gh api "/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")"
+          state="$(jq -r '.state' <<<"$pr_json")"
+          base_repo="$(jq -r '.base.repo.full_name' <<<"$pr_json")"
+          head_sha="$(jq -r '.head.sha' <<<"$pr_json")"
+          if [[ "$state" != "open" ]]; then
+            echo "::error::PR #$PR_NUMBER is $state; only open pull requests can be checked."
+            exit 1
+          fi
+          if [[ "$base_repo" != "$GITHUB_REPOSITORY" ]]; then
+            echo "::error::PR #$PR_NUMBER does not target $GITHUB_REPOSITORY."
+            exit 1
+          fi
+          if [[ ! "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::PR #$PR_NUMBER returned an invalid head revision."
+            exit 1
+          fi
+          {
+            echo "is_pr=true"
+            echo "target_label=PR #$PR_NUMBER"
+            echo "target_ref=$head_sha"
+            echo "target_sha=$head_sha"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Mark PR checks pending
+        if: steps.target.outputs.is_pr == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ steps.target.outputs.target_sha }}
+        run: |
+          gh api --silent --method POST \
+            "/repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
+            -f state=pending \
+            -f context=manual/full-ci \
+            -f description='Full checks are running' \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
   quality:
     name: quality
+    needs: resolve-target
+    permissions:
+      contents: read
     uses: ./.github/workflows/ci.yml
+    with:
+      target_ref: ${{ needs.resolve-target.outputs.target_ref }}
 
   image-smoke:
     name: image smoke
+    needs: resolve-target
+    permissions:
+      contents: read
     uses: ./.github/workflows/smoke.yml
+    with:
+      target_ref: ${{ needs.resolve-target.outputs.target_ref }}
 
   restore-drill:
     name: restore drill
+    needs: resolve-target
+    permissions:
+      contents: read
     uses: ./.github/workflows/restore-drill.yml
+    with:
+      target_ref: ${{ needs.resolve-target.outputs.target_ref }}
+
+  report:
+    name: report result
+    if: ${{ always() && needs.resolve-target.result == 'success' }}
+    needs: [resolve-target, quality, image-smoke, restore-drill]
+    runs-on: ubuntu-latest
+    permissions:
+      statuses: write
+    steps:
+      - name: Summarize full checks
+        id: result
+        env:
+          IMAGE_SMOKE_RESULT: ${{ needs.image-smoke.result }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          RESTORE_DRILL_RESULT: ${{ needs.restore-drill.result }}
+          TARGET_LABEL: ${{ needs.resolve-target.outputs.target_label }}
+        run: |
+          state=success
+          description='Full checks passed'
+          for result in "$QUALITY_RESULT" "$IMAGE_SMOKE_RESULT" "$RESTORE_DRILL_RESULT"; do
+            if [[ "$result" != "success" ]]; then
+              state=failure
+              description='Full checks failed'
+            fi
+          done
+          {
+            echo "## Full checks: $TARGET_LABEL"
+            echo
+            echo "| Suite | Result |"
+            echo "| --- | --- |"
+            echo "| Quality | \`$QUALITY_RESULT\` |"
+            echo "| Image smoke | \`$IMAGE_SMOKE_RESULT\` |"
+            echo "| Restore drill | \`$RESTORE_DRILL_RESULT\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "description=$description"
+            echo "state=$state"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Report result on PR revision
+        if: needs.resolve-target.outputs.is_pr == 'true'
+        env:
+          DESCRIPTION: ${{ steps.result.outputs.description }}
+          GH_TOKEN: ${{ github.token }}
+          STATE: ${{ steps.result.outputs.state }}
+          TARGET_SHA: ${{ needs.resolve-target.outputs.target_sha }}
+        run: |
+          gh api --silent --method POST \
+            "/repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
+            -f state="$STATE" \
+            -f context=manual/full-ci \
+            -f description="$DESCRIPTION" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+      - name: Enforce full-check result
+        if: steps.result.outputs.state != 'success'
+        run: exit 1

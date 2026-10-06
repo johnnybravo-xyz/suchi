@@ -40,6 +40,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Changed
 
+- Generate, verify, and embed the web application during production builds
+  instead of storing compiled frontend bundles in the source tree.
+
 - Replace the Paperless-derived document-type vocabulary with ordinary
   `type:<name>` tags. The stable schema upgrade migrates assignments, ACLs,
   saved-view filters, automation filters/actions, and title/storage templates;

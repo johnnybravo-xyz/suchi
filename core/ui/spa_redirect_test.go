@@ -20,6 +20,19 @@ import (
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
+func spaEntryAssetPath(t *testing.T) string {
+	t.Helper()
+	assets, err := spaFileSystem()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := fs.Glob(assets, "assets/index-*.js")
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("hashed SPA entry assets = %v, err = %v", entries, err)
+	}
+	return "/app/" + entries[0]
+}
+
 func TestRootRedirectsToSPA(t *testing.T) {
 	s := newUISrv(t)
 	mux := http.NewServeMux()
@@ -67,11 +80,7 @@ func TestSPACachePolicy(t *testing.T) {
 		}
 	}
 
-	assets, err := fs.Glob(spaFS, "spa/dist/assets/index-*.js")
-	if err != nil || len(assets) != 1 {
-		t.Fatalf("hashed SPA entry assets = %v, err = %v", assets, err)
-	}
-	path := "/app/" + strings.TrimPrefix(assets[0], "spa/dist/")
+	path := spaEntryAssetPath(t)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
 	if got := rec.Header().Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
@@ -97,11 +106,7 @@ func TestExternalLoginOwnsBrowserEntryPoints(t *testing.T) {
 		}
 	}
 
-	assets, err := fs.Glob(spaFS, "spa/dist/assets/index-*.js")
-	if err != nil || len(assets) != 1 {
-		t.Fatalf("hashed SPA entry assets = %v, err = %v", assets, err)
-	}
-	assetPath := "/app/" + strings.TrimPrefix(assets[0], "spa/dist/")
+	assetPath := spaEntryAssetPath(t)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, assetPath, nil))
 	if rec.Code != http.StatusOK {
