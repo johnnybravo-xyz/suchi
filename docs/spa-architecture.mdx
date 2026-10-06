@@ -288,10 +288,35 @@ forms and their required-load/retry gates. Mailbox editing delegates to
 `EmailAccounts.svelte`; both automation entry points link to the existing
 `Automations.svelte` editor.
 
-Classification uses one shared **Classification options** block in both shells.
-Its checked-by-default **Automatically apply high-confidence suggestions**
-checkbox saves independently through **Save application mode**, using a standalone
-`auto_apply` PATCH. Turning it off selects review-first behavior.
+`ConfigurationSection.svelte` owns the model dialog, including the Account subscription connection form and Provider selector.
+OpenAI ChatGPT (Codex), ID `openai_chatgpt`, is the first option; mode comes from
+explicit server state rather than recognizing a provider endpoint.
+It displays only a device code and verification URL, polls through the named
+`subscriptionLoginAction(provider, action)` API, and cancels timers on disposal or provider changes.
+The named `getSubscriptionModels(provider)` operation loads the account catalog into a dropdown
+on connection, provider selection and saved-state reload. Dropdown changes use
+`saveSubscriptionModel(provider, model)` to persist a separate preference, with saving/error/retry states;
+reload restores it without activating inference. Mode switches retain separate
+endpoint, model and consent drafts for Local, Hosted endpoint and Account subscription.
+Catalog selection keeps an available current model, then the saved subscription
+model, then the first entry, including after reconnecting. Loading, empty and
+retry states gate connection testing. Generation checks reject late catalog or
+test results after provider/model changes or disposal. Tokens remain server-side.
+Connecting does not enable the model: the existing
+egress acknowledgement, connection test and save flow still apply. Verify the
+browser flow with `bun run e2e --grep 'Account subscription'`.
+
+Classification uses the same Suggestions and Archive research cards in both shells.
+The Suggestion application radio group defaults to **Apply when confident** and
+saves independently through **Save application mode**, using a standalone
+`auto_apply` PATCH. **Review first** disables automatic application. Local thresholds
+and research depth use disclosure controls; model connection and activation live
+in the model dialog.
+**Save matching options** calls `saveArchiveMatchingSettings` with only the
+three `archive_*` fields in a standalone PATCH. It preserves the saved model and
+unsaved connection form without checking account connectivity or reloading
+inference. Verify disconnected-account behavior with
+`bun run e2e --grep 'local matching saves after disconnect'`.
 Model activation, local matching and research settings retain their own saves;
 one save must not overwrite another form's saved or unsaved state. Automatic-only
 threshold sliders are disabled, not cleared, in review mode. The connection test

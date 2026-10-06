@@ -2176,7 +2176,13 @@ matching and automations keep running when it is disabled.
 ### `GET /api/admin/settings/llm`
 
 Returns masked persisted and runtime state. `has_api_key` is the only key
-signal; plaintext key material is never returned.
+signal; plaintext key material is never returned. `subscription_connected` reports
+whether Suchi holds a subscription login, without exposing tokens or verifying
+current upstream model entitlement. `subscription_model` is the separately saved
+dropdown preference; `model` remains the configured inference model.
+`mode` is `local`, `hosted`, or `subscription`; `subscription_provider` identifies
+the account whose masked connection state and preference are returned. For
+endpoint modes the shipped default account provider is shown, without activating it.
 
 ```json
 {
@@ -2186,6 +2192,10 @@ signal; plaintext key material is never returned.
   "model": "qwen2.5:7b",
   "egress_ack": false,
   "has_api_key": false,
+  "mode": "local",
+  "subscription_provider": "openai_chatgpt",
+  "subscription_connected": false,
+  "subscription_model": "",
   "confidence_threshold": 0.7,
   "auto_apply": true,
   "archive_enabled": true,
@@ -2203,7 +2213,7 @@ activate a model, grant egress permission or change explicit user-authored rules
 
 ### `POST /api/admin/settings/llm`
 
-Body: `{enabled, endpoint_url, model, api_key, clear_api_key, egress_ack,
+Body: `{enabled, subscription_provider, endpoint_url, model, api_key, clear_api_key, egress_ack,
 confidence_threshold, archive_enabled, archive_review_threshold,
 archive_auto_threshold?}`.
 The model/date threshold must be between `0.50` and `0.95`, default `0.70`.
@@ -2216,8 +2226,10 @@ access, field-generation or evidence checks.
 `auto_apply` is PATCH-only; it and the old `date_auto_apply` are unsupported in
 POST. Saving configuration never promotes pending dates or metadata or starts
 an archive-wide backfill.
-Enabling requires an HTTP(S) endpoint and model. Non-local endpoints require
-`egress_ack=true`. A blank `api_key` preserves any stored key; a non-blank key
+Enabling requires a model and either an HTTP(S) endpoint or a registered
+`subscription_provider`. Subscription mode requires a connected account,
+`egress_ack=true`, and empty endpoint/API-key fields. Non-local endpoint models
+also require `egress_ack=true`. A blank `api_key` preserves any stored key; a non-blank key
 is AEAD-sealed before the settings transaction commits. `clear_api_key=true`
 stores an encrypted empty value for web-managed configuration. A key supplied
 by the config file or environment remains authoritative. It cannot be combined
@@ -2230,7 +2242,7 @@ key rotation, disable, and re-enable all apply immediately.
 
 ### `PATCH /api/admin/settings/llm`
 
-Updates exactly one standalone global setting. Choose either application mode:
+Updates one standalone global settings group. Choose application mode:
 
 ```json
 { "auto_apply": false }
@@ -2242,15 +2254,37 @@ or the Archive research source-text preset:
 { "research_context_mode": "detailed" }
 ```
 
-The body must contain exactly one of these fields, not both or other fields.
+or the saved provider dropdown selection:
+
+```json
+{ "subscription_provider": "openai_chatgpt", "subscription_model": "gpt-5.6-luna" }
+```
+
+or local similar-document matching settings:
+
+```json
+{ "archive_enabled": true, "archive_review_threshold": 0.6, "archive_auto_threshold": 0.9 }
+```
+
+Matching PATCH accepts one or more of these three fields, preserves omitted
+values, and validates the same threshold ranges/order as POST. It does not
+access account connection state or reload inference, so matching remains
+editable after a subscription disconnect.
+
+The body must contain one policy field, the subscription provider/model pair,
+or the matching fields. These groups cannot be combined.
 `auto_apply` must be boolean; `research_context_mode` must be `focused`,
-`balanced`, or `detailed`. The response returns only the saved field and value.
+`balanced`, or `detailed`. `subscription_model` must be a nonempty model identifier
+(up to 128 characters). The provider ID must be registered. The response returns
+the saved policy field, subscription provider/model pair, or all three matching
+fields.
 
 Application mode is read again under the writer before automatic effects; the
-research preset applies to the next question. Neither standalone save rewrites
-the endpoint, model, API key, egress acknowledgement or thresholds; enables or
-tests a model; reloads the provider; accepts pending suggestions; or starts a
-backfill. See [Archive research: Research context presets](/archive-chat#research-context-presets)
+research preset applies to the next question. These standalone saves do not rewrite
+the endpoint, model, API key, egress acknowledgement or model confidence
+threshold. Only matching PATCH updates local similarity thresholds. They do not
+enable or test a model, reload the provider, accept pending suggestions, or start
+a backfill. See [Archive research: Research context presets](/archive-chat#research-context-presets)
 for passage assembly and exact payload bounds.
 
 ### `POST /api/admin/settings/llm/test`
@@ -2278,6 +2312,35 @@ result that passes production validation.
 
 The result is the validated synthetic classification only. Raw provider output
 and archive content are never returned.
+
+### `GET /api/admin/settings/llm/subscriptions/{provider}/models`
+
+Administrator browser sessions only. Validates the registered provider ID and
+fetches the connected account's model catalog, refreshing the server-side credential if needed, and returns
+`{models: [{id, name}]}` in upstream preference order. Empty catalogs return an
+empty list; unavailable/invalid catalogs return an error rather than guessed
+model IDs. Credentials and other upstream metadata are not returned. Catalog
+membership does not establish entitlement; the connection test verifies inference.
+
+### `POST /api/admin/settings/llm/subscriptions/{provider}/{action}`
+
+Administrator browser sessions only; API tokens cannot use these routes.
+The first provider ID is `openai_chatgpt`; unknown IDs are rejected.
+Actions are `start`, `poll`, `cancel`, and `disconnect`; request bodies may be
+empty. `start` returns `{user_code, verification_url, interval}` and replaces
+that administrator's pending login. Poll no faster than `interval` seconds;
+`poll` returns `{pending: true}` or `{connected: true}` after storing encrypted
+credentials. Pending logins expire in 15 minutes or on restart. Another
+administrator cannot poll the initiating administrator's grant.
+
+`cancel` returns `{canceled: true}` and drops the pending grant. `disconnect`
+returns `{connected: false}`, deletes the instance-wide credential and stops
+an active subscription model. Connecting does not enable inference. Send
+`subscription_provider: "openai_chatgpt"` and the selected `model`, with
+`endpoint_url` and `api_key` empty. Acknowledge egress, then test/save through
+the existing settings routes. Subscription requests reject endpoint/API-key
+overrides; the registered adapter derives authentication and the fixed host.
+See [LLM classifier](/llm-classifier).
 
 ## Runtime archive settings
 

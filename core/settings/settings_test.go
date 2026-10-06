@@ -576,3 +576,21 @@ func TestResolveRuntimePreferences_Precedence(t *testing.T) {
 		t.Fatalf("boot preferences should win: %#v", got)
 	}
 }
+
+func TestSubscriptionConfigPersistsAndEndpointOverrideWins(t *testing.T) {
+	d := setupDB(t)
+	ctx := context.Background()
+	cfg := settings.LLMConfig{SubscriptionProvider: "example", Model: "account-model", EgressAck: true, ConfidenceThreshold: .7}
+	if err := settings.SaveLLMConfig(ctx, d, cfg, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := settings.ResolveLLMConfig(ctx, d, settings.LLMConfig{}, nil)
+	if err != nil || resolved != cfg {
+		t.Fatalf("subscription roundtrip: %+v %v", resolved, err)
+	}
+	t.Setenv("LLM_ENDPOINT_URL", "http://localhost:11434/v1")
+	resolved, err = settings.ResolveLLMConfig(ctx, d, settings.LLMConfig{EndpointURL: "http://localhost:11434/v1"}, nil)
+	if err != nil || resolved.SubscriptionProvider != "" || resolved.EndpointURL != "http://localhost:11434/v1" {
+		t.Fatalf("boot override: %+v %v", resolved, err)
+	}
+}

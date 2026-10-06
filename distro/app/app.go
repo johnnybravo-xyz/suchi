@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -34,6 +35,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/lang"
+	"github.com/johnnybravo-xyz/suchi/core/netutil"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
 	"github.com/johnnybravo-xyz/suchi/core/render/view"
 	"github.com/johnnybravo-xyz/suchi/core/rescan"
@@ -328,14 +330,21 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	// Register a disabled shell even when no endpoint is configured. Its stable
 	// handler lets the setup API activate the classifier without a restart.
+	subscriptions := llmclassifier.NewSubscriptions(d, decryptKey)
+	subscriptionConnected := func(ctx context.Context, id string) bool {
+		provider, ok := subscriptions.Provider(id)
+		return ok && provider.Connected(ctx)
+	}
 	llm := llmclassifier.NewDisabled(log)
-	if !resolvedLLM.Disabled {
+	if !resolvedLLM.Disabled && (resolvedLLM.SubscriptionProvider == "" || subscriptionConnected(ctx, resolvedLLM.SubscriptionProvider)) {
 		configured, err := llmclassifier.New(llmclassifier.Config{
-			EndpointURL:         resolvedLLM.EndpointURL,
-			Model:               resolvedLLM.Model,
-			APIKey:              resolvedLLM.APIKey,
-			EgressAck:           resolvedLLM.EgressAck,
-			ConfidenceThreshold: resolvedLLM.ConfidenceThreshold,
+			Subscriptions:        subscriptions,
+			SubscriptionProvider: resolvedLLM.SubscriptionProvider,
+			EndpointURL:          resolvedLLM.EndpointURL,
+			Model:                resolvedLLM.Model,
+			APIKey:               resolvedLLM.APIKey,
+			EgressAck:            resolvedLLM.EgressAck,
+			ConfidenceThreshold:  resolvedLLM.ConfidenceThreshold,
 		}, log)
 		if err != nil {
 			log.Error("main.llm.new", "err", err.Error())
@@ -355,10 +364,7 @@ func Run(ctx context.Context, opts Options) error {
 	liveOCRLanguages.Store(append([]string(nil), runtimePrefs.OCRLanguages...))
 
 	// Include the resolved settings-backed LLM endpoint in the egress log.
-	llmEgressEndpoint := ""
-	if llm.Enabled() {
-		llmEgressEndpoint = resolvedLLM.EndpointURL
-	}
+	llmEgressEndpoint := resolveLLMEgressEndpoint(resolvedLLM, llm.Enabled(), subscriptions)
 	egress, egressErr := diagnostics.EnumerateEgress(ctx, d, cfg, llmEgressEndpoint)
 	if egressErr != nil {
 		log.Warn("main.egress.enumerate_failed", "err", egressErr.Error())
@@ -525,6 +531,21 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	apiSrv.EmailChangeModeFor = emailChangeModeFor
 	apiSrv.LLMAEAD = decryptKey
+	apiSrv.SubscriptionProvider = func(id string) (settings.SubscriptionProvider, bool) {
+		provider, ok := subscriptions.Provider(id)
+		if !ok {
+			return nil, false
+		}
+		return subscriptionSettingsProvider{SubscriptionProvider: provider, disconnect: func(rctx context.Context) error {
+			if err := provider.Disconnect(rctx); err != nil {
+				return err
+			}
+			if llm.Config().SubscriptionProvider == id {
+				llm.Disable()
+			}
+			return nil
+		}}, true
+	}
 	apiSrv.ChatEnabled = llm.Enabled
 	apiSrv.ChatRuntimeInfo = llm.RuntimeInfo
 	apiSrv.ChatCompletion = func(rctx context.Context, system string, messages []api.ChatCompletionMessage, maxTokens int) (string, error) {
@@ -574,14 +595,29 @@ func Run(ctx context.Context, opts Options) error {
 		if err != nil {
 			return api.LLMSettingsStatus{}, err
 		}
-		enabled := !fresh.Disabled && fresh.EndpointURL != ""
+		enabled := !fresh.Disabled && (fresh.EndpointURL != "" || fresh.SubscriptionProvider != "")
 		runtimeCfg := llm.Config()
 		active := enabled && llm.Enabled() &&
-			runtimeCfg.EndpointURL == fresh.EndpointURL &&
+			runtimeCfg.SubscriptionProvider == fresh.SubscriptionProvider &&
+			(fresh.SubscriptionProvider != "" || runtimeCfg.EndpointURL == fresh.EndpointURL) &&
 			runtimeCfg.Model == fresh.Model &&
-			runtimeCfg.APIKey == fresh.APIKey &&
+			(fresh.SubscriptionProvider != "" || runtimeCfg.APIKey == fresh.APIKey) &&
 			runtimeCfg.EgressAck == fresh.EgressAck &&
 			runtimeCfg.ConfidenceThreshold == fresh.ConfidenceThreshold
+		selectedProvider := fresh.SubscriptionProvider
+		if selectedProvider == "" {
+			selectedProvider = llmclassifier.OpenAIChatGPT
+		}
+		connected := subscriptionConnected(rctx, selectedProvider)
+		mode := "local"
+		if fresh.SubscriptionProvider != "" {
+			mode = "subscription"
+			if !connected {
+				active = false
+			}
+		} else if host, err := url.Parse(fresh.EndpointURL); err == nil && host.Host != "" && !netutil.IsLocalHost(host.Host) {
+			mode = "hosted"
+		}
 		return api.LLMSettingsStatus{
 			Enabled:             enabled,
 			Active:              active,
@@ -589,6 +625,8 @@ func Run(ctx context.Context, opts Options) error {
 			Model:               fresh.Model,
 			EgressAck:           fresh.EgressAck,
 			HasAPIKey:           fresh.APIKey != "",
+			SubscriptionStatus:  settings.SubscriptionStatus{Provider: selectedProvider, Connected: connected},
+			Mode:                mode,
 			ConfidenceThreshold: fresh.ConfidenceThreshold,
 		}, nil
 	}
@@ -602,11 +640,13 @@ func Run(ctx context.Context, opts Options) error {
 			apiKey = fresh.APIKey
 		}
 		probe, err := llmclassifier.New(llmclassifier.Config{
-			EndpointURL:         candidate.EndpointURL,
-			Model:               candidate.Model,
-			APIKey:              apiKey,
-			EgressAck:           candidate.EgressAck,
-			ConfidenceThreshold: candidate.ConfidenceThreshold,
+			Subscriptions:        subscriptions,
+			SubscriptionProvider: candidate.SubscriptionProvider,
+			EndpointURL:          candidate.EndpointURL,
+			Model:                candidate.Model,
+			APIKey:               apiKey,
+			EgressAck:            candidate.EgressAck,
+			ConfidenceThreshold:  candidate.ConfidenceThreshold,
 		}, log)
 		if err != nil {
 			return api.LLMTestResult{}, err
@@ -633,16 +673,18 @@ func Run(ctx context.Context, opts Options) error {
 		if err != nil {
 			return err
 		}
-		if fresh.Disabled || fresh.EndpointURL == "" {
+		if fresh.Disabled || (fresh.EndpointURL == "" && fresh.SubscriptionProvider == "") || (fresh.SubscriptionProvider != "" && !subscriptionConnected(rctx, fresh.SubscriptionProvider)) {
 			llm.Disable()
 			return nil
 		}
 		if err := llm.SetConfig(llmclassifier.Config{
-			EndpointURL:         fresh.EndpointURL,
-			Model:               fresh.Model,
-			APIKey:              fresh.APIKey,
-			EgressAck:           fresh.EgressAck,
-			ConfidenceThreshold: fresh.ConfidenceThreshold,
+			Subscriptions:        subscriptions,
+			SubscriptionProvider: fresh.SubscriptionProvider,
+			EndpointURL:          fresh.EndpointURL,
+			Model:                fresh.Model,
+			APIKey:               fresh.APIKey,
+			EgressAck:            fresh.EgressAck,
+			ConfidenceThreshold:  fresh.ConfidenceThreshold,
 		}); err != nil {
 			return err
 		}
@@ -747,4 +789,14 @@ func logEgressSurface(log *slog.Logger, egress []string) {
 	} else {
 		log.Info("main.egress.surface", "outbound", egress)
 	}
+}
+
+func resolveLLMEgressEndpoint(cfg settings.LLMConfig, enabled bool, subscriptions *llmclassifier.Subscriptions) string {
+	if !enabled {
+		return ""
+	}
+	if cfg.SubscriptionProvider != "" {
+		return subscriptions.Endpoint(cfg.SubscriptionProvider)
+	}
+	return cfg.EndpointURL
 }

@@ -38,6 +38,8 @@ func (s *Server) registerArchiveConfiguration(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/admin/settings/llm", s.PatchLLMSettings)
 	mux.HandleFunc("POST /api/admin/settings/llm", s.SaveLLMSettings)
 	mux.HandleFunc("POST /api/admin/settings/llm/test", s.TestLLMSettings)
+	mux.HandleFunc("POST /api/admin/settings/llm/subscriptions/{provider}/{action}", s.SubscriptionLoginAction)
+	mux.HandleFunc("GET /api/admin/settings/llm/subscriptions/{provider}/models", s.SubscriptionModels)
 	mux.HandleFunc("GET /api/admin/settings/preferences", s.GetPreferences)
 	mux.HandleFunc("POST /api/admin/settings/preferences", s.SavePreferences)
 	mux.HandleFunc("GET /api/admin/settings/ingest", s.GetIngestSettings)
@@ -284,16 +286,17 @@ func (s *Server) writePresetChangeError(w http.ResponseWriter, operation string,
 var modelSafe = regexp.MustCompile(`^[A-Za-z0-9._/:\-]{1,128}$`)
 
 type llmSettingsInput struct {
-	Enabled             *bool    `json:"enabled,omitempty"`
-	EndpointURL         string   `json:"endpoint_url"`
-	Model               string   `json:"model"`
-	APIKey              string   `json:"api_key"`
-	ClearAPIKey         bool     `json:"clear_api_key"`
-	EgressAck           bool     `json:"egress_ack"`
-	ConfidenceThreshold *float64 `json:"confidence_threshold,omitempty"`
-	ArchiveEnabled      *bool    `json:"archive_enabled,omitempty"`
-	ArchiveAuto         *float64 `json:"archive_auto_threshold,omitempty"`
-	ArchiveReview       *float64 `json:"archive_review_threshold,omitempty"`
+	SubscriptionProvider string   `json:"subscription_provider"`
+	Enabled              *bool    `json:"enabled,omitempty"`
+	EndpointURL          string   `json:"endpoint_url"`
+	Model                string   `json:"model"`
+	APIKey               string   `json:"api_key"`
+	ClearAPIKey          bool     `json:"clear_api_key"`
+	EgressAck            bool     `json:"egress_ack"`
+	ConfidenceThreshold  *float64 `json:"confidence_threshold,omitempty"`
+	ArchiveEnabled       *bool    `json:"archive_enabled,omitempty"`
+	ArchiveAuto          *float64 `json:"archive_auto_threshold,omitempty"`
+	ArchiveReview        *float64 `json:"archive_review_threshold,omitempty"`
 }
 
 func (in *llmSettingsInput) normalize() {
@@ -305,11 +308,34 @@ func (in llmSettingsInput) wantsEnabled() bool {
 	if in.Enabled != nil {
 		return *in.Enabled
 	}
-	return in.EndpointURL != ""
+	return in.EndpointURL != "" || in.SubscriptionProvider != ""
 }
 
 func (s *Server) validateLLMSettings(ctx context.Context, w http.ResponseWriter, in llmSettingsInput, required bool) bool {
-	if required && in.EndpointURL == "" {
+	if in.SubscriptionProvider != "" {
+		if s.SubscriptionProvider == nil {
+			s.writeError(w, 503, "subscription_unavailable", "Account subscriptions are unavailable")
+			return false
+		}
+		provider, ok := s.SubscriptionProvider(in.SubscriptionProvider)
+		if !ok {
+			s.writeError(w, 400, "bad_subscription_provider", "Unknown subscription provider")
+			return false
+		}
+		if in.EndpointURL != "" || in.APIKey != "" || in.ClearAPIKey {
+			s.writeError(w, 400, "subscription_conflict", "Subscriptions do not accept endpoint or API key settings")
+			return false
+		}
+		if required && !in.EgressAck {
+			s.writeError(w, 400, "egress_ack_required", "Account subscription requires document egress acknowledgement")
+			return false
+		}
+		if required && !provider.Connected(ctx) {
+			s.writeError(w, 400, "subscription_not_connected", "Connect the subscription before testing or enabling it")
+			return false
+		}
+	}
+	if required && in.EndpointURL == "" && in.SubscriptionProvider == "" {
 		s.writeError(w, http.StatusBadRequest, "endpoint_required", "endpoint_url is required")
 		return false
 	}
@@ -380,6 +406,11 @@ func (s *Server) loadLLMSettingsStatus(ctx context.Context) (LLMSettingsStatus, 
 	}
 	if s.LLMStatusReader != nil {
 		status, err := s.LLMStatusReader(ctx)
+		if status.Provider != "" {
+			if err := settings.Get(ctx, s.DB, settings.SubscriptionModelKey(status.Provider), &status.SubscriptionStatus.Model); err != nil && !errors.Is(err, settings.ErrNotFound) {
+				return LLMSettingsStatus{}, err
+			}
+		}
 		status.AutoApply = autoApply
 		status.ArchiveEnabled = archive.Enabled
 		status.ArchiveAuto = archive.AutoThreshold
@@ -391,10 +422,18 @@ func (s *Server) loadLLMSettingsStatus(ctx context.Context) (LLMSettingsStatus, 
 	if err != nil {
 		return LLMSettingsStatus{}, err
 	}
-	enabled := !cfg.Disabled && cfg.EndpointURL != ""
+	var subscriptionModel string
+	if cfg.SubscriptionProvider != "" {
+		if err := settings.Get(ctx, s.DB, settings.SubscriptionModelKey(cfg.SubscriptionProvider), &subscriptionModel); err != nil && !errors.Is(err, settings.ErrNotFound) {
+			return LLMSettingsStatus{}, err
+		}
+	}
+	enabled := !cfg.Disabled && (cfg.EndpointURL != "" || cfg.SubscriptionProvider != "")
 	return LLMSettingsStatus{
 		Enabled:             enabled,
 		Active:              false,
+		SubscriptionStatus:  settings.SubscriptionStatus{Provider: cfg.SubscriptionProvider, Model: subscriptionModel},
+		Mode:                llmMode(cfg),
 		EndpointURL:         cfg.EndpointURL,
 		Model:               cfg.Model,
 		EgressAck:           cfg.EgressAck,
@@ -420,23 +459,88 @@ func (s *Server) GetLLMSettings(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, status)
 }
 
-// PatchLLMSettings independently saves one classification policy or research
-// preset without touching model activation, credentials, or existing reviews.
+// PatchLLMSettings independently saves local matching, a policy, research preset,
+// or subscription model preference without touching activation, credentials, or existing reviews.
 func (s *Server) PatchLLMSettings(w http.ResponseWriter, r *http.Request) {
 	if s.requireAdmin(w, r) == nil {
 		return
 	}
 	var body struct {
-		AutoApply           json.RawMessage `json:"auto_apply"`
-		ResearchContextMode json.RawMessage `json:"research_context_mode"`
+		AutoApply            json.RawMessage `json:"auto_apply"`
+		ResearchContextMode  json.RawMessage `json:"research_context_mode"`
+		SubscriptionModel    json.RawMessage `json:"subscription_model"`
+		SubscriptionProvider string          `json:"subscription_provider"`
+		ArchiveEnabled       *bool           `json:"archive_enabled"`
+		ArchiveAuto          *float64        `json:"archive_auto_threshold"`
+		ArchiveReview        *float64        `json:"archive_review_threshold"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
-	if (body.AutoApply == nil) == (body.ResearchContextMode == nil) {
+	fields := 0
+	for _, value := range []json.RawMessage{body.AutoApply, body.ResearchContextMode, body.SubscriptionModel} {
+		if value != nil {
+			fields++
+		}
+	}
+	archivePatch := body.ArchiveEnabled != nil || body.ArchiveAuto != nil || body.ArchiveReview != nil
+	if archivePatch {
+		fields++
+	}
+	if fields != 1 {
 		s.writeError(w, http.StatusBadRequest, "bad_settings_patch",
-			"provide exactly one of auto_apply or research_context_mode")
+			"provide one settings group: local matching, auto_apply, research_context_mode or subscription_model")
+		return
+	}
+	if body.SubscriptionModel == nil && body.SubscriptionProvider != "" {
+		s.writeError(w, 400, "bad_settings_patch", "subscription_provider requires subscription_model")
+		return
+	}
+	if archivePatch {
+		if !s.validateLLMSettings(r.Context(), w, llmSettingsInput{ArchiveAuto: body.ArchiveAuto, ArchiveReview: body.ArchiveReview}, false) {
+			return
+		}
+		cfg := settings.ResolveArchiveClassifierConfig(r.Context(), s.DB)
+		if body.ArchiveEnabled != nil {
+			cfg.Enabled = *body.ArchiveEnabled
+		}
+		if body.ArchiveAuto != nil {
+			cfg.AutoThreshold = *body.ArchiveAuto
+		}
+		if body.ArchiveReview != nil {
+			cfg.ReviewThreshold = *body.ArchiveReview
+		}
+		if err := settings.SaveArchiveClassifierConfig(r.Context(), s.DB, cfg); err != nil {
+			s.serverErr(w, "settings.archive_classifier.save", err)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, struct {
+			Enabled bool    `json:"archive_enabled"`
+			Auto    float64 `json:"archive_auto_threshold"`
+			Review  float64 `json:"archive_review_threshold"`
+		}{cfg.Enabled, cfg.AutoThreshold, cfg.ReviewThreshold})
+		return
+	}
+	if body.SubscriptionModel != nil {
+		if s.SubscriptionProvider == nil {
+			s.writeError(w, 503, "subscription_unavailable", "Account subscriptions are unavailable")
+			return
+		}
+		if _, ok := s.SubscriptionProvider(body.SubscriptionProvider); !ok {
+			s.writeError(w, 400, "bad_subscription_provider", "Unknown subscription provider")
+			return
+		}
+		var model string
+		if err := json.Unmarshal(body.SubscriptionModel, &model); err != nil || !modelSafe.MatchString(model) {
+			s.writeError(w, http.StatusBadRequest, "bad_subscription_model", "subscription_model must be a valid model identifier")
+			return
+		}
+		if err := settings.Set(r.Context(), s.DB, settings.SubscriptionModelKey(body.SubscriptionProvider), model); err != nil {
+			s.serverErr(w, "settings.llm.subscription_model", err)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, map[string]string{"subscription_provider": body.SubscriptionProvider, "subscription_model": model})
 		return
 	}
 	if body.AutoApply != nil {
@@ -499,11 +603,12 @@ func (s *Server) SaveLLMSettings(w http.ResponseWriter, r *http.Request) {
 		confidence = *body.ConfidenceThreshold
 	}
 	if err := settings.SaveLLMConfig(r.Context(), s.DB, settings.LLMConfig{
-		EndpointURL:         body.EndpointURL,
-		Model:               body.Model,
-		EgressAck:           body.EgressAck,
-		ConfidenceThreshold: confidence,
-		Disabled:            !enabled,
+		SubscriptionProvider: body.SubscriptionProvider,
+		EndpointURL:          body.EndpointURL,
+		Model:                body.Model,
+		EgressAck:            body.EgressAck,
+		ConfidenceThreshold:  confidence,
+		Disabled:             !enabled,
 	}, s.LLMAEAD, apiKeyUpdate); err != nil {
 		s.serverErr(w, "settings.llm.save", err)
 		return
@@ -564,12 +669,13 @@ func (s *Server) TestLLMSettings(w http.ResponseWriter, r *http.Request) {
 		confidence = *body.ConfidenceThreshold
 	}
 	result, err := s.LLMTester(r.Context(), LLMTestConfig{
-		EndpointURL:         body.EndpointURL,
-		Model:               body.Model,
-		APIKey:              body.APIKey,
-		ClearAPIKey:         body.ClearAPIKey,
-		EgressAck:           body.EgressAck,
-		ConfidenceThreshold: confidence,
+		SubscriptionProvider: body.SubscriptionProvider,
+		EndpointURL:          body.EndpointURL,
+		Model:                body.Model,
+		APIKey:               body.APIKey,
+		ClearAPIKey:          body.ClearAPIKey,
+		EgressAck:            body.EgressAck,
+		ConfidenceThreshold:  confidence,
 	})
 	if err != nil {
 		if s.Log != nil {
@@ -914,4 +1020,72 @@ func isUniqueViolation(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "UNIQUE constraint failed") ||
 		strings.Contains(msg, "(2067)")
+}
+
+// Subscription login and catalog operations are administrator session-only.
+func (s *Server) SubscriptionModels(w http.ResponseWriter, r *http.Request) {
+	s.subscriptionAction(w, r, "models")
+}
+func (s *Server) SubscriptionLoginAction(w http.ResponseWriter, r *http.Request) {
+	s.subscriptionAction(w, r, r.PathValue("action"))
+}
+func (s *Server) subscriptionAction(w http.ResponseWriter, r *http.Request, action string) {
+	actor := s.requireAdmin(w, r)
+	if actor == nil {
+		return
+	}
+	if s.SubscriptionProvider == nil {
+		s.writeError(w, 503, "subscription_unavailable", "Account subscriptions are unavailable")
+		return
+	}
+	provider, ok := s.SubscriptionProvider(r.PathValue("provider"))
+	if !ok {
+		s.writeError(w, 404, "bad_subscription_provider", "Unknown subscription provider")
+		return
+	}
+	var result any
+	var err error
+	switch action {
+	case "start":
+		result, err = provider.Start(r.Context(), actor.UserID)
+	case "poll":
+		result, err = provider.Poll(r.Context(), actor.UserID)
+	case "cancel":
+		err = provider.Cancel(r.Context(), actor.UserID)
+		result = struct {
+			Canceled bool `json:"canceled"`
+		}{true}
+	case "disconnect":
+		err = provider.Disconnect(r.Context())
+		result = settings.SubscriptionPoll{}
+	case "models":
+		if r.Method != http.MethodGet {
+			s.writeError(w, 400, "bad_action", "Models requires GET")
+			return
+		}
+		var models []settings.SubscriptionModel
+		models, err = provider.Models(r.Context())
+		result = struct {
+			Models []settings.SubscriptionModel `json:"models"`
+		}{models}
+	default:
+		s.writeError(w, 400, "bad_action", "Unknown login action")
+		return
+	}
+	if err != nil {
+		s.writeError(w, 502, "subscription_failed", err.Error())
+		return
+	}
+	s.writeJSON(w, 200, result)
+}
+
+func llmMode(cfg settings.LLMConfig) string {
+	if cfg.SubscriptionProvider != "" {
+		return "subscription"
+	}
+	u, err := url.Parse(cfg.EndpointURL)
+	if err == nil && u.Host != "" && !netutil.IsLocalHost(u.Host) {
+		return "hosted"
+	}
+	return "local"
 }

@@ -290,3 +290,11 @@ export function uploadDocument(file, system = systems.code) {
   }
   return req('POST', '/api/documents/', fd, { system, keepScope: true })
 }
+
+export const subscriptionLoginAction = (provider, action) => api.post(`/api/admin/settings/llm/subscriptions/${encodeURIComponent(provider)}/${action}`, {})
+
+export const getSubscriptionModels = (provider) => api.get(`/api/admin/settings/llm/subscriptions/${encodeURIComponent(provider)}/models`)
+
+export const saveArchiveMatchingSettings = (settings) => api.patch('/api/admin/settings/llm', settings)
+
+export const saveSubscriptionModel = (subscription_provider, subscription_model) => api.patch('/api/admin/settings/llm', { subscription_provider, subscription_model })
