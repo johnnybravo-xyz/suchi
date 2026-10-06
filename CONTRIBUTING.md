@@ -1,6 +1,6 @@
 # Contributing to suchi
 
-Suchi is a v0.1 beta candidate. Interfaces may change while the product is
+Suchi is early v0.1 software. Interfaces may change while the product is
 still pre-1.0, so prefer clear designs over compatibility layers.
 
 ## Get started
