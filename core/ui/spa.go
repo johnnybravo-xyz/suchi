@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// SPA handler: mount the Svelte UI (built into core/ui/spa/dist/) at
-// /app/*. Kept in the same package as the server-rendered UI on
-// purpose — both consume the same Server + auth chain, so shared
-// state stays in one place. The two coexist during migration; when
-// the SPA takes over /, retire the template routes one by one.
+// SPA handler: mount the generated Svelte UI at /app/*. Kept in the same
+// package as the server-rendered UI on purpose — both consume the same Server
+// and auth chain, so shared state stays in one place. The two coexist during
+// migration; when the SPA takes over /, retire the template routes one by one.
 //
 // Without OIDC, the SPA renders its own login and every data call is enforced
 // by the API auth chain. When an external login path is configured, anonymous
@@ -15,16 +14,13 @@ package ui
 
 import (
 	"bytes"
-	"embed"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"strings"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 )
-
-//go:embed all:spa/dist
-var spaFS embed.FS
 
 // spaTitleTag is the exact <title> Vite writes into the built shell.
 // Rewritten server-side to add "· Demo" when SUCHI_DEMO_MODE=1 so the
@@ -44,17 +40,9 @@ var spaLoginPathTag = []byte(`<meta name="suchi-login-path" content="/login" />`
 // through to index.html so the router can decode the hash on the
 // client.
 func (s *Server) RegisterSPA(mux *http.ServeMux) {
-	sub, err := fs.Sub(spaFS, "spa/dist")
+	sub, err := spaFileSystem()
 	if err != nil {
-		// Build-time invariant: spa/dist must exist. If not,
-		// register a debug endpoint that says so — better than a
-		// silent 404.
-		mux.HandleFunc("GET /app/", func(w http.ResponseWriter, r *http.Request) {
-			http.Error(w,
-				"SPA bundle missing (run `make ui` and rebuild suchi)",
-				http.StatusServiceUnavailable)
-		})
-		return
+		panic(fmt.Sprintf("SPA bundle is missing or stale: %v; run `make ui`", err))
 	}
 	files := http.StripPrefix("/app/", http.FileServer(http.FS(sub)))
 

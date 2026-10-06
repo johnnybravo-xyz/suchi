@@ -1,31 +1,32 @@
 # Suchi UI
 
-This directory contains the Svelte SPA served at `/app/`. Production assets
-are committed under `core/ui/spa/dist/` and embedded in the Go binary.
+This directory contains the Svelte SPA served at `/app/`. Production builds
+generate an ignored `core/ui/spa/dist/` tree and embed it in the Go binary.
 
 ## Development
 
-Run the backend from the repository root, then start Vite:
+Generate a fresh bundle and run the backend from the repository root, then start
+Vite:
 
 ```sh
 make run
-cd ui
-bun install --frozen-lockfile
-bun run dev
+make ui-dev
 ```
 
-Vite serves the app on `http://127.0.0.1:5173` and proxies backend routes to
+`make run` regenerates and embeds the production bundle. Vite serves the live
+development app on `http://127.0.0.1:5173` and proxies backend routes to
 `http://127.0.0.1:8000`.
 
 From the repository root:
 
-- `make ui-check` runs Svelte diagnostics, builds the SPA, and verifies that
-  the committed embedded assets are current.
+- `make ui-check` runs Svelte diagnostics and tests, builds the SPA, verifies
+  its source/bundle manifest, and refuses tracked generated assets.
 - `make ui-e2e` runs the desktop/mobile Chromium setup smoke tests. Install a
   browser with `bunx playwright install chromium`, or point
   `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` at a local Chromium binary.
-- `make ui` installs dependencies, builds the SPA, and refreshes
-  `core/ui/spa/dist/`.
+- `make ui` installs dependencies and regenerates the ignored
+  `core/ui/spa/dist/` tree.
+- `make ui-verify` checks that the generated bundle is complete and current.
 - `PLAYWRIGHT_PRODUCTION=1 bun run e2e` rebuilds and tests the actual production
   assets through Vite preview. It needs port 5173 free; API mocks remain mocks.
 

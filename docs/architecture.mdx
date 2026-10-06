@@ -18,7 +18,7 @@ browser composition; linked feature guides own detailed user and wire behavior.
 | --- | --- |
 | Lifecycle and wiring | `distro/cmd/suchi/main.go` parses configuration/signals; `distro/app/app.go: Run` and `serve_*.go` assemble services and HTTP policy |
 | JSON contracts | `core/api/api.go: Server.Register`; feature handlers in `core/api/` |
-| Browser/blob delivery | `core/ui/ui.go`, `core/ui/spa.go`; `distro/app` wires API preview/download mirrors |
+| Browser/blob delivery | `core/ui/ui.go`, `core/ui/spa.go`; `core/uiassets` verifies generated browser builds; `distro/app` wires API preview/download mirrors |
 | Identity/access | `core/auth/`, `core/authz/`, `core/httpx/`; credentials in `plugins/local-auth/`, `plugins/oidc/` |
 | Durable state/work | `core/db/db.go`, `core/db/migrations/`, `core/blob/cas.go`, `core/jobs/jobs.go` |
 | Capture/processing | `core/api/documents.go: UploadDocument`, `core/ingest/`, `core/importer/bundle/`, `core/pipeline/postingest/` |
@@ -87,6 +87,14 @@ not coordinate multiple servers sharing SQLite.
 Build version/revision resolve once at boot and enter authenticated `/api/whoami`
 metadata. Docker receives revision explicitly because its context excludes `.git`.
 Settings consumes that identity; no update service is involved.
+
+Production build entry points generate the Svelte bundle, verify its source and
+bundle hashes, and compile `core/ui` with the `embedded_ui` build tag. The
+generated directory is ignored by Git. Untagged development binaries load that
+directory from the checkout and stop during server assembly when it is missing
+or stale; `make ui` restores the required state. CI passes one target-SHA-bound
+bundle from its frontend job to Go test and cross-build jobs, while Docker uses
+a pinned Bun build stage and copies only generated files into the Go stage.
 
 ## From upload to usable document
 

@@ -11,6 +11,18 @@ ARG RUST_IMAGE=rust:1.97.1-alpine@sha256:3c38f3f82c2f3d73da3b38e18d279393a04cb43
 ARG ALPINE_IMAGE=alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 ARG GO_IMAGE=golang:1.27.0-alpine@sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d12bdfc999fee45ea9d6c46dbc
 ARG DEBIAN_IMAGE=debian:bookworm-20260803-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
+ARG BUN_IMAGE=oven/bun:1.4.1-alpine@sha256:2ef545220f7a886f22fcb3f2309bbd6bcf1c0aa04b7d79c31765c7aa4a13aac1
+
+# Build the browser application from source. Bun and node_modules remain in this
+# stage; only Vite's generated output crosses into the Go builder.
+FROM ${BUN_IMAGE} AS ui-build
+USER bun
+WORKDIR /home/bun/app
+COPY --chown=bun:bun ui/package.json ui/bun.lock ./
+RUN bun install --frozen-lockfile
+COPY --chown=bun:bun ui/ ./
+RUN bun run build
+
 
 # Build the pinned anydoc converter once for both runtime images. The readable
 # tag is audited by hack/pin-bumper.sh; the resolved commit controls checkout.
@@ -61,8 +73,8 @@ RUN wget -q -O source.tar.gz \
     mkdir -p /out && \
     cp -R "Email-Outlook-Message-${MSGCONVERT_VERSION}/lib/Email/Outlook" /out/Outlook
 
-# Compile the static Suchi binary. The web app is already built and committed
-# under core/ui/spa/dist; make ui-check and release preflight verify that copy.
+# Compile the static Suchi binary. The Go build stage records and verifies the
+# source and bundle hashes before embedding the generated browser application.
 FROM ${GO_IMAGE} AS build
 ARG VERSION=dev
 ARG REVISION
@@ -75,10 +87,14 @@ COPY core core
 COPY plugins plugins
 COPY distro distro
 COPY hack hack
+COPY ui ui
+COPY --from=ui-build /home/bun/app/dist core/ui/spa/dist
 
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION} -X main.revision=${REVISION}" -o /out/suchi ./distro/cmd/suchi
+    go run ./hack/ui-assets write ui core/ui/spa/dist && \
+    go run ./hack/ui-assets verify ui core/ui/spa/dist && \
+    CGO_ENABLED=0 go build -tags=embedded_ui -trimpath -ldflags="-s -w -X main.version=${VERSION} -X main.revision=${REVISION}" -o /out/suchi ./distro/cmd/suchi
 
 # Full runtime: Debian packages OCRmyPDF and its archive-processing stack.
 FROM ${DEBIAN_IMAGE} AS full

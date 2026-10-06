@@ -141,13 +141,16 @@ artifact checks and coordinated store publication order live in the
 [Companion release runbook](https://github.com/johnnybravo-xyz/suchi-companion/blob/main/RELEASE.md);
 do not duplicate them here.
 
-1. When the web app changed, rebuild its committed embedded copy and review the
-   generated asset changes:
+1. Build and verify the web app from the release sources:
 
    ```sh
-   make ui
-   git diff -- core/ui/spa/dist
+   make ui-check
+   make ui-verify
    ```
+
+   `core/ui/spa/dist` remains ignored. CI builds it once from the immutable
+   release revision, passes that artifact to every tagged binary build, and
+   rebuilds it in the pinned Bun stage for container images.
 
 2. Move the `[Unreleased]` entries under the new version and date. Update
    `developmentVersion` in `distro/cmd/suchi/main.go` to the current source version

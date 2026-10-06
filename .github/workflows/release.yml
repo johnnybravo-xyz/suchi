@@ -62,6 +62,10 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        with:
+          name: spa-${{ github.sha }}
+          path: core/ui/spa/dist
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.work
@@ -331,10 +335,16 @@ jobs:
           - { goos: windows, goarch: amd64 }
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        with:
+          name: spa-${{ github.sha }}
+          path: core/ui/spa/dist
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.work
           cache-dependency-path: '**/go.sum'
+      - name: verify frontend artifact
+        run: go run ./hack/ui-assets verify ui core/ui/spa/dist
       - name: build
         env:
           GOOS: ${{ matrix.goos }}
@@ -346,6 +356,7 @@ jobs:
           bin=suchi-${ARTIFACT_VERSION}-${GOOS}-${GOARCH}
           [ "$GOOS" = "windows" ] && bin=${bin}.exe
           go build \
+            -tags=embedded_ui \
             -trimpath \
             -ldflags="-s -w -X main.version=${ARTIFACT_VERSION} -X main.revision=${GITHUB_SHA}" \
             -o "$RUNNER_TEMP/$bin" ./distro/cmd/suchi

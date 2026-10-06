@@ -166,6 +166,26 @@ jobs:
           echo "::add-mask::$API_TOKEN"
           echo "API_TOKEN=$API_TOKEN" >> $GITHUB_ENV
 
+      - name: Verify embedded browser assets
+        run: |
+          set -euo pipefail
+          base="http://127.0.0.1:$HOST_PORT/app"
+          curl -fsS --cookie /tmp/admin.cookies "$base/" -o /tmp/spa-index.html
+          curl -fsS "$base/manifest.webmanifest" -o /tmp/spa-manifest.webmanifest
+          curl -fsS "$base/third-party-notices.txt" -o /tmp/spa-third-party-notices.txt
+          test -s /tmp/spa-index.html
+          test -s /tmp/spa-manifest.webmanifest
+          test -s /tmp/spa-third-party-notices.txt
+          shell=$(cat /tmp/spa-index.html)
+          if [[ "$shell" =~ src=\"\\./(assets/index-[^\"]+\\.js)\" ]]; then
+            entry=${BASH_REMATCH[1]}
+          else
+            echo "hashed SPA entry asset missing from /app/" >&2
+            exit 1
+          fi
+          curl -fsS "$base/$entry" -o /tmp/spa-entry.js
+          test -s /tmp/spa-entry.js
+
       - name: Upload PDF and Outlook fixtures
         run: |
           for f in text-native scanned; do
