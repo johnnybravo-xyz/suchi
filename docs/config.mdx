@@ -526,7 +526,8 @@ variant overrides either config-file variant.
   A stock install makes **zero outbound connections** (principle 8). At boot,
   suchi logs `main.egress.surface` listing every effective outbound path — OIDC
   discovery, database-backed IMAP polling, and cloud LLM
-  endpoints. Destinations are redacted to safe origins. `outbound: none` is the
+  endpoints, including the fixed provider destination for Account subscription
+  (`https://chatgpt.com` for OpenAI ChatGPT). Destinations are redacted to safe origins. `outbound: none` is the
   safe default; `suchi doctor` reads the same inventory from the current database.
 </Note>
 

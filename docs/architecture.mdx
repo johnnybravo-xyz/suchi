@@ -88,6 +88,10 @@ Build version/revision resolve once at boot and enter authenticated `/api/whoami
 metadata. Docker receives revision explicitly because its context excludes `.git`.
 Settings consumes that identity; no update service is involved.
 
+Startup and doctor egress inventories resolve subscription inference destinations
+through the shipped provider registry before redacting them to origins. This
+reports active ChatGPT inference even though its stored endpoint URL is empty.
+
 ## From upload to usable document
 
 ```mermaid

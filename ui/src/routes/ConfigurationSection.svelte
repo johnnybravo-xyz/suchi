@@ -61,6 +61,7 @@
   let llmTesting = $state(false)
   let subscriptionProvider = $state('openai_chatgpt')
   let llmMode = $state('local')
+  let modeDrafts = {}
   let loginCode = $state(null)
   let loginBusy = $state(false)
   let loginError = $state('')
@@ -83,7 +84,10 @@
       const result = await getSubscriptionModels(subscriptionProvider)
       if (disposed || generation !== modelsGeneration || llmMode !== 'subscription' || !llmStatus?.subscription_connected) return
       subscriptionModels = result.models || []
-      if (!subscriptionModels.some(model => model.id === llm.model)) llm.model = subscriptionModels[0]?.id || ''
+      if (!subscriptionModels.some(model => model.id === llm.model)) {
+        const saved = llmStatus?.subscription_model
+        llm.model = subscriptionModels.some(model => model.id === saved) ? saved : subscriptionModels[0]?.id || ''
+      }
     } catch (ex) {
       if (!disposed && generation === modelsGeneration) { modelsError = ex.message || 'Could not load ChatGPT models.'; subscriptionModels = [] }
     } finally { if (!disposed && generation === modelsGeneration) modelsLoading = false }
@@ -169,6 +173,7 @@
   async function loadLLM() {
     const st = await getLLMSettings()
     llmStatus = st
+    modeDrafts = {}
     llm.enabled = !!st?.enabled
     llm.endpoint_url = st?.endpoint_url || 'http://host.suchi.local:11434/v1'
     llm.model = st?.model || 'qwen2.5:7b'
@@ -280,26 +285,19 @@
     if (llmMode === mode) return
     if (loginCode) void endSubscriptionLogin('cancel')
     modelsGeneration++; modelsLoading = false; subscriptionModels = []; modelsError = ''
+    modeDrafts[llmMode] = { endpoint_url: llm.endpoint_url, model: llm.model, egress_ack: llm.egress_ack }
     llmMode = mode
     modelSaveError = ''
     llm.api_key = ''
     llm.clear_api_key = false
     invalidateLLMTest()
-    if (mode === 'subscription') {
-      llm.endpoint_url = ''
-      llm.model = llmStatus?.subscription_model || (llmStatus?.mode === 'subscription' ? llmStatus.model : '')
-      llm.egress_ack = false
-      if (llmStatus?.subscription_connected) void loadSubscriptionModels()
-      return
-    }
-    if (mode === 'local' && (!llm.endpoint_url || !isLocalEndpoint(llm.endpoint_url))) {
-      llm.endpoint_url = 'http://host.suchi.local:11434/v1'
-      if (!llm.model) llm.model = 'qwen2.5:7b'
-      llm.egress_ack = false
-    } else if (mode === 'hosted' && (isLocalEndpoint(llm.endpoint_url) || !llm.endpoint_url)) {
-      llm.endpoint_url = ''
-      llm.egress_ack = false
-    }
+    const draft = modeDrafts[mode] || (mode === 'local'
+      ? { endpoint_url: 'http://host.suchi.local:11434/v1', model: 'qwen2.5:7b', egress_ack: false }
+      : { endpoint_url: '', model: mode === 'subscription' ? llmStatus?.subscription_model || (llmStatus?.mode === 'subscription' ? llmStatus.model : '') : '', egress_ack: false })
+    llm.endpoint_url = draft.endpoint_url
+    llm.model = draft.model
+    llm.egress_ack = draft.egress_ack
+    if (mode === 'subscription' && llmStatus?.subscription_connected) void loadSubscriptionModels()
   }
 
   function setClearAPIKey(event) {

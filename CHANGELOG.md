@@ -13,6 +13,10 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Include active account subscription destinations in startup and doctor egress
+  reports; preserve mode-specific endpoint/model drafts and restore the saved
+  subscription model after reconnecting.
+
 - Keep local matching options editable after an account subscription disconnect,
   without changing or reloading the saved model configuration.
 

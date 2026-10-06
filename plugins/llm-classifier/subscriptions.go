@@ -41,3 +41,13 @@ func (s *Subscriptions) Provider(id string) (settings.SubscriptionProvider, bool
 }
 
 func (l *ChatGPTLogin) endpoint() string { return ChatGPTEndpoint }
+
+// Endpoint returns the fixed inference destination for a registered provider.
+// It does not read credentials or initiate a connection.
+func (s *Subscriptions) Endpoint(id string) string {
+	p, err := s.provider(id)
+	if err != nil {
+		return ""
+	}
+	return p.endpoint()
+}

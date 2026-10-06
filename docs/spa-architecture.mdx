@@ -274,7 +274,10 @@ It displays only a device code and verification URL, polls through the named
 The named `getSubscriptionModels(provider)` operation loads the account catalog into a dropdown
 on connection, provider selection and saved-state reload. Dropdown changes use
 `saveSubscriptionModel(provider, model)` to persist a separate preference, with saving/error/retry states;
-reload restores it without activating inference. Loading, empty and
+reload restores it without activating inference. Mode switches retain separate
+endpoint, model and consent drafts for Local, Hosted endpoint and Account subscription.
+Catalog selection keeps an available current model, then the saved subscription
+model, then the first entry, including after reconnecting. Loading, empty and
 retry states gate connection testing. Generation checks reject late catalog or
 test results after provider/model changes or disposal. Tokens remain server-side.
 Connecting does not enable the model: the existing

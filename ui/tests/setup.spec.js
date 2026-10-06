@@ -6275,3 +6275,57 @@ test('Account subscription allows local matching saves after disconnect without 
   await expect(page.getByRole('button', { name: 'Test connection', exact: true })).toBeDisabled()
   await expect(page.getByRole('button', { name: 'Enable model', exact: true })).toBeDisabled()
 })
+
+for (const [mode, endpoint] of [['Hosted endpoint', 'https://models.example.com/v1'], ['Local model', 'http://127.0.0.1:11434/v1']]) {
+  test(`Account subscription preserves ${mode} draft across mode round trips`, async ({ page }) => {
+    const settingsRequests = []
+    await mockAPI(page, { filingTreeChosen: true, llmEnabled: true, llmActive: true,
+      llmEndpoint: endpoint, llmModel: 'my-model', llmSettingsRequests: settingsRequests })
+    await page.goto('/#/settings?tab=archive&section=llm')
+    await page.getByRole('button', { name: 'Manage', exact: true }).first().click()
+    const endpointInput = page.getByLabel('Endpoint URL', { exact: true })
+    const model = page.getByRole('textbox', { name: 'Model', exact: true })
+    await expect(endpointInput).toHaveValue(endpoint)
+    await page.getByRole('button', { name: 'Account subscription', exact: true }).click()
+    await page.getByRole('button', { name: mode, exact: true }).click()
+    await expect(endpointInput).toHaveValue(endpoint)
+    await expect(model).toHaveValue('my-model')
+    // Unsaved edits survive too, and disabling sends the restored draft.
+    await endpointInput.fill(endpoint + '/draft')
+    await model.fill('draft-model')
+    await page.getByRole('button', { name: 'Account subscription', exact: true }).click()
+    await page.getByRole('button', { name: mode, exact: true }).click()
+    await expect(endpointInput).toHaveValue(endpoint + '/draft')
+    await expect(model).toHaveValue('draft-model')
+    await page.getByRole('button', { name: 'Disable model', exact: true }).click()
+    await expect.poll(() => settingsRequests.length).toBe(1)
+    expect(settingsRequests[0]).toMatchObject({ enabled: false, endpoint_url: endpoint + '/draft', model: 'draft-model' })
+  })
+}
+
+test('Account subscription restores saved model after disconnect and reconnect', async ({ page }) => {
+  const settingsRequests = []
+  const testRequests = []
+  await mockAPI(page, { filingTreeChosen: true, subscriptionConnected: true,
+    llmModel: 'saved-model', subscriptionModel: 'saved-model',
+    llmSettingsRequests: settingsRequests, llmTestRequests: testRequests })
+  await page.route('**/api/admin/settings/llm/subscriptions/openai_chatgpt/*', route => {
+    const action = new URL(route.request().url()).pathname.split('/').at(-1)
+    return route.fulfill({ json: action === 'models'
+      ? { models: [{ id: 'first-model', name: 'First model' }, { id: 'saved-model', name: 'Saved model' }] }
+      : action === 'start'
+        ? { user_code: 'ABCD-1234', verification_url: 'https://auth.openai.com/codex/device', interval: 1 }
+        : { connected: action !== 'disconnect' } })
+  })
+  await page.goto('/#/settings?tab=archive&section=llm')
+  await page.getByRole('button', { name: /^(Set up model|Manage)$/ }).first().click()
+  const model = page.getByRole('combobox', { name: 'Model', exact: true })
+  await expect(model).toHaveValue('saved-model')
+  await page.getByRole('button', { name: 'Disconnect ChatGPT', exact: true }).click()
+  await expect(page.getByText('ChatGPT not connected', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Connect ChatGPT', exact: true }).click()
+  await expect(model).toHaveValue('saved-model')
+  await expect(page.getByRole('button', { name: 'Enable model', exact: true })).toBeDisabled()
+  expect(settingsRequests).toEqual([])
+  expect(testRequests).toEqual([])
+})

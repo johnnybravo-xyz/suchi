@@ -364,10 +364,7 @@ func Run(ctx context.Context, opts Options) error {
 	liveOCRLanguages.Store(append([]string(nil), runtimePrefs.OCRLanguages...))
 
 	// Include the resolved settings-backed LLM endpoint in the egress log.
-	llmEgressEndpoint := ""
-	if llm.Enabled() {
-		llmEgressEndpoint = resolvedLLM.EndpointURL
-	}
+	llmEgressEndpoint := resolveLLMEgressEndpoint(resolvedLLM, llm.Enabled(), subscriptions)
 	egress, egressErr := diagnostics.EnumerateEgress(ctx, d, cfg, llmEgressEndpoint)
 	if egressErr != nil {
 		log.Warn("main.egress.enumerate_failed", "err", egressErr.Error())
@@ -792,4 +789,14 @@ func logEgressSurface(log *slog.Logger, egress []string) {
 	} else {
 		log.Info("main.egress.surface", "outbound", egress)
 	}
+}
+
+func resolveLLMEgressEndpoint(cfg settings.LLMConfig, enabled bool, subscriptions *llmclassifier.Subscriptions) string {
+	if !enabled {
+		return ""
+	}
+	if cfg.SubscriptionProvider != "" {
+		return subscriptions.Endpoint(cfg.SubscriptionProvider)
+	}
+	return cfg.EndpointURL
 }
