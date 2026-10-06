@@ -21,7 +21,7 @@ export const ARCHIVE_SETTINGS_GROUPS = [
         href: '#/settings?tab=archive&section=users',
       },
       {
-        name: 'metadata', label: 'Metadata', icon: 'settings',
+        name: 'metadata', label: 'Metadata', icon: 'tag',
         description: 'Manage document labels, correspondents, and custom fields.',
         href: '#/settings?tab=archive&section=metadata',
       },

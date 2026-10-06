@@ -33,6 +33,10 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Give Metadata its own tag icon so it is visually distinct from the Archive
+  configuration overview.
+- Right-align Document Detail metadata actions, revealing **Manage tags** only
+  while editing tags, while keeping values readable at narrow widths.
 - Repair rendered links created by beta.1 and beta.2 when a stable-v1 refile
   verifies that the linked blob belongs to the document.
 - Keep operational dead-job details and the Retry/Dismiss recovery controls out

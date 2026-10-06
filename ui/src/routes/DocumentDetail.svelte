@@ -1233,18 +1233,23 @@
           {/if}
           <dt>Tags</dt>
           <dd class="document-tags">
-            <div class="tag-pills">
-              {#each doc.tags || [] as slug}
-                <span class="pill">{slug}
-                  {#if editingTags}
-                    <button class="tag-remove" type="button" aria-label={`Remove tag ${slug}`}
-                            disabled={tagsBusy || !tagOptions.some(tag => tag.slug === slug)}
-                            onclick={() => changeTag(tagOptions.find(tag => tag.slug === slug), 'remove_tag')}><Icon name="x" size={12} /></button>
-                  {/if}
-                </span>
-              {:else}<span class="sub">No tags</span>{/each}
-              {#if !trashed && !editingTags}<button class="btn sm" aria-label="Edit tags" type="button" onclick={startEditTags}>Edit</button>{/if}
-              {#if session.user?.role === 'admin'}<a class="btn sm" href={filingHref(TAGS_SETTINGS_HASH)}>Manage tags</a>{/if}
+            <div class="metadata-display">
+              <div class="metadata-value tag-pills">
+                {#each doc.tags || [] as slug}
+                  <span class="pill">{slug}
+                    {#if editingTags}
+                      <button class="tag-remove" type="button" aria-label={`Remove tag ${slug}`}
+                              disabled={tagsBusy || !tagOptions.some(tag => tag.slug === slug)}
+                              onclick={() => changeTag(tagOptions.find(tag => tag.slug === slug), 'remove_tag')}><Icon name="x" size={12} /></button>
+                    {/if}
+                  </span>
+                {:else}<span class="sub">No tags</span>{/each}
+              </div>
+              {#if !trashed && !editingTags}
+                <div class="metadata-actions"><button class="btn sm" aria-label="Edit tags" type="button" onclick={startEditTags}>Edit</button></div>
+              {:else if editingTags && session.user?.role === 'admin'}
+                <div class="metadata-actions"><a class="btn sm" href={filingHref(TAGS_SETTINGS_HASH)}>Manage tags</a></div>
+              {/if}
             </div>
             {#if editingTags}
               <div class="tag-actions">
@@ -1318,14 +1323,16 @@
                   {#if editor.error}<p class="err" role="alert">{editor.error}</p>{/if}
                 </form>
               {:else}
-                <span class:sub={!field.is_set}>
-                  {#if field.data_type === 'url' && field.value}
-                    <a href={field.value} target="_blank" rel="noreferrer">{customFieldDisplay(field)}</a>
-                  {:else}
-                    {field.is_set ? customFieldDisplay(field) : 'Not set'}
-                  {/if}
-                </span>
-                {#if !trashed}<button class="btn sm" type="button" onclick={() => startCustomFieldEdit(field)}>{field.is_set ? 'Edit' : 'Add'}</button>{/if}
+                <div class="metadata-display">
+                  <span class="metadata-value" class:sub={!field.is_set}>
+                    {#if field.data_type === 'url' && field.value}
+                      <a href={field.value} target="_blank" rel="noreferrer">{customFieldDisplay(field)}</a>
+                    {:else}
+                      {field.is_set ? customFieldDisplay(field) : 'Not set'}
+                    {/if}
+                  </span>
+                  {#if !trashed}<div class="metadata-actions"><button class="btn sm" type="button" onclick={() => startCustomFieldEdit(field)}>{field.is_set ? 'Edit' : 'Add'}</button></div>{/if}
+                </div>
               {/if}
             </dd>
           {/each}
@@ -1340,15 +1347,19 @@
                 <span class="sub" style="width:100%">Comma-separated ISO codes. Empty clears &amp; unlocks.</span>
               </form>
             {:else}
-              {#if doc.languages}
-                {#each doc.languages.split(',') as code}
-                  <span class="pill" style="margin-right:5px">{code.trim()}</span>
-                {/each}
-                {#if doc.languages_locked}<span class="sub" title="Set by user; automatic detection won't overwrite">· locked</span>{/if}
-              {:else}
-                <span class="sub">not detected</span>
-              {/if}
-              {#if !trashed}<button class="btn sm" style="margin-left:8px" onclick={startEditLanguages} type="button">Edit</button>{/if}
+              <div class="metadata-display">
+                <div class="metadata-value">
+                  {#if doc.languages}
+                    {#each doc.languages.split(',') as code}
+                      <span class="pill">{code.trim()}</span>
+                    {/each}
+                    {#if doc.languages_locked}<span class="sub" title="Set by user; automatic detection won't overwrite">· locked</span>{/if}
+                  {:else}
+                    <span class="sub">not detected</span>
+                  {/if}
+                </div>
+                {#if !trashed}<div class="metadata-actions"><button class="btn sm" onclick={startEditLanguages} type="button">Edit</button></div>{/if}
+              </div>
             {/if}
           </dd>
         </dl>
@@ -1844,6 +1855,10 @@
     .detail-sidebar { height:100%; min-height:0; overflow-y:auto; overscroll-behavior:contain; scrollbar-gutter:stable; }
   }
   .document-tags { min-width:0 }
+  .metadata-display { display:flex; align-items:flex-start; flex-wrap:wrap; gap:7px; width:100%; min-width:0; }
+  .metadata-value { display:flex; flex:1 1 90px; align-items:center; flex-wrap:wrap; gap:6px; min-width:0; }
+  .metadata-actions { display:flex; flex:0 1 auto; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:6px; margin-left:auto; }
+  .metadata-actions .btn { flex:none; }
   .tag-pills, .tag-actions { display:flex; flex-wrap:wrap; align-items:center; gap:6px }
   .tag-pills .pill { max-width:100%; white-space:normal }
   .tag-remove { display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; padding:0; border:0; background:transparent; color:inherit; cursor:pointer }
@@ -1852,7 +1867,6 @@
   .tag-actions :global(.tag-picker) { flex:1 1 140px }
   .inline-state { display:flex; align-items:center; justify-content:space-between; gap:10px; }
   .custom-field-value { min-width:0; }
-  .custom-field-value:not(:has(.custom-field-editor)) { display:flex; align-items:center; flex-wrap:wrap; gap:7px; }
   .custom-field-editor { display:grid; gap:7px; width:100%; }
   .custom-field-editor > .input { width:100%; max-width:none; }
   .custom-field-actions { display:flex; align-items:center; flex-wrap:wrap; gap:6px; }
