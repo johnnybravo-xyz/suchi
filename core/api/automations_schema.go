@@ -90,7 +90,7 @@ var automationSchema = AutomationSchema{
 			},
 		},
 		{
-			Kind: "assign_storage_path", Name: "Assign rendered layout",
+			Kind: "assign_storage_path", Name: "Assign folder layout",
 			Params: []AutomationActionParam{
 				{Name: "storage_path_id", Type: "id", Required: true, TargetKind: "rendered_layout"},
 			},

@@ -170,7 +170,7 @@ func TestImportEndToEnd(t *testing.T) {
 		t.Fatalf("unsupported type path remained on %d documents", unsupportedPathRefs)
 	}
 	if !slices.ContainsFunc(rep.Warnings, func(warning string) bool {
-		return warning == `rendered layout "Unsupported type expression" skipped: unsupported document_type template expression`
+		return warning == `folder layout "Unsupported type expression" skipped: unsupported document_type template expression`
 	}) {
 		t.Fatalf("missing unsupported template warning: %v", rep.Warnings)
 	}

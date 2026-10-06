@@ -652,11 +652,11 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, errRenderedLayoutUnavailable) {
-			s.writeError(w, http.StatusBadRequest, "rendered_layout_unavailable", "rendered layout is unavailable in this filing system")
+			s.writeError(w, http.StatusBadRequest, "rendered_layout_unavailable", "folder layout is unavailable in this filing system")
 			return
 		}
 		if errors.Is(err, errRenderedLayoutNeedsASN) {
-			s.writeError(w, http.StatusConflict, "rendered_layout_requires_archive_number", "this rendered layout requires a previous archive number")
+			s.writeError(w, http.StatusConflict, "rendered_layout_requires_archive_number", "this folder layout requires a previous archive number")
 			return
 		}
 		s.serverErr(w, "api.patch.update", err)

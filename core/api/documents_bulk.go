@@ -168,7 +168,7 @@ func (s *Server) BulkEdit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, errRenderedLayoutNeedsASN) {
-			s.writeError(w, http.StatusConflict, "rendered_layout_requires_archive_number", "this rendered layout requires a previous archive number")
+			s.writeError(w, http.StatusConflict, "rendered_layout_requires_archive_number", "this folder layout requires a previous archive number")
 			return
 		}
 		if errors.Is(err, errBadParams) {

@@ -317,7 +317,7 @@ test('keeps outgoing and incoming document links in one compact tab', async ({ p
   expect(writes[1].method).toBe('DELETE')
 })
 
-test('edits typed metadata, notes, and rendered layout without exposing compatibility IDs', async ({ page }) => {
+test('edits typed metadata and tabbed notes without exposing folder-layout controls', async ({ page }) => {
   const writes = []
   const notes = [{
     id: 9, user_id: 1, author: 'Admin', note: 'Check the tariff',
@@ -342,13 +342,6 @@ test('edits typed metadata, notes, and rendered layout without exposing compatib
       }] } })
       return true
     }
-    if (path === '/api/rendered_layouts/') {
-      await route.fulfill({ json: { results: [
-        { id: 7, name: 'Bills by year', path: 'Bills/{{ created_year }}/{{ title }}', uses_asn: false },
-        { id: 8, name: 'Imported folders', path: 'Legacy/{{ asn }}/{{ title }}', uses_asn: true },
-      ] } })
-      return true
-    }
     if (path === '/api/documents/42/custom_fields/11' && request.method() === 'PUT') {
       const body = request.postDataJSON()
       writes.push({ kind: 'field', body })
@@ -365,11 +358,6 @@ test('edits typed metadata, notes, and rendered layout without exposing compatib
       } })
       return true
     }
-    if (path === '/api/documents/42' && request.method() === 'PATCH') {
-      writes.push({ kind: 'document', body: request.postDataJSON() })
-      await route.fulfill({ json: { id: 42 } })
-      return true
-    }
     return false
   })
 
@@ -380,20 +368,22 @@ test('edits typed metadata, notes, and rendered layout without exposing compatib
   await fieldRow.getByRole('button', { name: 'Save' }).click()
   await expect(fieldRow.getByText('250.5', { exact: true })).toBeVisible()
 
+  await expect(page.getByRole('tab', { name: 'Notes 1' })).toBeVisible()
+  const contextTabs = page.getByRole('tablist', { name: 'Document context' }).getByRole('tab')
+  await expect(contextTabs.last()).toHaveAccessibleName('Notes 1')
+  await page.getByRole('tab', { name: 'Notes 1' }).click()
   const notesCard = page.getByRole('region', { name: 'Document notes' })
   await expect(notesCard.getByText('Check the tariff', { exact: true })).toBeVisible()
   await notesCard.getByLabel('Add a note').fill('Call the utility')
   await notesCard.getByRole('button', { name: 'Add note' }).click()
   await expect(notesCard.getByText('Call the utility', { exact: true })).toBeVisible()
+  await expect(page.getByRole('tab', { name: 'Notes 2' })).toBeVisible()
 
-  const layout = page.getByRole('combobox', { name: 'Rendered layout' })
-  await expect(layout.getByRole('option', { name: /Imported folders/ })).toBeDisabled()
-  await layout.selectOption('7')
-
+  await expect(page.getByRole('combobox', { name: 'Folder layout' })).toHaveCount(0)
+  await expect(page.getByText('Folder layout', { exact: true })).toHaveCount(0)
   expect(writes).toEqual([
     { kind: 'field', body: { value: 250.5 } },
     { kind: 'note', body: { note: 'Call the utility' } },
-    { kind: 'document', body: { rendered_layout_id: 7 } },
   ])
   await expect(page.getByText('Previous archive number', { exact: true })).toHaveCount(0)
 })

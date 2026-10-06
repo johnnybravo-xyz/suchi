@@ -50,18 +50,20 @@ right. **Any date** opens the From/To added-date controls.
 
 Document detail keeps **All documents** on the left and groups Download, access,
 sharing, phone, and Trash actions on the right. Live documents show **Similar
-documents**, **Linked documents**, and **Versions** in one tabbed card; the first
-tab is selected whenever a document opens. **Linked documents** separates links
-added on the open document from links added elsewhere. Ordinary custom fields
-stay in the metadata card with controls matching their declared type.
+documents**, **Linked documents**, **Versions**, and **Notes** in one tabbed
+card; Notes is last and the first tab is selected whenever a document opens.
+**Linked documents** separates links added on the open document from links added
+elsewhere. Ordinary custom fields stay in the metadata card with controls
+matching their declared type.
 
-The **Notes** card adds attributed working context to this exact revision.
+The **Notes** tab adds attributed working context to this exact revision.
 Authors can edit/delete their own notes and administrators can moderate any
-note; Trash is read-only. Notes and typed custom fields do not copy to a
+note; Trash shows Notes read-only. Notes and typed custom fields do not copy to a
 replacement version. **Previous archive number** appears only when retained by
-an import and cannot be edited. The **Rendered layout** selector offers
-**Default JD layout** plus Filing Tree-owned layouts. A compatibility layout
-using the previous archive number is unavailable when the document has none.
+an import and cannot be edited. Folder-layout assignment is intentionally absent
+from Document Detail; administrators manage definitions under **Advanced >
+Folder layouts**, while controlled bulk/API and automation workflows assign
+them.
 
 On wide screens the preview and detail column keep one viewport-filling height;
 longer metadata, notes, and extracted text scroll inside the detail column
@@ -301,7 +303,7 @@ Admins also have **Settings > Archive configuration**:
 | **Structure and access** | **Filing tree**, **People**, **Metadata**           |
 | **Document intake**      | **Watched folder**, **Email intake**                |
 | **Processing**           | **Classification**, **Automations**                |
-| **Maintenance**          | **OCR and backups**                                |
+| **Advanced**             | **Folder layouts**, **OCR and backups**            |
 
 The configuration frame fills the available screen height. Long sections scroll
 inside the right pane without moving section navigation or the version footer.
@@ -321,15 +323,17 @@ selector. Metadata types have navigable URLs, so reload and Back/Forward restore
 the selected catalog. Metadata is scoped to the current filing system; People is
 server-wide.
 
-**Filing tree** owns presets, custom tree construction, taxonomy import/export,
-and **Rendered layouts**. A layout editor shows the supported variables and a
-server-rendered sample path before save. Saved rows can be edited or deleted;
-deleting returns assigned documents to the default JD layout. Preview precedes
-taxonomy Apply; export explicitly offers starter rules or tree only. **What is
-included?** explains why neither replaces a [full backup](/backup-restore). Both
-**Automations** entry points open the same main editor. Rendered-layout actions
-use names rather than numeric IDs; custom-field actions use the chosen field's
-real type.
+**Filing tree** owns presets, custom tree construction, and taxonomy
+import/export. Preview precedes taxonomy Apply; export explicitly offers starter
+rules or tree only. **What is included?** explains why neither replaces a [full
+backup](/backup-restore).
+
+**Advanced > Folder layouts** controls paths in the local rendered filesystem.
+The editor shows supported variables and a server-rendered sample before save.
+Saved rows can be edited or deleted; deleting returns assigned documents to the
+default filing-tree projection. Both **Automations** entry points open the same
+main editor. Folder-layout actions use names rather than numeric IDs;
+custom-field actions use the chosen field's real type.
 
 After introduction, **Filing system · CODE** edits a nonblank name of at most 80
 characters and the complete direct membership set, including off-page people.

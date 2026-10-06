@@ -266,7 +266,7 @@ user and session. The callback then:
 A binding or email change preserves `users.id`, rotates every browser session,
 plants one replacement cookie, preserves API/mobile tokens, and requires a
 retained audit row in the same transaction. An email change also enqueues
-rerenders for rendered layouts that use the exact `owner` template variable.
+rerenders for folder-layout templates that use the exact `owner` variable.
 The numeric watched-folder owner remains attached to the same user without a
 watcher reload. Invalid or reserved email, a collision, a stale session, a
 disabled mode, a development-seeded account, or an audit failure leaves identity
@@ -443,7 +443,7 @@ with `Retry-After: 1`.
 
 The writer rechecks the canonical email, password hash, mode, development marker,
 enabled account and initiating session. It then preserves `users.id`, changes
-the email, queues rerenders for rendered layouts that use the exact `owner`
+the email, queues rerenders for folder layouts that use the exact `owner`
 template variable, rotates every browser session, and inserts retained
 `user.email_changed` as one transaction. Failure rolls back all of those
 effects. **204 No Content** plants the replacement cookie; every old browser
@@ -1585,18 +1585,18 @@ with any stored value rejects a type change with `409 data_type_in_use`; removin
 an in-use select/multi choice returns `409 choice_in_use`. Adding choices and
 renaming remain allowed. DELETE removes the definition and its values.
 
-### `/api/rendered_layouts/` — Filing Tree output
+### `/api/rendered_layouts/` — folder-layout templates
 
-Rendered layouts are named, selected-system templates for the local filesystem
-view. Internal persistence remains compatible with existing archives, but this
-is the public API and UI vocabulary.
+The UI calls these **Folder layouts**. The API retains `rendered_layouts` as the
+stable wire vocabulary for named, selected-system templates of the local
+filesystem view.
 
 | Method | Path                                | Behavior |
 | ------ | ----------------------------------- | -------- |
 | GET    | `/api/rendered_layouts/`            | Paged authenticated list |
 | POST   | `/api/rendered_layouts/`            | Admin create; body `{"name":"Bills by year","path":"Bills/{{ created_year }}/{{ title }}"}` |
 | PATCH  | `/api/rendered_layouts/{id}`        | Sparse name/template update |
-| DELETE | `/api/rendered_layouts/{id}`        | Delete; assigned documents return to the default JD layout |
+| DELETE | `/api/rendered_layouts/{id}`        | Delete; assigned documents return to the default filing-tree projection |
 | POST   | `/api/rendered_layouts/preview`     | Admin validation/sample rendering; body `{"template":"..."}` |
 
 Preview returns `{"path":"Bills/2026/March electricity bill","uses_asn":false}`.

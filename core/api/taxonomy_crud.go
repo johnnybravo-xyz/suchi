@@ -144,11 +144,11 @@ func previewRenderedLayout(template string) (string, bool, error) {
 		return "", false, err
 	}
 	if filepath.IsAbs(rendered) {
-		return "", false, errors.New("rendered layout must be relative")
+		return "", false, errors.New("folder layout must be relative")
 	}
 	rendered = filepath.ToSlash(renderpaths.SanitizePath(rendered))
 	if strings.TrimSpace(rendered) == "" || rendered == "." {
-		return "", false, errors.New("rendered layout produces an empty path")
+		return "", false, errors.New("folder layout produces an empty path")
 	}
 	if renderpaths.IsIndexPath(rendered) {
 		return "", false, fmt.Errorf("%q is reserved for the filing index", renderpaths.IndexDirectory)
@@ -270,7 +270,7 @@ func (s *Server) taxonomyCreate(w http.ResponseWriter, r *http.Request, table st
 		return
 	}
 	if withPath && (in.Path == nil || strings.TrimSpace(*in.Path) == "") {
-		s.writeError(w, http.StatusBadRequest, "missing_template", "template is required for rendered layouts")
+		s.writeError(w, http.StatusBadRequest, "missing_template", "template is required for folder layouts")
 		return
 	}
 	if withPath {

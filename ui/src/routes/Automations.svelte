@@ -202,7 +202,7 @@
         return p.owner_id ? `Set owner → user #${p.owner_id}` : 'Set owner'
       case 'assign_storage_path': {
         const layout = facets.renderedLayouts.find(candidate => Number(candidate.id) === Number(p.storage_path_id))
-        return layout ? `Assign rendered layout → ${layout.name}` : 'Assign rendered layout'
+        return layout ? `Assign folder layout → ${layout.name}` : 'Assign folder layout'
       }
       case 'assign_custom_field': {
         const field = facets.customFields.find(candidate => Number(candidate.id) === Number(p.field_id))
@@ -324,8 +324,8 @@
               {#each jdCategories as x}<option value={x.id}>{x.code} · {x.name}</option>{/each}
             </select>
           {:else if a.type === 'assign_storage_path'}
-            <select class="input action-value" aria-label="Rendered layout" bind:value={a.params.storage_path_id}>
-              <option value={0}>Choose rendered layout…</option>
+            <select class="input action-value" aria-label="Folder layout" bind:value={a.params.storage_path_id}>
+              <option value={0}>Choose folder layout…</option>
               {#each facets.renderedLayouts as layout}
                 <option value={layout.id}>{layout.name}{layout.uses_asn ? ' (previous archive number required)' : ''}</option>
               {/each}

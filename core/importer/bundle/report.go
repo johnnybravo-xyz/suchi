@@ -136,7 +136,7 @@ var summaryOrder = []struct {
 	{KindTag, "Tags"},
 	{KindCorrespondent, "Correspondents"},
 	{KindDocumentType, "Document types → tags"},
-	{KindStoragePath, "Rendered layouts"},
+	{KindStoragePath, "Folder layouts"},
 	{KindCustomField, "Custom fields"},
 	{KindNote, "Notes"},
 	{KindWorkflow, "Workflows"},

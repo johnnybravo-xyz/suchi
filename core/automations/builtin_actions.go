@@ -116,10 +116,10 @@ func BuiltinActions() []ActionDefinition {
 					JOIN documents d ON d.system_id = sp.system_id
 					WHERE sp.id = ? AND d.id = ?
 				`, id, target.DocID).Scan(&template, &asn); err != nil {
-					return fmt.Errorf("assign_storage_path: unavailable rendered layout: %w", err)
+					return fmt.Errorf("assign_storage_path: unavailable folder layout: %w", err)
 				}
 				if renderpaths.UsesVariable(template, "asn") && !asn.Valid {
-					return errors.New("assign_storage_path: rendered layout requires a previous archive number")
+					return errors.New("assign_storage_path: folder layout requires a previous archive number")
 				}
 				if _, err := tx.ExecContext(ctx,
 					`UPDATE documents SET storage_path_id = ? WHERE id = ?`, id, target.DocID); err != nil {

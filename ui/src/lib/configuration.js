@@ -62,10 +62,15 @@ export const ARCHIVE_SETTINGS_GROUPS = [
     ],
   },
   {
-    name: 'maintenance',
-    label: 'Maintenance',
-    description: 'OCR coverage and archive recovery settings.',
+    name: 'advanced',
+    label: 'Advanced',
+    description: 'Local filesystem output, OCR, and archive recovery settings.',
     items: [
+      {
+        name: 'folder-layouts', label: 'Folder layouts', icon: 'docs',
+        description: 'Control how documents appear in the local rendered filesystem.',
+        href: '#/settings?tab=archive&section=folder-layouts',
+      },
       {
         name: 'preferences', label: 'OCR and backups', icon: 'settings',
         description: 'Set OCR languages and the automatic backup schedule.',

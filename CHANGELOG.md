@@ -26,10 +26,10 @@ Notable user-visible changes to Suchi are recorded here.
   in-use definitions, type-aware Document Detail and automation controls,
   formatted API values, atomic sidecar ingestion, and value retrieval with
   `field:` comparisons.
-- Move filesystem-view configuration into Filing Tree as **Rendered layouts**,
-  with server-validated sample previews, per-document/default assignment,
-  named automation controls, transactional rerenders, and compatibility guards
-  for layouts that use read-only previous archive numbers.
+- Add **Folder layouts** under Archive configuration > Advanced, with
+  server-validated sample previews, named automation controls, transactional
+  rerenders, and compatibility guards for layouts that use read-only previous
+  archive numbers.
 
 ### Fixed
 
@@ -99,7 +99,7 @@ Notable user-visible changes to Suchi are recorded here.
   preserved live session for explicit provider binding.
 - Keep watched-folder ownership attached to a durable user ID across account
   email changes. Identity changes no longer rewrite or reload watcher settings;
-  owner-based rendered layouts rerender in the identity transaction.
+  owner-based folder layouts rerender in the identity transaction.
 - Treat all correspondent reads and writes as ordered, role-bearing relations.
   Singular sender edits promote or clear only the sender role, while explicit
   multi-party edits retain recipients, CCs and other relations.

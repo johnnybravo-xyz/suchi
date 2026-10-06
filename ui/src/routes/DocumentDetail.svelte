@@ -3,7 +3,7 @@
   import { scopedHash as filingHref } from '../lib/systems.svelte.js'
   import { captureScope, scopeCurrent } from '../lib/systems.svelte.js'
   import { onDestroy, untrack } from 'svelte'
-  import { getDocument, getDocumentIntrinsic, patchDocument, deleteDocument, restoreDocument, permanentlyDeleteDocument, documentVersions, documentBacklinks, uploadDocumentVersion, setDocumentCustomField, clearDocumentCustomField, createDocumentNote, updateDocumentNote, deleteDocumentNote, createShareLink, listShareLinks, deleteShareLink, previewPath, downloadPath, similarDocs, listGrants, putGrant, deleteGrant, listAllTags, listCustomFields, listRenderedLayouts, listDocuments, bulkEdit } from '../lib/api.js'
+  import { getDocument, getDocumentIntrinsic, patchDocument, deleteDocument, restoreDocument, permanentlyDeleteDocument, documentVersions, documentBacklinks, uploadDocumentVersion, setDocumentCustomField, clearDocumentCustomField, createDocumentNote, updateDocumentNote, deleteDocumentNote, createShareLink, listShareLinks, deleteShareLink, previewPath, downloadPath, similarDocs, listGrants, putGrant, deleteGrant, listAllTags, listCustomFields, listDocuments, bulkEdit } from '../lib/api.js'
   import { go } from '../lib/router.svelte.js'
   import { SENSITIVITY_OPTIONS, fmtDate, fmtBytes, isHighSensitivity, sensDot, sensitivityLabel } from '../lib/format.js'
   import { session } from '../lib/session.svelte.js'
@@ -34,10 +34,6 @@
   let customFieldDefinitions = $state([])
   let customFieldsLoading = $state(false)
   let customFieldsError = $state('')
-  let renderedLayouts = $state([])
-  let renderedLayoutsLoading = $state(false)
-  let renderedLayoutsError = $state('')
-  let renderedLayoutBusy = $state(false)
   let backlinks = $state({ count: 0, results: [], next: null, previous: null })
   let backlinksLoading = $state(false)
   let backlinksError = $state('')
@@ -95,13 +91,16 @@
   ]
 
   const RELATED_TABS = [
-    { id: 'similar', label: 'Similar documents' },
-    { id: 'backlinks', label: 'Linked documents' },
-    { id: 'versions', label: 'Versions' },
+    { id: 'similar', label: 'Similar documents', shortLabel: 'Similar' },
+    { id: 'backlinks', label: 'Linked documents', shortLabel: 'Linked' },
+    { id: 'versions', label: 'Versions', shortLabel: 'Versions' },
+    { id: 'notes', label: 'Notes', shortLabel: 'Notes' },
   ]
 
   function relatedTabCount(tab) {
-    return tab === 'backlinks' ? linkedDocumentCount : Math.max(0, versionHistory.count - 1)
+    if (tab === 'backlinks') return linkedDocumentCount
+    if (tab === 'notes') return doc?.notes?.length || 0
+    return Math.max(0, versionHistory.count - 1)
   }
 
   function selectRelatedTab(tab) {
@@ -113,10 +112,10 @@
     if (!keys.includes(event.key)) return
     event.preventDefault()
     const tabs = [...event.currentTarget.parentElement.querySelectorAll('[role="tab"]')]
-    const current = RELATED_TABS.findIndex(tab => tab.id === relatedTab)
-    const next = event.key === 'Home' ? 0 : event.key === 'End' ? RELATED_TABS.length - 1
-      : (current + (event.key === 'ArrowRight' ? 1 : -1) + RELATED_TABS.length) % RELATED_TABS.length
-    relatedTab = RELATED_TABS[next].id
+    const current = visibleRelatedTabs.findIndex(tab => tab.id === relatedTab)
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? visibleRelatedTabs.length - 1
+      : (current + (event.key === 'ArrowRight' ? 1 : -1) + visibleRelatedTabs.length) % visibleRelatedTabs.length
+    relatedTab = visibleRelatedTabs[next].id
     tabs[next]?.focus()
   }
 
@@ -127,6 +126,7 @@
   const canRestore = $derived(canManageTrash && doc?.deletes_at > Math.floor(Date.now() / 1000))
   const canReadFile = $derived(!trashed || canManageTrash)
   const canShareLinks = $derived(!trashed && hasCapability(session.user, 'share_links'))
+  const visibleRelatedTabs = $derived(trashed ? RELATED_TABS.filter(tab => tab.id === 'notes') : RELATED_TABS)
   const ordinaryCustomFields = $derived.by(() => {
     const fields = new Map()
     for (const definition of customFieldDefinitions) {
@@ -215,10 +215,6 @@
     customFieldDefinitions = []
     customFieldsLoading = false
     customFieldsError = ''
-    renderedLayouts = []
-    renderedLayoutsLoading = false
-    renderedLayoutsError = ''
-    renderedLayoutBusy = false
     backlinks = { count: 0, results: [], next: null, previous: null }
     backlinksLoading = false
     backlinksError = ''
@@ -259,11 +255,13 @@
       if (version !== loadVersion || !scopeCurrent(scope)) return
       doc = loaded
       titleDraft = loaded.title
-      if (loaded.trashed_at != null) return
+      if (loaded.trashed_at != null) {
+        relatedTab = 'notes'
+        return
+      }
       void loadVersions(documentID, 1, version, scope)
       void loadBacklinks(documentID, 1, version, scope)
       void loadCustomFieldDefinitions(version, scope)
-      void loadRenderedLayoutOptions(version, scope)
       void loadSimilarDocuments(documentID, version, scope)
       void loadAccess(documentID, version, scope)
     } catch (ex) {
@@ -352,51 +350,6 @@
     }
   }
 
-  async function loadRenderedLayoutOptions(version = loadVersion, scope = captureScope()) {
-    renderedLayoutsLoading = true
-    renderedLayoutsError = ''
-    try {
-      const result = await listRenderedLayouts()
-      if (disposed || version !== loadVersion || !scopeCurrent(scope)) return
-      renderedLayouts = result?.results || result || []
-    } catch (ex) {
-      if (!disposed && version === loadVersion && scopeCurrent(scope)) {
-        renderedLayoutsError = ex.message || 'Could not load rendered layouts.'
-      }
-    } finally {
-      if (!disposed && version === loadVersion && scopeCurrent(scope)) renderedLayoutsLoading = false
-    }
-  }
-
-  async function assignRenderedLayout(event) {
-    const layoutID = Number(event.currentTarget.value)
-    if (renderedLayoutBusy || trashed) return
-    const version = loadVersion
-    const documentID = id
-    const scope = captureScope()
-    renderedLayoutBusy = true
-    renderedLayoutsError = ''
-    try {
-      await patchDocument(documentID, { rendered_layout_id: layoutID })
-      if (disposed || version !== loadVersion || id !== documentID || !scopeCurrent(scope)) return
-      const layout = renderedLayouts.find(candidate => Number(candidate.id) === layoutID)
-      doc = {
-        ...doc,
-        rendered_layout: layout ? {
-          id: layout.id, name: layout.name, path: layout.path, uses_asn: !!layout.uses_asn,
-        } : null,
-      }
-      notify?.(layout ? `Rendered layout set to ${layout.name}` : 'Using the default JD layout')
-    } catch (ex) {
-      if (!disposed && version === loadVersion && id === documentID && scopeCurrent(scope)) {
-        renderedLayoutsError = ex.code === 'rendered_layout_requires_archive_number'
-          ? 'This layout requires a previous archive number, which this document does not have.'
-          : (ex.message || 'Could not assign the rendered layout.')
-      }
-    } finally {
-      if (!disposed && version === loadVersion && id === documentID && scopeCurrent(scope)) renderedLayoutBusy = false
-    }
-  }
 
   async function loadAccess(documentID = id, version = loadVersion, scope = captureScope()) {
     try {
@@ -1234,23 +1187,6 @@
               <span class="sub" style="margin-left:6px">{doc.jd_area_name}</span>
             {:else}<span class="chip">Category #{doc.jd_category_id}</span>{/if}
           </dd>
-          <dt>Rendered layout</dt>
-          <dd class="layout-assignment">
-            <select class="input" aria-label="Rendered layout" value={doc.rendered_layout?.id || 0}
-                    onchange={assignRenderedLayout} disabled={renderedLayoutsLoading || renderedLayoutBusy || trashed}>
-              <option value={0}>Default JD layout</option>
-              {#if doc.rendered_layout && !renderedLayouts.some(layout => Number(layout.id) === Number(doc.rendered_layout.id))}
-                <option value={doc.rendered_layout.id}>{doc.rendered_layout.name}</option>
-              {/if}
-              {#each renderedLayouts as layout (layout.id)}
-                <option value={layout.id} disabled={layout.uses_asn && doc.archive_serial_number == null}>
-                  {layout.name}{layout.uses_asn && doc.archive_serial_number == null ? ' — requires previous archive number' : ''}
-                </option>
-              {/each}
-            </select>
-            {#if renderedLayoutsError}<span class="meta-control-error" role="alert">{renderedLayoutsError}</span>
-            {:else if doc.rendered_layout?.uses_asn}<span class="meta-control-help">Uses this document’s previous archive number.</span>{/if}
-          </dd>
           <dt>Sensitivity</dt>
           <dd>
             {#if trashed}
@@ -1426,81 +1362,19 @@
       </div>
 
 
-      <section class="card notes-card" aria-label="Document notes">
-        <div class="notes-heading">
-          <div>
-            <h3>Notes</h3>
-            <p class="sub">Context kept with this exact document revision.</p>
-          </div>
-          <span class="pill">{doc.notes?.length || 0}</span>
-        </div>
 
-        {#if !trashed}
-          <form class="note-composer" onsubmit={addNote}>
-            <label for="new-document-note">Add a note</label>
-            <textarea id="new-document-note" class="input" rows="3" maxlength="16384"
-                      placeholder="Add context, a decision, or a follow-up…"
-                      bind:value={noteDraft} disabled={noteBusy}></textarea>
-            <div class="note-composer-actions">
-              <span class="sub">Visible to people who can open this document.</span>
-              <button class="btn primary sm" disabled={noteBusy || !noteDraft.trim()}>
-                {noteBusy && noteEditID == null && notePendingDelete == null ? 'Adding…' : 'Add note'}
-              </button>
-            </div>
-          </form>
-        {/if}
-
-        {#if noteError}<p class="err" role="alert">{noteError}</p>{/if}
-        <div class="note-list">
-          {#each doc.notes || [] as note (note.id)}
-            <article class="note-item">
-              <div class="note-meta">
-                <strong>{note.author}</strong>
-                <span class="sub">
-                  {fmtDate(note.updated_at || note.created_at)}
-                  {#if note.updated_at > note.created_at} · edited{/if}
-                </span>
-              </div>
-              {#if noteEditID === note.id}
-                <form class="note-edit" onsubmit={(event) => saveNoteEdit(event, note)}>
-                  <textarea class="input" rows="4" maxlength="16384" aria-label={`Edit note by ${note.author}`}
-                            bind:value={noteEditDraft} disabled={noteBusy}></textarea>
-                  <div class="note-actions">
-                    <button class="btn primary sm" disabled={noteBusy || !noteEditDraft.trim()}>
-                      {noteBusy ? 'Saving…' : 'Save'}
-                    </button>
-                    <button class="btn sm" type="button" disabled={noteBusy}
-                            onclick={() => { noteEditID = null; noteEditDraft = ''; noteError = '' }}>Cancel</button>
-                  </div>
-                </form>
-              {:else}
-                <p class="note-body">{note.note}</p>
-                {#if note.can_edit && !trashed}
-                  <div class="note-actions">
-                    <button class="btn sm" type="button" disabled={noteBusy} onclick={() => startNoteEdit(note)}>Edit</button>
-                    <button class="btn danger sm" type="button" disabled={noteBusy} onclick={() => (notePendingDelete = note)}>Delete</button>
-                  </div>
-                {/if}
-              {/if}
-            </article>
-          {:else}
-            <p class="sub note-empty">{trashed ? 'No notes on this revision.' : 'No notes yet. Add context without changing the original file.'}</p>
-          {/each}
-        </div>
-      </section>
-
-      {#if !trashed}
-        <section class="card related-card" aria-label="Document insights">
-          <div class="related-tabs" role="tablist" aria-label="Document insights">
-            {#each RELATED_TABS as tab}
+      <section class="card related-card" aria-label="Document context">
+        <div class="related-tabs" role="tablist" aria-label="Document context">
+            {#each visibleRelatedTabs as tab}
               <button id={`related-tab-${tab.id}`} type="button" role="tab"
                       aria-selected={relatedTab === tab.id}
+                      aria-label={tab.id === 'similar' ? tab.label : `${tab.label} ${relatedTabCount(tab.id)}`}
                       aria-controls={`related-panel-${tab.id}`}
                       tabindex={relatedTab === tab.id ? 0 : -1}
                       class:on={relatedTab === tab.id}
                       onclick={() => selectRelatedTab(tab.id)}
                       onkeydown={handleRelatedTabKey}>
-                {tab.label}
+                {tab.shortLabel}
                 {#if tab.id !== 'similar'}<span class="pill">{relatedTabCount(tab.id)}</span>{/if}
               </button>
             {/each}
@@ -1666,7 +1540,7 @@
                 </section>
               </div>
             </div>
-          {:else}
+          {:else if relatedTab === 'versions'}
             <div id="related-panel-versions" class="related-panel" role="tabpanel"
                  aria-labelledby="related-tab-versions" tabindex="0">
               {#if versionHistory.head_id && String(versionHistory.head_id) !== String(id)}
@@ -1719,9 +1593,73 @@
                 {/if}
               {/if}
             </div>
+          {:else}
+            <div id="related-panel-notes" class="related-panel" role="tabpanel"
+                 aria-labelledby="related-tab-notes" tabindex="0">
+              <section class="notes-panel" aria-label="Document notes">
+                <div class="notes-heading">
+                  <div>
+                    <h3>Notes</h3>
+                    <p class="sub">Context kept with this exact document revision.</p>
+                  </div>
+                </div>
+
+                {#if !trashed}
+                  <form class="note-composer" onsubmit={addNote}>
+                    <label for="new-document-note">Add a note</label>
+                    <textarea id="new-document-note" class="input" rows="3" maxlength="16384"
+                              placeholder="Add context, a decision, or a follow-up…"
+                              bind:value={noteDraft} disabled={noteBusy}></textarea>
+                    <div class="note-composer-actions">
+                      <span class="sub">Visible to people who can open this document.</span>
+                      <button class="btn primary sm" disabled={noteBusy || !noteDraft.trim()}>
+                        {noteBusy && noteEditID == null && notePendingDelete == null ? 'Adding…' : 'Add note'}
+                      </button>
+                    </div>
+                  </form>
+                {/if}
+
+                {#if noteError}<p class="err" role="alert">{noteError}</p>{/if}
+                <div class="note-list">
+                  {#each doc.notes || [] as note (note.id)}
+                    <article class="note-item">
+                      <div class="note-meta">
+                        <strong>{note.author}</strong>
+                        <span class="sub">
+                          {fmtDate(note.updated_at || note.created_at)}
+                          {#if note.updated_at > note.created_at} · edited{/if}
+                        </span>
+                      </div>
+                      {#if noteEditID === note.id}
+                        <form class="note-edit" onsubmit={(event) => saveNoteEdit(event, note)}>
+                          <textarea class="input" rows="4" maxlength="16384" aria-label={`Edit note by ${note.author}`}
+                                    bind:value={noteEditDraft} disabled={noteBusy}></textarea>
+                          <div class="note-actions">
+                            <button class="btn primary sm" disabled={noteBusy || !noteEditDraft.trim()}>
+                              {noteBusy ? 'Saving…' : 'Save'}
+                            </button>
+                            <button class="btn sm" type="button" disabled={noteBusy}
+                                    onclick={() => { noteEditID = null; noteEditDraft = ''; noteError = '' }}>Cancel</button>
+                          </div>
+                        </form>
+                      {:else}
+                        <p class="note-body">{note.note}</p>
+                        {#if note.can_edit && !trashed}
+                          <div class="note-actions">
+                            <button class="btn sm" type="button" disabled={noteBusy} onclick={() => startNoteEdit(note)}>Edit</button>
+                            <button class="btn danger sm" type="button" disabled={noteBusy} onclick={() => (notePendingDelete = note)}>Delete</button>
+                          </div>
+                        {/if}
+                      {/if}
+                    </article>
+                  {:else}
+                    <p class="sub note-empty">{trashed ? 'No notes on this revision.' : 'No notes yet. Add context without changing the original file.'}</p>
+                  {/each}
+                </div>
+              </section>
+            </div>
           {/if}
         </section>
-      {/if}
 
       {#if doc.content}
         <section class="card" aria-label="Extracted text">
@@ -1913,11 +1851,6 @@
   .tag-actions { margin:8px 0 4px }
   .tag-actions :global(.tag-picker) { flex:1 1 140px }
   .inline-state { display:flex; align-items:center; justify-content:space-between; gap:10px; }
-  .layout-assignment { display:grid; gap:5px; min-width:0; }
-  .layout-assignment .input { width:100%; max-width:none; padding:4px 8px; font-size:.8rem; }
-  .meta-control-help, .meta-control-error { font-size:.68rem; line-height:1.4; }
-  .meta-control-help { color:var(--muted); }
-  .meta-control-error { color:var(--danger); }
   .custom-field-value { min-width:0; }
   .custom-field-value:not(:has(.custom-field-editor)) { display:flex; align-items:center; flex-wrap:wrap; gap:7px; }
   .custom-field-editor { display:grid; gap:7px; width:100%; }
@@ -1985,7 +1918,7 @@
   .extracted { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; font-size: .8rem; color: var(--muted); margin: 0; }
   .extracted.expanded { max-height: 65vh; }
   .extracted-copy { width: 100%; max-width: none; font-size: .8rem; }
-  @container (max-width: 380px) {
+  @container (max-width: 520px) {
     .related-tabs { gap:0; }
     .related-tabs button { padding-inline:4px; font-size:.72rem; }
     .related-tabs .pill { margin-left:3px; padding-inline:4px; font-size:.58rem; }

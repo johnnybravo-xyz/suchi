@@ -41,7 +41,7 @@
       const result = await listRenderedLayouts()
       rows = result?.results || result || []
     } catch (ex) {
-      error = ex.message || 'Could not load rendered layouts.'
+      error = ex.message || 'Could not load folder layouts.'
     } finally {
       loading = false
     }
@@ -102,15 +102,15 @@
     try {
       if (editingID != null) {
         await patchRenderedLayout(editingID, { name: draft.name.trim(), path: draft.template.trim() })
-        notify?.('Rendered layout updated')
+        notify?.('Folder layout updated')
       } else {
         await createRenderedLayout({ name: draft.name.trim(), path: draft.template.trim() })
-        notify?.('Rendered layout created')
+        notify?.('Folder layout created')
       }
       await load()
       cancelEdit()
     } catch (ex) {
-      previewError = ex.message || 'Could not save this rendered layout.'
+      previewError = ex.message || 'Could not save this folder layout.'
     } finally {
       busy = false
     }
@@ -125,22 +125,22 @@
       rows = rows.filter(candidate => candidate.id !== row.id)
       deleteRequest = null
       if (editingID === row.id) cancelEdit()
-      notify?.('Rendered layout deleted')
+      notify?.('Folder layout deleted')
     } catch (ex) {
       deleteRequest = null
-      error = ex.message || 'Could not delete this rendered layout.'
+      error = ex.message || 'Could not delete this folder layout.'
     } finally {
       busy = false
     }
   }
 </script>
 
-<section class="layout-workspace" aria-labelledby="rendered-layouts-heading">
+<section class="layout-workspace" aria-labelledby="folder-layouts-heading">
   <header class="layout-heading">
     <div>
-      <span class="eyebrow">Filing tree output</span>
-      <h3 id="rendered-layouts-heading">Rendered layouts</h3>
-      <p>Choose how selected documents appear in the local rendered tree. The filing-system root and immutable originals stay unchanged.</p>
+      <span class="eyebrow">Local filesystem</span>
+      <h3 id="folder-layouts-heading">Folder layouts</h3>
+      <p>Control how assigned documents appear in the local rendered filesystem. The filing tree and immutable originals stay unchanged.</p>
     </div>
     <span class="pill">{rows.length} saved</span>
   </header>
@@ -188,7 +188,7 @@
     <section class="saved-layouts" aria-labelledby="saved-layouts-heading">
       <h4 id="saved-layouts-heading">Saved layouts</h4>
       {#if error}<div class="err" role="alert">{error} <button class="btn sm" onclick={load}>Retry</button></div>
-      {:else if loading}<p class="empty">Loading rendered layouts…</p>
+      {:else if loading}<p class="empty">Loading folder layouts…</p>
       {:else}
         <div class="layout-list">
           {#each rows as row (row.id)}
@@ -204,7 +204,7 @@
               </div>
             </article>
           {:else}
-            <p class="empty">No rendered layouts yet. Documents use the default filing-tree layout until one is assigned.</p>
+            <p class="empty">No folder layouts yet. Documents use the default filing-tree folders until a layout is assigned.</p>
           {/each}
         </div>
       {/if}
@@ -214,8 +214,8 @@
 
 {#if deleteRequest}
   <ConfirmDialog
-    title="Delete rendered layout?"
-    message={`“${deleteRequest.name}” will be removed. Documents assigned to it return to the default filing-tree layout.`}
+    title="Delete folder layout?"
+    message={`“${deleteRequest.name}” will be removed. Documents assigned to it return to the default filing-tree folders.`}
     confirmLabel="Delete layout"
     busyLabel="Deleting…"
     busy={busy}

@@ -203,7 +203,7 @@ Verify these boundaries with `go test ./core/api ./core/customfield ./core/db
 ./core/searchquery ./core/trash ./core/authz` and the version/reference browser
 workflow in `ui/tests/document-versions-references.spec.js`.
 
-### Typed metadata and rendered layouts
+### Typed metadata and folder layouts
 
 `core/api/document_notes.go` owns attributed, exact-revision notes. Document
 Detail projects them with author/admin edit authority. Create, update, and delete
@@ -220,14 +220,15 @@ ACL behavior. `core/searchquery` resolves `field:` against the system-local
 definition before compiling the matching typed column; `has-field:` remains the
 presence operator.
 
-Rendered layouts are Filing Tree output. The public boundary is
-`/api/rendered_layouts/`; `core/api/taxonomy_crud.go` validates templates and
-serves sample previews. Existing archives retain the internal `storage_paths`
-table, `documents.storage_path_id`, and persisted automation action names. The
-public bulk method and ACL kind are `set_rendered_layout` and
-`rendered_layout`. A document with no selection uses the default JD projection.
-Document PATCH, bulk actions, automations, template edits, and layout deletion
-enqueue rendered moves in the same transaction as their state change.
+The UI presents filesystem-view templates as **Folder layouts** under Advanced.
+The wire boundary remains `/api/rendered_layouts/`;
+`core/api/taxonomy_crud.go` validates templates and serves sample previews.
+Existing archives retain the internal `storage_paths` table,
+`documents.storage_path_id`, and persisted automation action names. The public
+bulk method and ACL kind are `set_rendered_layout` and `rendered_layout`. A
+document with no selection uses the default filing-tree projection. Document
+PATCH, bulk actions, automations, template edits, and layout deletion enqueue
+rendered moves in the same transaction as their state change.
 
 `archive_serial_number` is read-only compatibility metadata. Document Detail
 projects it as **Previous archive number**; no PATCH field exists.
@@ -503,7 +504,7 @@ These gates remain distinct:
   session preparation, and OIDC network exchange happen before the writer.
   Inside one write transaction the handler rechecks the canonical user, mode,
   initiating session, and local password hash or OIDC binding; updates the same
-  user ID; queues rerenders for that user's rendered layouts that use the exact
+  user ID; queues rerenders for that user's folder layouts that use the exact
   `owner` template variable; rotates browser sessions when identity
   changed; and writes the retained audit event. Watched-folder ownership is a
   numeric user ID, so an email change neither rewrites its setting nor reloads

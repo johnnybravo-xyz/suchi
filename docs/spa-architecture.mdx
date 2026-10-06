@@ -180,18 +180,16 @@ state, so an earlier save cannot change the next document's sensitivity or Revea
 
 `DocumentDetail.svelte` owns similar-document results, version history,
 replacement upload, attributed exact-revision notes, typed custom fields,
-rendered-layout assignment, outgoing references, and backlinks for one live
-route generation. Those reads load concurrently and every late response checks
-the document/account/system generation. Notes use optimistic screen-local
-create/update/delete state only after server success; Trash renders them
-read-only. Rendered-layout options are system-scoped and disable an `asn` layout
-when the document has no previous archive number. Similar documents, links, and
-versions share one screen-local tab card; opening another document resets
-selection to the first tab. Outgoing custom-field values and the independently
-paged backlink projection remain separate state and operations. [Document
-detail, versions and links](/document-versions-and-links) owns their user-facing
-vocabulary and semantic contract. Ordinary typed custom fields remain in the
-metadata card.
+outgoing references, and backlinks for one route generation. Those reads load
+concurrently and every late response checks the document/account/system
+generation. Notes use optimistic screen-local create/update/delete state only
+after server success. Similar documents, links, versions, and notes share one
+screen-local tab card, with Notes last; Trash skips the first three reads and
+shows Notes read-only. Opening another live document resets selection to the
+first tab. Outgoing custom-field values and the independently paged backlink
+projection remain separate state and operations. [Document detail, versions and
+links](/document-versions-and-links) owns their user-facing vocabulary and
+semantic contract. Ordinary typed custom fields remain in the metadata card.
 
 `api.js:uploadDocumentVersion` uses private multipart assembly so `source_mtime`
 and the caller's idempotency key are preserved. The screen keeps the selected
@@ -315,11 +313,13 @@ validates a synthetic response without changing application mode.
 `PeopleSettings.svelte` owns the separate People and Metadata destinations.
 People contains Users and Groups; Metadata selects among tags, correspondents,
 and custom fields. `FilingTreeSettings.svelte` owns presets, tree construction,
-taxonomy files, and `RenderedLayoutsSettings.svelte`. The layout editor calls
-the server preview rather than duplicating template semantics in JavaScript.
+and taxonomy files. `ArchiveSettings.svelte` places
+`FolderLayoutsSettings.svelte` first under Advanced; its editor calls the server
+preview rather than duplicating template semantics in JavaScript.
 `Automations.svelte` retains action parameter schemas, loads custom fields and
-rendered layouts in the selected system, and renders named/type-aware controls;
-the persisted action wire shape remains unchanged.
+rendered-layout API rows in the selected system, and presents named/type-aware
+controls using the **Folder layout** label; the persisted action wire shape
+remains unchanged.
 
 `UserCreateForm.svelte` owns user creation in People and submits no hidden member
 capabilities for admins. Self-disable checks use

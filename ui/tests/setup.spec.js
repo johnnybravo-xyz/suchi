@@ -1205,7 +1205,11 @@ test('opens Archive configuration after choosing a filing tree', async ({ page }
   await expect(configuration.getByRole('link', { name: /Filing tree/ }).last()).toBeVisible()
   await expect(configuration.getByRole('link', { name: /Email intake/ }).last()).toBeVisible()
   await expect(configuration.getByRole('link', { name: /Classification/ }).last()).toBeVisible()
+  await expect(configuration.getByRole('link', { name: /Folder layouts/ }).last()).toBeVisible()
   await expect(configuration.getByRole('link', { name: /OCR and backups/ }).last()).toBeVisible()
+  const advanced = configuration.locator('.archive-rail .rail-group').filter({ hasText: 'Advanced' })
+  await expect(advanced.getByRole('link').nth(0)).toHaveText('Folder layouts')
+  await expect(advanced.getByRole('link').nth(1)).toHaveText('OCR and backups')
 })
 
 for (const userRole of ['admin', 'member']) {
@@ -1746,23 +1750,23 @@ test('offers ready-made trees, focused sets, and file tools without blocking oth
   await expect(page.getByRole('button', { name: /Life admin/ })).toBeVisible()
   await expect(page.getByText('Choose at most one set in each numbered lane.')).toBeVisible()
   await page.getByRole('button', { name: 'Import or export' }).click()
+  await expect(page.getByRole('button', { name: 'Folder layouts' })).toHaveCount(0)
   await expect(page.getByRole('heading', { name: 'Import a taxonomy file' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Export this filing tree' })).toBeVisible()
   await page.getByRole('link', { name: 'Classification', exact: true }).click()
-  await expect(page.getByRole('button', { name: 'Local model' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Suggestions' })).toBeVisible()
 })
 
-test('creates, previews, and deletes Filing Tree rendered layouts', async ({ page }) => {
+test('creates, previews, and deletes Advanced folder layouts', async ({ page }) => {
   await mockAPI(page, {
     renderedLayouts: [{
       id: 4, name: 'Bills by year',
       path: 'Bills/{{ created_year }}/{{ title }}', uses_asn: false,
     }],
   })
-  await page.goto('/#/settings?tab=archive&section=filing-tree')
-  await page.getByRole('button', { name: 'Rendered layouts' }).click()
+  await page.goto('/#/settings?tab=archive&section=folder-layouts')
 
-  await expect(page.getByRole('heading', { name: 'Rendered layouts' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Folder layouts' })).toBeVisible()
   await expect(page.getByText('Bills by year', { exact: true })).toBeVisible()
   await expect(page.getByText('10-19 Home/13 Utilities', { exact: true })).toBeVisible()
 
@@ -1776,13 +1780,13 @@ test('creates, previews, and deletes Filing Tree rendered layouts', async ({ pag
   await expect(saved.getByText('Imported folders', { exact: true })).toBeVisible()
   const imported = saved.locator('.layout-row').filter({ hasText: 'Imported folders' })
   await imported.getByRole('button', { name: 'Delete' }).click()
-  const confirmation = page.getByRole('alertdialog', { name: 'Delete rendered layout?' })
+  const confirmation = page.getByRole('alertdialog', { name: 'Delete folder layout?' })
   await expect(confirmation).toBeVisible()
   await confirmation.getByRole('button', { name: 'Delete layout' }).click()
   await expect(saved.getByText('Imported folders', { exact: true })).toHaveCount(0)
 })
 
-test('uses named rendered-layout and typed custom-field automation controls', async ({ page }) => {
+test('uses named folder-layout and typed custom-field automation controls', async ({ page }) => {
   await mockAPI(page, {
     renderedLayouts: [{ id: 4, name: 'Bills by year', path: 'Bills/{{ created_year }}/{{ title }}', uses_asn: false }],
     customFields: [
@@ -1790,7 +1794,7 @@ test('uses named rendered-layout and typed custom-field automation controls', as
       { id: 13, name: 'Invoice amount', data_type: 'number', extra_data: '{}' },
     ],
     automationActions: [
-      { kind: 'assign_storage_path', name: 'Assign rendered layout', params: [{ name: 'storage_path_id', type: 'id', target_kind: 'rendered_layout' }] },
+      { kind: 'assign_storage_path', name: 'Assign folder layout', params: [{ name: 'storage_path_id', type: 'id', target_kind: 'rendered_layout' }] },
       { kind: 'assign_custom_field', name: 'Set custom field', params: [{ name: 'field_id', type: 'id', target_kind: 'custom_field' }, { name: 'value', type: 'value' }] },
     ],
     automations: [{
@@ -1805,11 +1809,11 @@ test('uses named rendered-layout and typed custom-field automation controls', as
   await page.goto('/#/automations')
 
   const row = page.locator('#automation-19')
-  await expect(row.getByText('Assign rendered layout → Bills by year', { exact: true })).toBeVisible()
+  await expect(row.getByText('Assign folder layout → Bills by year', { exact: true })).toBeVisible()
   await expect(row.getByText('Set Review status → Needs review', { exact: true })).toBeVisible()
   await row.getByRole('button', { name: 'Edit' }).click()
 
-  await expect(page.getByRole('combobox', { name: 'Rendered layout' })).toHaveValue('4')
+  await expect(page.getByRole('combobox', { name: 'Folder layout' })).toHaveValue('4')
   const fields = page.getByRole('combobox', { name: 'Custom field', exact: true })
   await expect(fields).toHaveValue('12')
   await expect(page.getByRole('combobox', { name: 'Custom field value' })).toHaveValue('Needs review')
