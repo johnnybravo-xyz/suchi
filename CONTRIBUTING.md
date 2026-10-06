@@ -85,6 +85,16 @@ changing concurrency. The module checks include the standalone benchmark tools.
 `make smoke` waits for a fresh server to become ready and removes its temporary
 data on exit. Set `PORT` to use a different local port.
 
+Maintainers can run the complete GitHub-hosted validation from **Actions →
+checks → Run workflow**. Enter an open pull-request number to check its exact
+head revision, or leave the field blank to check the branch or tag selected in
+the workflow form. Only the repository owner is authorized to execute this
+manual workflow. From the command line, use:
+
+```sh
+gh workflow run checks.yml --ref main -f pr_number=123
+```
+
 Tests should cover the contract being changed: authorization and refusal cases
 for handlers, validated input and output for pipeline steps, and live reload or
 restart behavior for configuration changes.

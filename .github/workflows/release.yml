@@ -38,16 +38,22 @@ jobs:
     permissions:
       contents: read
     uses: ./.github/workflows/ci.yml
+    with:
+      target_ref: ${{ github.sha }}
 
   image-smoke:
     permissions:
       contents: read
     uses: ./.github/workflows/smoke.yml
+    with:
+      target_ref: ${{ github.sha }}
 
   restore-drill:
     permissions:
       contents: read
     uses: ./.github/workflows/restore-drill.yml
+    with:
+      target_ref: ${{ github.sha }}
 
   preflight:
     needs: [quality, image-smoke, restore-drill]
