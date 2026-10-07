@@ -35,6 +35,7 @@ package customfield
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -86,6 +87,77 @@ var registry = map[string]*Handler{
 	"select":       handlerSelect,
 	"multi":        handlerMulti,
 	"documentlink": handlerDocumentLink,
+}
+
+// RenderValue validates a raw value and formats it exactly as a stored value
+// of the same field type would be displayed.
+func RenderValue(dataType string, extra json.RawMessage, raw any) (string, error) {
+	handler := Lookup(dataType)
+	typed, err := handler.Validate(extra, raw)
+	if err != nil {
+		return "", err
+	}
+	var row ValueRow
+	switch handler.Name {
+	case "text", "url", "select":
+		row.Text = sql.NullString{String: typed.(string), Valid: true}
+	case "multi":
+		encoded, err := json.Marshal(typed)
+		if err != nil {
+			return "", err
+		}
+		row.Text = sql.NullString{String: string(encoded), Valid: true}
+	case "number", "monetary":
+		row.Number = sql.NullFloat64{Float64: typed.(float64), Valid: true}
+	case "date":
+		row.Date = sql.NullInt64{Int64: typed.(int64), Valid: true}
+	case "bool":
+		value := int64(0)
+		if typed.(bool) {
+			value = 1
+		}
+		row.Bool = sql.NullInt64{Int64: value, Valid: true}
+	default:
+		return "", fmt.Errorf("custom field type %q cannot be rendered", dataType)
+	}
+	return handler.Render(row), nil
+}
+
+// ReadRenderedValue returns the canonical display value and whether the
+// document currently has a row for the field. The field must belong to the
+// document's filing system.
+func ReadRenderedValue(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, docID, fieldID int64) (string, bool, error) {
+	var dataType string
+	var row ValueRow
+	err := q.QueryRowContext(ctx, `
+		SELECT f.data_type, v.value_text, v.value_number, v.value_int,
+		       v.value_bool, v.value_date
+		FROM custom_fields f
+		JOIN documents d ON d.id=? AND d.system_id=f.system_id
+		LEFT JOIN document_custom_field_values v
+		       ON v.document_id=d.id AND v.field_id=f.id
+		WHERE f.id=?
+	`, docID, fieldID).Scan(
+		&dataType, &row.Text, &row.Number, &row.Int, &row.Bool, &row.Date,
+	)
+	if err != nil {
+		return "", false, err
+	}
+	present := row.Text.Valid || row.Number.Valid || row.Int.Valid || row.Bool.Valid || row.Date.Valid
+	return Lookup(dataType).Render(row), present, nil
+}
+
+// ValueFingerprint binds a proposal to the field's prior semantic display
+// value without retaining that value in approval state.
+func ValueFingerprint(value string, present bool) string {
+	marker := "0"
+	if present {
+		marker = "1"
+	}
+	sum := sha256.Sum256([]byte(marker + value))
+	return fmt.Sprintf("%x", sum)
 }
 
 // ---------- shared writers ----------

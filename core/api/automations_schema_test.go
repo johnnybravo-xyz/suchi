@@ -66,6 +66,25 @@ func TestAutomationSchema_HasEveryTriggerCode(t *testing.T) {
 	}
 }
 
+func TestAutomationSchema_DescribesBoundedAskBranch(t *testing.T) {
+	s := &Server{Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
+	rec := httptest.NewRecorder()
+	ctx := auth.WithPrincipal(context.Background(),
+		&pluginapi.Principal{Kind: "user", UserID: 1, Role: "member"})
+	r := httptest.NewRequest("GET", "/api/automations/schema", nil).WithContext(ctx)
+	s.GetAutomationSchema(rec, r)
+	var got AutomationSchema
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Ask.MaxEnabled != automations.MaxEnabledAsks ||
+		got.Ask.TriggerType != string(automations.TriggerDocumentAdded) ||
+		len(got.Ask.Answers) != 2 ||
+		len(got.Ask.ActionKinds) != 4 {
+		t.Fatalf("ask schema = %+v", got.Ask)
+	}
+}
+
 func TestAutomationSchema_HasEveryActionKind(t *testing.T) {
 	s := &Server{Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
 	rec := httptest.NewRecorder()

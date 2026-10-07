@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/johnnybravo-xyz/suchi/core/approvals"
+	"github.com/johnnybravo-xyz/suchi/core/customfield"
 	"github.com/johnnybravo-xyz/suchi/core/documentstate"
 	"github.com/johnnybravo-xyz/suchi/core/lang"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
@@ -190,6 +191,104 @@ func TestApprovedTagTakesOwnershipOfClassifierReview(t *testing.T) {
 	}
 	if count != 1 || owned != 0 {
 		t.Fatalf("tags=%d classifier_owned=%d, want 1/0", count, owned)
+	}
+}
+
+func TestApprovedCustomFieldChangeUsesCapturedValue(t *testing.T) {
+	e := newEngine(t)
+	ctx := t.Context()
+	seedDocumentForChange(t, e.DB())
+	if _, err := e.DB().Write.ExecContext(ctx, `
+		INSERT INTO custom_fields(id,name,data_type,extra_data,created_at,updated_at,system_id)
+		VALUES (41,'Warranty proof','bool','{}',0,0,1);
+		INSERT INTO document_custom_field_values(document_id,field_id,value_bool)
+		VALUES (10,41,0)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	baseline := changeBaseline(t, e)
+	if err := e.DB().WriteTx(ctx, func(tx *sql.Tx) error {
+		return approvals.ProposeDocumentChangeInTx(ctx, tx, 10, approvals.DocumentChange{
+			Baseline: baseline, Field: "custom_field", ValueID: 41,
+			Value: "true", CustomFieldFingerprint: customfield.ValueFingerprint("No", true), CustomFieldPresent: true,
+			Confidence: 0.8, Source: "llm",
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var runID int64
+	if err := e.DB().Read.QueryRowContext(ctx, `SELECT id FROM approval_runs WHERE doc_id=10`).Scan(&runID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Advance(ctx, runID, ""); err != nil {
+		t.Fatal(err)
+	}
+	_, tasks, err := e.GetRun(ctx, runID)
+	if err != nil || len(tasks) != 1 {
+		t.Fatalf("tasks=%+v err=%v", tasks, err)
+	}
+	if err := e.Resolve(ctx, tasks[0].ID, "apply", interactiveReviewer(t, e)); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Advance(ctx, runID, "apply"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Advance(ctx, runID, ""); err != nil {
+		t.Fatal(err)
+	}
+	var value int
+	if err := e.DB().Read.QueryRowContext(ctx, `
+		SELECT value_bool FROM document_custom_field_values
+		WHERE document_id=10 AND field_id=41
+	`).Scan(&value); err != nil {
+		t.Fatal(err)
+	}
+	if value != 1 {
+		t.Fatalf("reviewed custom field value=%d want=1", value)
+	}
+}
+
+func TestReviewedCustomFieldChangeRejectsChangedPriorValue(t *testing.T) {
+	e := newEngine(t)
+	ctx := t.Context()
+	seedDocumentForChange(t, e.DB())
+	if _, err := e.DB().Write.ExecContext(ctx, `
+		INSERT INTO custom_fields(id,name,data_type,extra_data,created_at,updated_at,system_id)
+		VALUES (41,'Warranty proof','bool','{}',0,0,1);
+		INSERT INTO document_custom_field_values(document_id,field_id,value_bool)
+		VALUES (10,41,0)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	baseline := changeBaseline(t, e)
+	if err := e.DB().WriteTx(ctx, func(tx *sql.Tx) error {
+		return approvals.ProposeDocumentChangeInTx(ctx, tx, 10, approvals.DocumentChange{
+			Baseline: baseline, Field: "custom_field", ValueID: 41,
+			Value: "true", CustomFieldFingerprint: customfield.ValueFingerprint("No", true), CustomFieldPresent: true,
+			Confidence: 0.8, Source: "llm",
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var runID int64
+	if err := e.DB().Read.QueryRowContext(ctx, `SELECT id FROM approval_runs WHERE doc_id=10`).Scan(&runID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Advance(ctx, runID, ""); err != nil {
+		t.Fatal(err)
+	}
+	_, tasks, err := e.GetRun(ctx, runID)
+	if err != nil || len(tasks) != 1 {
+		t.Fatalf("tasks=%+v err=%v", tasks, err)
+	}
+	if _, err := e.DB().Write.ExecContext(ctx, `
+		UPDATE document_custom_field_values SET value_bool=1
+		WHERE document_id=10 AND field_id=41
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Resolve(ctx, tasks[0].ID, "apply", interactiveReviewer(t, e)); !errors.Is(err, approvals.ErrStaleProposal) {
+		t.Fatalf("changed custom field remained actionable: %v", err)
 	}
 }
 

@@ -7,12 +7,15 @@ package api
 
 import (
 	"net/http"
+
+	"github.com/johnnybravo-xyz/suchi/core/automations"
 )
 
 // AutomationSchema is the wire shape.
 type AutomationSchema struct {
 	Triggers []AutomationTrigger `json:"triggers"`
 	Actions  []AutomationAction  `json:"actions"`
+	Ask      AutomationAsk       `json:"ask"`
 }
 
 // AutomationTrigger names one event that can fire an automation.
@@ -43,6 +46,23 @@ type AutomationActionParam struct {
 	TargetKind string `json:"target_kind,omitempty"`
 }
 
+// AutomationAsk describes the bounded classifier-backed branch supported by
+// the automation editor.
+type AutomationAsk struct {
+	MaxEnabled  int                   `json:"max_enabled"`
+	TriggerType string                `json:"trigger_type"`
+	Answers     []AutomationAskAnswer `json:"answers"`
+	ActionKinds []string              `json:"action_kinds"`
+}
+
+// AutomationAskAnswer names one closed answer vocabulary.
+type AutomationAskAnswer struct {
+	Type       string `json:"type"`
+	Name       string `json:"name"`
+	MinChoices int    `json:"min_choices,omitempty"`
+	MaxChoices int    `json:"max_choices,omitempty"`
+}
+
 // GetAutomationSchema serves GET /api/automations/schema. Any authed
 // caller can read it (the SPA builder needs it before create/patch).
 // Admin-only writes to /api/automations/ still gate mutations.
@@ -61,6 +81,14 @@ var automationSchema = AutomationSchema{
 		{Code: 1, Type: "consumption", Name: "On consumption (pre-content)"},
 		{Code: 2, Type: "document_added", Name: "After a new document lands"},
 		{Code: 3, Type: "document_updated", Name: "After a document metadata update"},
+	},
+	Ask: AutomationAsk{
+		MaxEnabled: automations.MaxEnabledAsks, TriggerType: "document_added",
+		Answers: []AutomationAskAnswer{
+			{Type: "yes_no", Name: "Yes / No"},
+			{Type: "choice", Name: "Multiple choice", MinChoices: 2, MaxChoices: 10},
+		},
+		ActionKinds: []string{"assign_tags", "assign_correspondent", "assign_jd_category", "assign_custom_field"},
 	},
 	Actions: []AutomationAction{
 		{

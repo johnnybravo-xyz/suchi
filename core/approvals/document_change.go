@@ -15,6 +15,7 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
+	"github.com/johnnybravo-xyz/suchi/core/customfield"
 	"github.com/johnnybravo-xyz/suchi/core/documentstate"
 	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/lang"
@@ -39,16 +40,20 @@ var ErrStaleProposal = errors.New("document change: proposal is stale or unbound
 
 // DocumentChange is a bounded metadata suggestion bound before inference starts.
 type DocumentChange struct {
-	Field         string                    `json:"field"`
-	ValueID       int64                     `json:"value_id"`
-	Value         string                    `json:"value"`
-	Confidence    float64                   `json:"confidence"`
-	Threshold     *float64                  `json:"threshold,omitempty"`
-	Source        string                    `json:"source"`
-	Baseline      *documentstate.Snapshot   `json:"baseline"`
-	Supporters    []documentstate.Reference `json:"supporters"`
-	Reason        string                    `json:"reason"`
-	PolicyVersion string                    `json:"policy_version"`
+	Field                  string                    `json:"field"`
+	ValueID                int64                     `json:"value_id"`
+	Value                  string                    `json:"value"`
+	Confidence             float64                   `json:"confidence"`
+	Threshold              *float64                  `json:"threshold,omitempty"`
+	Source                 string                    `json:"source"`
+	AutomationID           int64                     `json:"automation_id,omitempty"`
+	AutomationName         string                    `json:"automation_name,omitempty"`
+	CustomFieldFingerprint string                    `json:"custom_field_fingerprint,omitempty"`
+	CustomFieldPresent     bool                      `json:"custom_field_present,omitempty"`
+	Baseline               *documentstate.Snapshot   `json:"baseline"`
+	Supporters             []documentstate.Reference `json:"supporters"`
+	Reason                 string                    `json:"reason"`
+	PolicyVersion          string                    `json:"policy_version"`
 }
 
 func DocumentChangeSpec() Spec {
@@ -153,12 +158,15 @@ func ApplyAutomaticDocumentChangeInTx(ctx context.Context, tx *sql.Tx, log *slog
 	if err := writeDocumentChangeValue(ctx, tx, docID, change.Baseline.SystemID, change, false); err != nil {
 		return false, err
 	}
+	after := map[string]any{"field": change.Field, "source": change.Source,
+		"confidence": change.Confidence, "threshold": *change.Threshold,
+		"policy_version": AutomaticPolicyVersion}
+	if change.AutomationID > 0 {
+		after["automation_id"], after["automation_name"] = change.AutomationID, change.AutomationName
+	}
 	audit.LogInTx(ctx, tx, log, audit.Event{
 		SystemID: change.Baseline.SystemID, Action: "document.suggestion_autoapply",
-		ObjectKind: "document", ObjectID: docID,
-		After: map[string]any{"field": change.Field, "source": change.Source,
-			"confidence": change.Confidence, "threshold": *change.Threshold,
-			"policy_version": AutomaticPolicyVersion},
+		ObjectKind: "document", ObjectID: docID, After: after,
 	})
 	return true, nil
 }
@@ -203,7 +211,11 @@ func documentChangeAuthorizationUnusable(ctx context.Context, tx *sql.Tx, run Ru
 }
 
 func validateDocumentChange(c DocumentChange) error {
-	if len(c.Value) > 1024 || len(c.Source) > 64 || len(c.Supporters) > 16 || c.ValueID < 0 {
+	if len(c.Value) > 1024 || len(c.Source) > 64 || len(c.Supporters) > 16 ||
+		c.ValueID < 0 || c.AutomationID < 0 || len(c.AutomationName) > 200 {
+		return ErrStaleProposal
+	}
+	if (c.AutomationID == 0) != (c.AutomationName == "") {
 		return ErrStaleProposal
 	}
 	switch c.Field {
@@ -213,6 +225,11 @@ func validateDocumentChange(c DocumentChange) error {
 		}
 	case "correspondent", "tag":
 		if c.ValueID == 0 && strings.TrimSpace(c.Value) == "" {
+			return ErrStaleProposal
+		}
+	case "custom_field":
+		if c.ValueID <= 0 || c.Value == "" || !json.Valid([]byte(c.Value)) ||
+			len(c.CustomFieldFingerprint) != 64 {
 			return ErrStaleProposal
 		}
 	case "title":
@@ -428,11 +445,37 @@ func validateDestination(ctx context.Context, tx *sql.Tx, docID, systemID int64,
 		if err := tx.QueryRowContext(ctx, `SELECT languages_locked=0 FROM documents WHERE id=?`, docID).Scan(&eligible); err != nil {
 			return err
 		}
+	case "custom_field":
+		value, present, err := customfield.ReadRenderedValue(ctx, tx, docID, c.ValueID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrStaleProposal
+		}
+		if err != nil {
+			return err
+		}
+		eligible = present == c.CustomFieldPresent &&
+			customfield.ValueFingerprint(value, present) == c.CustomFieldFingerprint
 	default:
 		eligible = true
 	}
 	if !eligible {
 		return ErrStaleProposal
+	}
+	if c.Field == "custom_field" {
+		var dataType, extra string
+		if err := tx.QueryRowContext(ctx,
+			`SELECT data_type, extra_data FROM custom_fields WHERE id=? AND system_id=?`,
+			c.ValueID, systemID).Scan(&dataType, &extra); err != nil || dataType == "documentlink" {
+			return ErrStaleProposal
+		}
+		var value any
+		if json.Unmarshal([]byte(c.Value), &value) != nil {
+			return ErrStaleProposal
+		}
+		if _, err := customfield.Lookup(dataType).Validate(json.RawMessage(extra), value); err != nil {
+			return ErrStaleProposal
+		}
+		return nil
 	}
 	if c.ValueID > 0 {
 		table := map[string]string{"jd_category": "jd_categories", "correspondent": "correspondents", "tag": "tags"}[c.Field]
@@ -537,7 +580,11 @@ func applyDocumentChange(ctx context.Context, tx *sql.Tx, log *slog.Logger, run 
 	if err := writeDocumentChangeValue(ctx, tx, *run.DocID, run.SystemID, c, true); err != nil {
 		return err
 	}
-	audit.LogInTx(ctx, tx, log, audit.Event{SystemID: run.SystemID, Actor: currentActor, Action: "document.suggestion_apply", ObjectKind: "document", ObjectID: *run.DocID, After: map[string]any{"field": c.Field, "reason": c.Reason, "policy_version": c.PolicyVersion, "run_id": run.ID}})
+	after := map[string]any{"field": c.Field, "reason": c.Reason, "policy_version": c.PolicyVersion, "run_id": run.ID}
+	if c.AutomationID > 0 {
+		after["automation_id"], after["automation_name"] = c.AutomationID, c.AutomationName
+	}
+	audit.LogInTx(ctx, tx, log, audit.Event{SystemID: run.SystemID, Actor: currentActor, Action: "document.suggestion_apply", ObjectKind: "document", ObjectID: *run.DocID, After: after})
 	return nil
 }
 
@@ -563,6 +610,7 @@ func writeDocumentChangeValue(ctx context.Context, tx *sql.Tx, docID, systemID i
 	}
 	var result sql.Result
 	var err error
+	changed := false
 	switch c.Field {
 	case "jd_category":
 		result, err = tx.ExecContext(ctx, `UPDATE documents SET jd_category_id=?,updated_at=? WHERE id=? AND jd_category_id<>?`, c.ValueID, now, docID, c.ValueID)
@@ -570,6 +618,44 @@ func writeDocumentChangeValue(ctx context.Context, tx *sql.Tx, docID, systemID i
 		if err = taxonomy.SetPrimaryCorrespondent(ctx, tx, docID, c.ValueID); err == nil {
 			result, err = tx.ExecContext(ctx, `UPDATE documents SET updated_at=? WHERE id=?`, now, docID)
 		}
+	case "custom_field":
+		currentValue, present, readErr := customfield.ReadRenderedValue(ctx, tx, docID, c.ValueID)
+		if errors.Is(readErr, sql.ErrNoRows) {
+			err = ErrStaleProposal
+			break
+		}
+		if readErr != nil {
+			err = readErr
+			break
+		}
+		if present != c.CustomFieldPresent ||
+			customfield.ValueFingerprint(currentValue, present) != c.CustomFieldFingerprint {
+			err = ErrStaleProposal
+			break
+		}
+		var dataType, extra string
+		err = tx.QueryRowContext(ctx,
+			`SELECT data_type, extra_data FROM custom_fields WHERE id=? AND system_id=?`,
+			c.ValueID, systemID).Scan(&dataType, &extra)
+		if errors.Is(err, sql.ErrNoRows) || dataType == "documentlink" {
+			err = ErrStaleProposal
+			break
+		}
+		if err != nil {
+			break
+		}
+		var raw any
+		if json.Unmarshal([]byte(c.Value), &raw) != nil {
+			err = ErrStaleProposal
+			break
+		}
+		typed, validationErr := customfield.Lookup(dataType).Validate(json.RawMessage(extra), raw)
+		if validationErr != nil {
+			err = ErrStaleProposal
+			break
+		}
+		err = customfield.Lookup(dataType).Write(ctx, tx, docID, c.ValueID, typed)
+		changed = err == nil
 	case "title":
 		result, err = tx.ExecContext(ctx, `UPDATE documents SET title=?,updated_at=? WHERE id=? AND title<>?`, c.Value, now, docID, c.Value)
 	case "language":
@@ -587,11 +673,14 @@ func writeDocumentChangeValue(ctx context.Context, tx *sql.Tx, docID, systemID i
 	if err != nil {
 		return err
 	}
-	n, err := result.RowsAffected()
-	if err != nil {
-		return err
+	if result != nil {
+		n, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		changed = n == 1
 	}
-	if n != 1 {
+	if !changed {
 		return ErrStaleProposal
 	}
 	if _, err := ReconcileDocumentChangesInTx(ctx, tx, systemID, []int64{docID}); err != nil {
@@ -621,6 +710,9 @@ func DocumentChangeProjection(ctx context.Context, q systems.Queryer, docID int6
 	case "archive", "llm", "language-detector":
 		out["source"] = c.Source
 	}
+	if c.AutomationID > 0 {
+		out["automation_id"], out["automation_name"] = c.AutomationID, c.AutomationName
+	}
 	out["threshold"] = c.Threshold
 	current, err := documentstate.Load(ctx, q, docID)
 	if err != nil {
@@ -629,17 +721,51 @@ func DocumentChangeProjection(ctx context.Context, q systems.Queryer, docID int6
 	fresh := c.Baseline != nil && current.SameSource(*c.Baseline)
 	out["source_current"] = fresh
 	out["review_conflict"] = !fresh || current.FieldRevision(c.Field) != c.Baseline.FieldRevision(c.Field) || c.PolicyVersion != ReviewPolicyVersion
-	var currentValue string
-	err = q.QueryRowContext(ctx, `SELECT CASE ? WHEN 'title' THEN d.title WHEN 'language' THEN trim(d.languages,',') WHEN 'correspondent' THEN COALESCE((SELECT c.name FROM document_correspondents dc JOIN correspondents c ON c.id=dc.correspondent_id WHERE dc.document_id=d.id AND dc.role='sender' ORDER BY dc.position,dc.correspondent_id LIMIT 1),'') WHEN 'jd_category' THEN COALESCE(j.name,'') WHEN 'tag' THEN COALESCE((SELECT group_concat(t.name,', ') FROM document_tags link JOIN tags t ON t.id=link.tag_id WHERE link.document_id=d.id AND link.classifier_owned=0),'') END FROM documents d LEFT JOIN jd_categories j ON j.id=d.jd_category_id WHERE d.id=?`, c.Field, docID).Scan(&currentValue)
-	if err != nil {
-		return nil, err
-	}
-	proposed := c.Value
-	if c.ValueID > 0 {
-		table := map[string]string{"jd_category": "jd_categories", "correspondent": "correspondents", "tag": "tags"}[c.Field]
-		if err := q.QueryRowContext(ctx, "SELECT name FROM "+table+" WHERE id=? AND system_id=?", c.ValueID, current.SystemID).Scan(&proposed); err != nil {
-			out["review_conflict"] = true
-			proposed = "Unavailable"
+	var currentValue, proposed string
+	if c.Field == "custom_field" {
+		var (
+			fieldName, dataType, extra string
+			row                        customfield.ValueRow
+		)
+		err = q.QueryRowContext(ctx, `
+			SELECT f.name, f.data_type, f.extra_data,
+			       v.value_text, v.value_number, v.value_int, v.value_bool, v.value_date
+			FROM custom_fields f
+			LEFT JOIN document_custom_field_values v
+			  ON v.field_id=f.id AND v.document_id=?
+			WHERE f.id=? AND f.system_id=?
+		`, docID, c.ValueID, current.SystemID).Scan(
+			&fieldName, &dataType, &extra,
+			&row.Text, &row.Number, &row.Int, &row.Bool, &row.Date)
+		if err != nil {
+			out["review_conflict"], proposed = true, "Unavailable"
+		} else {
+			out["field_name"] = fieldName
+			currentValue = customfield.Lookup(dataType).Render(row)
+			present := row.Text.Valid || row.Number.Valid || row.Int.Valid || row.Bool.Valid || row.Date.Valid
+			if present != c.CustomFieldPresent ||
+				customfield.ValueFingerprint(currentValue, present) != c.CustomFieldFingerprint {
+				out["review_conflict"] = true
+			}
+			var raw any
+			if json.Unmarshal([]byte(c.Value), &raw) != nil {
+				out["review_conflict"], proposed = true, "Unavailable"
+			} else if proposed, err = customfield.RenderValue(dataType, json.RawMessage(extra), raw); err != nil {
+				out["review_conflict"], proposed = true, "Unavailable"
+			}
+		}
+	} else {
+		err = q.QueryRowContext(ctx, `SELECT CASE ? WHEN 'title' THEN d.title WHEN 'language' THEN trim(d.languages,',') WHEN 'correspondent' THEN COALESCE((SELECT c.name FROM document_correspondents dc JOIN correspondents c ON c.id=dc.correspondent_id WHERE dc.document_id=d.id AND dc.role='sender' ORDER BY dc.position,dc.correspondent_id LIMIT 1),'') WHEN 'jd_category' THEN COALESCE(j.name,'') WHEN 'tag' THEN COALESCE((SELECT group_concat(t.name,', ') FROM document_tags link JOIN tags t ON t.id=link.tag_id WHERE link.document_id=d.id AND link.classifier_owned=0),'') END FROM documents d LEFT JOIN jd_categories j ON j.id=d.jd_category_id WHERE d.id=?`, c.Field, docID).Scan(&currentValue)
+		if err != nil {
+			return nil, err
+		}
+		proposed = c.Value
+		if c.ValueID > 0 {
+			table := map[string]string{"jd_category": "jd_categories", "correspondent": "correspondents", "tag": "tags"}[c.Field]
+			if err := q.QueryRowContext(ctx, "SELECT name FROM "+table+" WHERE id=? AND system_id=?", c.ValueID, current.SystemID).Scan(&proposed); err != nil {
+				out["review_conflict"] = true
+				proposed = "Unavailable"
+			}
 		}
 	}
 	if len(currentValue) > 2048 {

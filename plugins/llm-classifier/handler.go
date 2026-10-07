@@ -5,6 +5,7 @@ package llmclassifier
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/approvals"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
+	"github.com/johnnybravo-xyz/suchi/core/automations"
+	"github.com/johnnybravo-xyz/suchi/core/customfield"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	"github.com/johnnybravo-xyz/suchi/core/documentstate"
 	"github.com/johnnybravo-xyz/suchi/core/intelligence"
@@ -31,7 +34,7 @@ import (
 // up. Exported so main.go can read it into the version snapshot
 // it hands to core/rescan (which doesn't import this plugin to
 // keep the dep graph flat).
-const PipelineVersionLLM = 3
+const PipelineVersionLLM = 4
 
 // Handler is the durable-outbox Subscriber that runs the classifier on
 // `post-classify` jobs. Main registers it in a disabled state at boot so the
@@ -98,7 +101,24 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	if err != nil {
 		return err
 	}
-	res, err := h.plugin.Classify(ctx, title, content, jdCats, siblings)
+	matchedQuestions, customFieldBaselines, err := h.loadAutomationQuestionContext(
+		ctx, baseline.SystemID, e.DocID,
+	)
+	if err != nil {
+		return err
+	}
+	questionState, err := documentstate.Load(ctx, h.db.Read, e.DocID)
+	if err != nil {
+		return err
+	}
+	if questionState != baseline {
+		return errors.New("classifier document changed while loading automation questions")
+	}
+	questions := make([]automations.ModelQuestion, len(matchedQuestions))
+	for i := range matchedQuestions {
+		questions[i] = matchedQuestions[i].Question
+	}
+	res, err := h.plugin.Classify(ctx, title, content, jdCats, siblings, questions)
 	if errors.Is(err, ErrDisabled) {
 		return nil
 	}
@@ -124,6 +144,17 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		if err := checkNamingContext(ctx, tx, e.DocID, current, supporters); err != nil {
 			return err
 		}
+		currentQuestions := matchedQuestions
+		if len(matchedQuestions) > 0 {
+			currentQuestions, err = automations.MatchingQuestionsTx(ctx, tx, baseline.SystemID, e.DocID)
+			if err != nil {
+				return err
+			}
+			if current.TitleRevision != baseline.TitleRevision ||
+				!automations.SameQuestionMatches(matchedQuestions, currentQuestions) {
+				res.AutomationAnswers = nil
+			}
+		}
 		autoApply, err := settings.ResolveAutoApply(ctx, tx)
 		if err != nil {
 			return err
@@ -134,15 +165,36 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		}
 		applicationBaseline := current
 		var pending []approvals.DocumentChange
-		propose := func(change approvals.DocumentChange) error {
+		propose := func(change approvals.DocumentChange, confidence float64) error {
 			if baseline.FieldRevision(change.Field) != current.FieldRevision(change.Field) {
 				return nil // A human/rule reassertion wins, including same-value ABA.
 			}
-			change.Confidence, change.Threshold = res.Confidence, &threshold
+			if change.Field == "custom_field" {
+				captured, ok := customFieldBaselines[change.ValueID]
+				if !ok {
+					return nil
+				}
+				value, present, err := customfield.ReadRenderedValue(ctx, tx, e.DocID, change.ValueID)
+				if errors.Is(err, sql.ErrNoRows) {
+					return nil
+				}
+				if err != nil {
+					return err
+				}
+				if value != captured.value || present != captured.present {
+					return nil
+				}
+				change.CustomFieldFingerprint = customfield.ValueFingerprint(captured.value, captured.present)
+				change.CustomFieldPresent = captured.present
+			}
+			change.Confidence, change.Threshold = confidence, &threshold
 			change.Source, change.Baseline = "llm", &applicationBaseline
 			change.Supporters = supporters
 			if autoApply {
 				applied, err := approvals.ApplyAutomaticDocumentChangeInTx(ctx, tx, h.log, e.DocID, change)
+				if errors.Is(err, approvals.ErrStaleProposal) {
+					return nil
+				}
 				if err != nil {
 					return err
 				}
@@ -154,11 +206,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 			pending = append(pending, change)
 			return nil
 		}
-		if res.Title != "" && res.Title != title {
-			if err := propose(approvals.DocumentChange{Field: "title", Value: res.Title}); err != nil {
-				return err
-			}
-		}
+
 		var hasCorrespondent, inInbox, languageLocked bool
 		var languages string
 		if err := tx.QueryRowContext(ctx, `
@@ -169,16 +217,125 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		`, e.DocID).Scan(&hasCorrespondent, &inInbox, &languageLocked, &languages); err != nil {
 			return err
 		}
-		if !hasCorrespondent && res.Correspondent != "" {
-			if err := propose(approvals.DocumentChange{Field: "correspondent", Value: res.Correspondent}); err != nil {
+
+		answers := make(map[int64]AutomationAnswer, len(res.AutomationAnswers))
+		for _, answer := range res.AutomationAnswers {
+			answers[answer.AutomationID] = answer
+		}
+		claimedTags := make(map[int64]bool)
+		claimedCustomFields := make(map[int64]bool)
+		claimedCorrespondent, claimedCategory := false, false
+		for _, match := range matchedQuestions {
+			answer, ok := answers[match.Automation.ID]
+			if !ok || answer.Answer == "unknown" {
+				continue
+			}
+			for _, action := range match.Automation.Actions {
+				if action.When != answer.Answer {
+					continue
+				}
+				change := approvals.DocumentChange{
+					AutomationID: match.Automation.ID, AutomationName: match.Automation.Name,
+				}
+				switch action.Kind {
+				case "assign_tags":
+					for _, tagID := range automationActionIDs(action.Params["tag_ids"]) {
+						if claimedTags[tagID] {
+							continue
+						}
+						exists, err := automationDestinationExists(ctx, tx, baseline.SystemID, "tag", tagID)
+						if err != nil {
+							return err
+						}
+						if !exists {
+							continue
+						}
+						var attached bool
+						if err := tx.QueryRowContext(ctx,
+							`SELECT EXISTS(SELECT 1 FROM document_tags WHERE document_id=? AND tag_id=?)`,
+							e.DocID, tagID).Scan(&attached); err != nil {
+							return err
+						}
+						if attached {
+							continue
+						}
+						change.Field, change.ValueID = "tag", tagID
+						if err := propose(change, answer.Confidence); err != nil {
+							return err
+						}
+						claimedTags[tagID] = true
+					}
+				case "assign_correspondent":
+					if hasCorrespondent || claimedCorrespondent {
+						continue
+					}
+					change.Field, change.ValueID = "correspondent", automationActionID(action.Params["correspondent_id"])
+					if change.ValueID == 0 {
+						continue
+					}
+					exists, err := automationDestinationExists(ctx, tx, baseline.SystemID, "correspondent", change.ValueID)
+					if err != nil {
+						return err
+					}
+					if !exists {
+						continue
+					}
+					if err := propose(change, answer.Confidence); err != nil {
+						return err
+					}
+					claimedCorrespondent = true
+				case "assign_jd_category":
+					if !inInbox || claimedCategory {
+						continue
+					}
+					change.Field, change.ValueID = "jd_category", automationActionID(action.Params["jd_category_id"])
+					if change.ValueID == 0 {
+						continue
+					}
+					exists, err := automationDestinationExists(ctx, tx, baseline.SystemID, "jd_category", change.ValueID)
+					if err != nil {
+						return err
+					}
+					if !exists {
+						continue
+					}
+					if err := propose(change, answer.Confidence); err != nil {
+						return err
+					}
+					claimedCategory = true
+				case "assign_custom_field":
+					fieldID := automationActionID(action.Params["field_id"])
+					if fieldID == 0 || claimedCustomFields[fieldID] {
+						continue
+					}
+					value, err := json.Marshal(action.Params["value"])
+					if err != nil {
+						return err
+					}
+					change.Field, change.ValueID, change.Value = "custom_field", fieldID, string(value)
+					if err := propose(change, answer.Confidence); err != nil {
+						return err
+					}
+					claimedCustomFields[fieldID] = true
+				}
+			}
+		}
+
+		if res.Title != "" && res.Title != title {
+			if err := propose(approvals.DocumentChange{Field: "title", Value: res.Title}, res.Confidence); err != nil {
 				return err
 			}
 		}
-		if inInbox && res.JDCategory > 0 {
+		if !claimedCorrespondent && !hasCorrespondent && res.Correspondent != "" {
+			if err := propose(approvals.DocumentChange{Field: "correspondent", Value: res.Correspondent}, res.Confidence); err != nil {
+				return err
+			}
+		}
+		if !claimedCategory && inInbox && res.JDCategory > 0 {
 			var catID int64
 			err := tx.QueryRowContext(ctx, `SELECT id FROM jd_categories WHERE system_id=? AND code=? AND system=0`, baseline.SystemID, res.JDCategory).Scan(&catID)
 			if err == nil {
-				if err := propose(approvals.DocumentChange{Field: "jd_category", ValueID: catID}); err != nil {
+				if err := propose(approvals.DocumentChange{Field: "jd_category", ValueID: catID}, res.Confidence); err != nil {
 					return err
 				}
 			} else if !errors.Is(err, sql.ErrNoRows) {
@@ -198,14 +355,25 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 				e.DocID, tag, slug.Make(tag)).Scan(&attached); err != nil {
 				return err
 			}
-			if !attached {
-				if err := propose(approvals.DocumentChange{Field: "tag", Value: tag}); err != nil {
-					return err
-				}
+			if attached {
+				continue
+			}
+			var existingID int64
+			err := tx.QueryRowContext(ctx,
+				`SELECT id FROM tags WHERE system_id=? AND (name=? COLLATE NOCASE OR slug=?) ORDER BY id LIMIT 1`,
+				baseline.SystemID, tag, slug.Make(tag)).Scan(&existingID)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			if err == nil && claimedTags[existingID] {
+				continue
+			}
+			if err := propose(approvals.DocumentChange{Field: "tag", Value: tag}, res.Confidence); err != nil {
+				return err
 			}
 		}
 		if code := lang.Format(res.Language); !languageLocked && code != "" && code != languages {
-			if err := propose(approvals.DocumentChange{Field: "language", Value: code}); err != nil {
+			if err := propose(approvals.DocumentChange{Field: "language", Value: code}, res.Confidence); err != nil {
 				return err
 			}
 		}
@@ -214,6 +382,9 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		for _, change := range pending {
 			change.Baseline = &applicationBaseline
 			if err := approvals.ProposeDocumentChangeInTx(ctx, tx, e.DocID, change); err != nil {
+				if errors.Is(err, approvals.ErrStaleProposal) {
+					continue
+				}
 				return err
 			}
 		}
@@ -247,6 +418,49 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		}
 		return view.EnqueueMove(ctx, tx, e.DocID)
 	})
+}
+
+type customFieldBaseline struct {
+	value   string
+	present bool
+}
+
+func (h *Handler) loadAutomationQuestionContext(
+	ctx context.Context, systemID, docID int64,
+) ([]automations.MatchedQuestion, map[int64]customFieldBaseline, error) {
+	tx, err := h.db.Read.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, nil, err
+	}
+	defer tx.Rollback()
+	matches, err := automations.MatchingQuestionsTx(ctx, tx, systemID, docID)
+	if err != nil {
+		return nil, nil, err
+	}
+	baselines := make(map[int64]customFieldBaseline)
+	for _, match := range matches {
+		for _, action := range match.Automation.Actions {
+			if action.Kind != "assign_custom_field" {
+				continue
+			}
+			fieldID := automationActionID(action.Params["field_id"])
+			if fieldID == 0 {
+				continue
+			}
+			if _, loaded := baselines[fieldID]; loaded {
+				continue
+			}
+			value, present, err := customfield.ReadRenderedValue(ctx, tx, docID, fieldID)
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			if err != nil {
+				return nil, nil, err
+			}
+			baselines[fieldID] = customFieldBaseline{value: value, present: present}
+		}
+	}
+	return matches, baselines, nil
 }
 
 func (h *Handler) loadDoc(ctx context.Context, id int64) (title, content, sourceBlob string, err error) {
@@ -444,4 +658,67 @@ func upsertTagAndAttach(ctx context.Context, tx *sql.Tx, name string, docID int6
 		`INSERT OR IGNORE INTO document_tags(document_id, tag_id, classifier_owned) VALUES (?, ?, ?)`,
 		docID, tagID, classifierOwned)
 	return tagID, err
+}
+
+func automationActionID(value any) int64 {
+	switch value := value.(type) {
+	case float64:
+		id := int64(value)
+		if value == float64(id) && id > 0 {
+			return id
+		}
+	case int64:
+		if value > 0 {
+			return value
+		}
+	case int:
+		if value > 0 {
+			return int64(value)
+		}
+	}
+	return 0
+}
+
+func automationActionIDs(value any) []int64 {
+	switch values := value.(type) {
+	case []any:
+		ids := make([]int64, 0, len(values))
+		for _, value := range values {
+			if id := automationActionID(value); id > 0 {
+				ids = append(ids, id)
+			}
+		}
+		return ids
+	case []int64:
+		return values
+	case []int:
+		ids := make([]int64, len(values))
+		for i, value := range values {
+			ids[i] = int64(value)
+		}
+		return ids
+	default:
+		return nil
+	}
+}
+
+func automationDestinationExists(
+	ctx context.Context, q interface {
+		QueryRowContext(context.Context, string, ...any) *sql.Row
+	}, systemID int64, destination string, id int64,
+) (bool, error) {
+	table := map[string]string{
+		"tag":           "tags",
+		"correspondent": "correspondents",
+		"jd_category":   "jd_categories",
+	}[destination]
+	if table == "" || id <= 0 {
+		return false, nil
+	}
+	var exists bool
+	err := q.QueryRowContext(ctx,
+		"SELECT EXISTS(SELECT 1 FROM "+table+" WHERE system_id=? AND id=?)",
+		systemID, id,
+	).Scan(&exists)
+	return exists, err
 }
