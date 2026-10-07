@@ -1377,16 +1377,17 @@
       <section class="card related-card" aria-label="Document context">
         <div class="related-tabs" role="tablist" aria-label="Document context">
             {#each visibleRelatedTabs as tab}
+              {@const count = tab.id === 'similar' ? 0 : relatedTabCount(tab.id)}
               <button id={`related-tab-${tab.id}`} type="button" role="tab"
                       aria-selected={relatedTab === tab.id}
-                      aria-label={tab.id === 'similar' ? tab.label : `${tab.label} ${relatedTabCount(tab.id)}`}
+                      aria-label={count > 0 ? `${tab.label} ${count}` : tab.label}
                       aria-controls={`related-panel-${tab.id}`}
                       tabindex={relatedTab === tab.id ? 0 : -1}
                       class:on={relatedTab === tab.id}
                       onclick={() => selectRelatedTab(tab.id)}
                       onkeydown={handleRelatedTabKey}>
                 {tab.shortLabel}
-                {#if tab.id !== 'similar'}<span class="pill">{relatedTabCount(tab.id)}</span>{/if}
+                {#if count > 0}<span class="pill">{count}</span>{/if}
               </button>
             {/each}
           </div>

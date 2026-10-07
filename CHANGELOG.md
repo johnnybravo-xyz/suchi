@@ -42,6 +42,8 @@ Notable user-visible changes to Suchi are recorded here.
   configuration overview.
 - Right-align Document Detail metadata actions, revealing **Manage tags** only
   while editing tags, while keeping values readable at narrow widths.
+- Hide zero-value **Linked**, **Versions**, and **Notes** badges in Document
+  Detail; the Versions badge still counts only other revisions.
 - Include active account subscription destinations in startup and doctor egress
   reports; preserve mode-specific endpoint/model drafts and restore the saved
   subscription model after reconnecting.

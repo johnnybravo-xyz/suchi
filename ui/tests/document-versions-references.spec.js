@@ -202,8 +202,13 @@ test('offers link type setup and counts only other revisions', async ({ page }) 
   })
 
   await page.goto('/#/doc/42')
-  await expect(page.getByRole('tab', { name: 'Versions 0' })).toBeVisible()
-  await page.getByRole('tab', { name: /^Linked documents/ }).click()
+  const contextTabs = page.getByRole('tablist', { name: 'Document context' })
+  for (const name of ['Linked documents', 'Versions', 'Notes']) {
+    const tab = contextTabs.getByRole('tab', { name, exact: true })
+    await expect(tab).toBeVisible()
+    await expect(tab.locator('.pill')).toHaveCount(0)
+  }
+  await contextTabs.getByRole('tab', { name: 'Linked documents', exact: true }).click()
   const linksFrom = page.getByRole('region', { name: 'This document links to' })
   await expect(linksFrom.getByRole('button', { name: 'Add link', exact: true })).toHaveCount(0)
   const createLinkField = linksFrom.getByRole('button', { name: 'Create Document link field' })
