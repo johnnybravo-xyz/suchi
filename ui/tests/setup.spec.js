@@ -1863,6 +1863,40 @@ test('creates, previews, and deletes Advanced folder layouts', async ({ page }) 
   await expect(saved.getByText('Imported folders', { exact: true })).toHaveCount(0)
 })
 
+test('centers custom automations ahead of collapsed filing-tree rules', async ({ page }) => {
+  await mockAPI(page, {
+    automations: [
+      {
+        id: 18, name: 'Route tax records', enabled: true, order: 0,
+        triggers: [{ type: 2 }],
+        actions: [{ id: 1, type: 'assign_tags', params: { tag_ids: [] } }],
+      },
+      {
+        id: 19, name: 'Built-in utility filing', enabled: true, order: 1, preset_slug: 'household',
+        triggers: [{ type: 2 }],
+        actions: [{ id: 2, type: 'assign_tags', params: { tag_ids: [] } }],
+      },
+    ],
+  })
+  await page.goto('/#/automations')
+
+  await expect(page.getByRole('button', { name: 'New automation' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Your automations' })).toBeVisible()
+  await expect(page.getByText('Route tax records', { exact: true })).toBeVisible()
+  await expect(page.locator('#automation-19')).toHaveCount(0)
+
+  const customPanel = page.locator('.automations-panel')
+  await expect(customPanel.locator('.panel-head .chip')).toHaveText('1')
+  const builtIns = page.locator('.builtins')
+  await expect.poll(async () => {
+    const [customBox, builtInBox] = await Promise.all([customPanel.boundingBox(), builtIns.boundingBox()])
+    return customBox && builtInBox ? builtInBox.y > customBox.y + customBox.height : false
+  }).toBe(true)
+
+  await page.getByRole('button', { name: /Built-in automations/ }).click()
+  await expect(page.locator('#automation-19 .title').filter({ hasText: 'Built-in utility filing' })).toBeVisible()
+})
+
 test('uses named folder-layout and typed custom-field automation controls', async ({ page }) => {
   await mockAPI(page, {
     renderedLayouts: [{ id: 4, name: 'Bills by year', path: 'Bills/{{ created_year }}/{{ title }}', uses_asn: false }],
@@ -1872,6 +1906,7 @@ test('uses named folder-layout and typed custom-field automation controls', asyn
     ],
     automationActions: [
       { kind: 'assign_storage_path', name: 'Assign folder layout', params: [{ name: 'storage_path_id', type: 'id', target_kind: 'rendered_layout' }] },
+      { kind: 'assign_owner', name: 'Assign owner', params: [{ name: 'owner_id', type: 'id', target_kind: 'user' }] },
       { kind: 'assign_custom_field', name: 'Set custom field', params: [{ name: 'field_id', type: 'id', target_kind: 'custom_field' }, { name: 'value', type: 'value' }] },
     ],
     automations: [{
@@ -1880,6 +1915,7 @@ test('uses named folder-layout and typed custom-field automation controls', asyn
       actions: [
         { id: 1, type: 'assign_storage_path', params: { storage_path_id: 4 } },
         { id: 2, type: 'assign_custom_field', params: { field_id: 12, value: 'Needs review' } },
+        { id: 3, type: 'assign_owner', params: { owner_id: 2 } },
       ],
     }],
   })
@@ -1888,9 +1924,11 @@ test('uses named folder-layout and typed custom-field automation controls', asyn
   const row = page.locator('#automation-19')
   await expect(row.getByText('Assign folder layout → Bills by year', { exact: true })).toBeVisible()
   await expect(row.getByText('Set Review status → Needs review', { exact: true })).toBeVisible()
+  await expect(row.getByText('Set owner → Member · member@example.test', { exact: true })).toBeVisible()
   await row.getByRole('button', { name: 'Edit' }).click()
 
   await expect(page.getByRole('combobox', { name: 'Folder layout' })).toHaveValue('4')
+  await expect(page.getByRole('combobox', { name: 'Owner' })).toHaveValue('2')
   const fields = page.getByRole('combobox', { name: 'Custom field', exact: true })
   await expect(fields).toHaveValue('12')
   await expect(page.getByRole('combobox', { name: 'Custom field value' })).toHaveValue('Needs review')
@@ -2717,7 +2755,9 @@ test('limits dashboard count requests and defers empty-view facets', async ({ pa
   await page.unrouteAll({ behavior: 'wait' })
   await mockAPI(page)
   await page.goto('/#/views')
-  await expect(page.getByText('No saved views yet')).toBeVisible()
+  const viewCount = page.locator('.views-panel .panel-count')
+  await expect(viewCount).toHaveText('0')
+  await expect(viewCount).not.toHaveClass(/chip/)
   expect(facetRequests).toEqual([])
 
   const facets = page.waitForRequest(request => new URL(request.url()).pathname === '/api/tags/')
@@ -2734,7 +2774,9 @@ test('defers automation facets until an empty workspace is edited', async ({ pag
   await mockAPI(page, { automations: [] })
   await page.goto('/#/automations')
 
-  await expect(page.getByText('No automations yet.')).toBeVisible()
+  const automationCount = page.locator('.automations-panel .panel-count')
+  await expect(automationCount).toHaveText('0')
+  await expect(automationCount).not.toHaveClass(/chip/)
   expect(facetRequests).toEqual([])
   await page.getByRole('button', { name: 'New automation' }).click()
   await expect.poll(() => new Set(facetRequests).size).toBe(2)

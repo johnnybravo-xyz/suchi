@@ -248,7 +248,7 @@
     <div class="panel-head">
       <div>
         <h3 id="saved-views-heading">Saved views</h3>
-        <span aria-live="polite">{loading ? 'Loading' : `${views.length} ${views.length === 1 ? 'view' : 'views'}`}</span>
+        <span class="panel-count" class:chip={!loading && views.length > 0} aria-live="polite">{loading ? '…' : views.length}</span>
       </div>
       <span class="panel-hint">Select a view to open its matching documents</span>
     </div>
@@ -459,7 +459,9 @@
   .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 14px 17px; border-bottom: 1px solid var(--line); background: var(--surface-2); }
   .panel-head > div { display: flex; align-items: baseline; gap: 9px; }
   .panel-head h3 { font-size: .9rem; }
-  .panel-head span { color: var(--muted); font-size: .72rem; }
+  .panel-head > span { color: var(--muted); font-size: .72rem; }
+  .panel-count { color: var(--muted); font-size: .72rem; }
+  .panel-count.chip { color: var(--accent); }
   .panel-hint { text-align: right; }
 
   .view-list { display: flex; flex-direction: column; }

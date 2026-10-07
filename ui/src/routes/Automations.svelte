@@ -1,7 +1,9 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
   import { listAutomations, createAutomation, patchAutomation, deleteAutomation,
-           listTags, listCorrespondents, listCustomFields, listRenderedLayouts, automationsSchema } from '../lib/api.js'
+           listTags, listCorrespondents, listCustomFields, listRenderedLayouts,
+           adminListUsers, systemMembers, automationsSchema } from '../lib/api.js'
+  import { systems } from '../lib/systems.svelte.js'
   import Icon from '../lib/Icon.svelte'
 
   let { notify, readOnly = false, jdCategories = [] } = $props()
@@ -12,7 +14,7 @@
   let mode = $state('builder')      // 'builder' | 'json'
   let jsonDraft = $state('')
   let draftErr = $state('')
-  let facets = $state({ tags: [], correspondents: [], customFields: [], renderedLayouts: [] })
+  let facets = $state({ tags: [], correspondents: [], customFields: [], renderedLayouts: [], owners: [] })
   let facetsPromise
   let facetsError = $state('')
   let peekID = $state(null)
@@ -47,16 +49,28 @@
     } catch (ex) { err = ex.message || 'Could not load automations.' }
     finally { loading = false }
   }
+  async function loadOwners() {
+    if (readOnly) return []
+    const membershipRequest = systems.introduced && systems.code
+      ? systemMembers(systems.code)
+      : Promise.resolve(null)
+    const [directory, membership] = await Promise.all([adminListUsers(), membershipRequest])
+    const memberIDs = membership ? new Set(membership.user_ids || []) : null
+    return (directory?.results || []).filter(user =>
+      !user.disabled && (!memberIDs || user.role === 'admin' || memberIDs.has(user.id)))
+  }
+
   function loadFacets() {
     if (facetsPromise) return facetsPromise
     facetsError = ''
-    facetsPromise = Promise.all([listTags(), listCorrespondents(), listCustomFields(), listRenderedLayouts()])
-      .then(([tags, correspondents, customFields, renderedLayouts]) => {
+    facetsPromise = Promise.all([listTags(), listCorrespondents(), listCustomFields(), listRenderedLayouts(), loadOwners()])
+      .then(([tags, correspondents, customFields, renderedLayouts, owners]) => {
         facets = {
           tags: tags?.results || [],
           correspondents: correspondents?.results || [],
           customFields: customFields?.results || customFields || [],
           renderedLayouts: renderedLayouts?.results || renderedLayouts || [],
+          owners,
         }
       })
       .catch((ex) => {
@@ -175,6 +189,11 @@
     catch (ex) { notify?.(ex.message || 'Could not delete') }
   }
 
+  function ownerLabel(owner) {
+    if (!owner) return ''
+    return owner.display_name ? `${owner.display_name} · ${owner.email}` : owner.email
+  }
+
   function summary(a) {
     const trig = (a.triggers || []).map(t => TRIGGER_TYPES.find(x => x.code === t.type)?.label || `type ${t.type}`).join(', ')
     return `${trig || 'no trigger'} → ${(a.actions || []).length} action${(a.actions || []).length === 1 ? '' : 's'}`
@@ -198,8 +217,10 @@
       }
       case 'assign_title':
         return p.template ? `Set title → “${p.template}”` : 'Set title'
-      case 'assign_owner':
-        return p.owner_id ? `Set owner → user #${p.owner_id}` : 'Set owner'
+      case 'assign_owner': {
+        const owner = facets.owners.find(candidate => Number(candidate.id) === Number(p.owner_id))
+        return owner ? `Set owner → ${ownerLabel(owner)}` : 'Set owner'
+      }
       case 'assign_storage_path': {
         const layout = facets.renderedLayouts.find(candidate => Number(candidate.id) === Number(p.storage_path_id))
         return layout ? `Assign folder layout → ${layout.name}` : 'Assign folder layout'
@@ -217,16 +238,22 @@
   load()
 </script>
 
-<div class="toolbar">
-  <span class="sub" style="color:var(--muted)">When a trigger fires and its filters match, the actions run in order.</span>
-  <span class="spacer"></span>
-  {#if !readOnly}<button class="btn primary sm" onclick={() => openEditor(null)}><Icon name="plus" size={13} /> New automation</button>{/if}
-</div>
+<div class="automations-page">
+  <header class="automations-intro">
+    <div>
+      <span class="eyebrow">Filing rules</span>
+      <h2>Automate your filing</h2>
+      <p>When a trigger fires and its filters match, the actions run in order.</p>
+    </div>
+    {#if !readOnly}
+      <button class="btn primary new-automation" onclick={() => openEditor(null)}><Icon name="plus" size={15} /> New automation</button>
+    {/if}
+  </header>
 
 {#if err}<div class="err">{err}</div>{/if}
 
 {#if editing !== null}
-  <div class="card" style="margin-bottom:16px">
+  <div class="card automation-editor" style="margin-bottom:16px">
     <div class="toolbar" style="margin-bottom:12px">
       <h3 style="margin:0">
         {#if editing.id}Edit “{editing.name}”
@@ -323,12 +350,25 @@
               <option value={0}>choose…</option>
               {#each jdCategories as x}<option value={x.id}>{x.code} · {x.name}</option>{/each}
             </select>
+          {:else if a.type === 'assign_owner'}
+            <select class="input action-value" aria-label="Owner" bind:value={a.params.owner_id}>
+              <option value={0}>Choose owner…</option>
+              {#each facets.owners as owner}
+                <option value={owner.id}>{ownerLabel(owner)}</option>
+              {/each}
+              {#if a.params.owner_id && !facets.owners.some(owner => Number(owner.id) === Number(a.params.owner_id))}
+                <option value={a.params.owner_id}>Unavailable owner</option>
+              {/if}
+            </select>
           {:else if a.type === 'assign_storage_path'}
             <select class="input action-value" aria-label="Folder layout" bind:value={a.params.storage_path_id}>
               <option value={0}>Choose folder layout…</option>
               {#each facets.renderedLayouts as layout}
                 <option value={layout.id}>{layout.name}{layout.uses_asn ? ' (previous archive number required)' : ''}</option>
               {/each}
+              {#if a.params.storage_path_id && !facets.renderedLayouts.some(layout => Number(layout.id) === Number(a.params.storage_path_id))}
+                <option value={a.params.storage_path_id}>Unavailable folder layout</option>
+              {/if}
             </select>
           {:else if a.type === 'assign_custom_field'}
             {@const field = customFieldFor(a)}
@@ -336,6 +376,9 @@
                     onchange={(event) => { a.params.field_id = Number(event.currentTarget.value); customFieldChanged(a) }}>
               <option value={0}>Choose custom field…</option>
               {#each facets.customFields as candidate}<option value={candidate.id}>{candidate.name} · {candidate.data_type}</option>{/each}
+              {#if a.params.field_id && !facets.customFields.some(candidate => Number(candidate.id) === Number(a.params.field_id))}
+                <option value={a.params.field_id}>Unavailable custom field</option>
+              {/if}
             </select>
             {#if field?.data_type === 'bool'}
               <select class="input action-value" aria-label="Custom field value" value={String(a.params.value)}
@@ -421,49 +464,86 @@
   </div>
 {/snippet}
 
-{#if loading}
-  <div class="index">{#each Array(3) as _}<div class="irow"><div class="skel" style="width:50%"></div></div>{/each}</div>
-{:else if items.length === 0 && editing === null}
-  <div class="empty"><Icon name="zap" size={56} /><b>No automations yet.</b><span>Create one to tag, title, and route documents as they arrive.</span></div>
-{:else}
-  {#if userItems.length}
-    <div class="index">
+<section class="automations-panel" aria-labelledby="custom-automations-heading">
+  <div class="panel-head">
+    <div>
+      <h3 id="custom-automations-heading">Your automations</h3>
+      <span class="panel-count" class:chip={!loading && userItems.length > 0} aria-live="polite">{loading ? '…' : userItems.length}</span>
+    </div>
+    <span class="panel-hint">Rules run in the order shown</span>
+  </div>
+
+  {#if loading}
+    <div class="automation-list" aria-label="Loading automations">
+      {#each Array(3) as _}
+        <div class="automation-loading-row"><div class="skel" style="width:50%"></div></div>
+      {/each}
+    </div>
+  {:else if userItems.length}
+    <div class="index automation-list">
       {#each userItems as a (a.id)}{@render automationRow(a)}{/each}
     </div>
+  {:else}
+    <div class="empty automation-empty">
+      <b>No custom automations yet</b>
+      <span>{readOnly ? 'An administrator can create filing and metadata rules.' : 'Create one to tag, title, and route documents as they arrive.'}</span>
+    </div>
   {/if}
-  {#if builtInItems.length}
-    <section class="builtins" class:only={userItems.length === 0}>
-      <button class="builtins-toggle" onclick={() => (builtInsOpen = !builtInsOpen)} aria-expanded={builtInsOpen}>
-        <span class="chev" class:open={builtInsOpen}><Icon name="chev" size={13} /></span>
-        <span class="grow">
-          <b>Built-in automations</b>
-          <span class="sub">Installed by your filing tree</span>
-        </span>
-        <span class="chip">{builtInItems.length}</span>
-      </button>
-      {#if builtInsOpen}
-        <div class="index builtins-list">
-          {#each builtInItems as a (a.id)}{@render automationRow(a)}{/each}
-        </div>
-      {/if}
-    </section>
-  {/if}
+</section>
+
+{#if !loading && builtInItems.length}
+  <section class="builtins">
+    <button class="builtins-toggle" class:open={builtInsOpen} onclick={() => (builtInsOpen = !builtInsOpen)} aria-expanded={builtInsOpen}>
+      <span class="chev" class:open={builtInsOpen}><Icon name="chev" size={13} /></span>
+      <span class="grow">
+        <b>Built-in automations</b>
+        <span class="sub">Installed by your filing tree</span>
+      </span>
+      <span class="chip">{builtInItems.length}</span>
+    </button>
+    {#if builtInsOpen}
+      <div class="index builtins-list">
+        {#each builtInItems as a (a.id)}{@render automationRow(a)}{/each}
+      </div>
+    {/if}
+  </section>
 {/if}
+</div>
 
 <style>
+  .automations-page { max-width: 960px; margin: 0 auto; }
+  .automations-intro { display: flex; align-items: flex-end; justify-content: space-between; gap: 28px; margin: 10px 0 26px; }
+  .automations-intro > div { max-width: 610px; }
+  .eyebrow { display: block; margin-bottom: 7px; color: var(--accent); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .66rem; font-weight: 700; }
+  .automations-intro h2 { font-size: 1.55rem; line-height: 1.18; }
+  .automations-intro p { margin: 8px 0 0; color: var(--muted); font-size: .9rem; }
+  .new-automation { flex: none; padding: 9px 16px; }
+  .automation-editor { padding: 16px; }
+  .automations-panel, .builtins { overflow: hidden; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); }
+  .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 14px 17px; border-bottom: 1px solid var(--line); background: var(--surface-2); }
+  .panel-head > div { display: flex; align-items: baseline; gap: 9px; }
+  .panel-head h3 { font-size: .9rem; }
+  .panel-head > span { color: var(--muted); font-size: .72rem; }
+  .panel-count { color: var(--muted); font-size: .72rem; }
+  .panel-count.chip { color: var(--accent); }
+  .panel-hint { text-align: right; }
+  .automation-list.index { border: 0; border-radius: 0; }
+  .automation-loading-row { padding: 24px 17px; border-bottom: 1px solid var(--line); }
+  .automation-loading-row:last-child { border-bottom: 0; }
+  .automation-empty { padding: 48px 20px; }
   .builtins { margin-top: 14px; }
-  .builtins.only { margin-top: 0; }
   .builtins-toggle {
-    display: flex; align-items: center; gap: 10px; width: 100%; min-height: 48px;
-    padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--r);
-    background: var(--surface); color: var(--ink); text-align: left;
+    display: flex; align-items: center; gap: 10px; width: 100%; min-height: 58px;
+    padding: 10px 16px; border: 0; border-radius: 0;
+    background: var(--surface-2); color: var(--ink); text-align: left;
   }
-  .builtins-toggle:hover { border-color: var(--line-strong); background: var(--tint); }
+  .builtins-toggle.open { border-bottom: 1px solid var(--line); }
+  .builtins-toggle:hover { background: var(--tint); }
   .builtins-toggle .grow { display: flex; flex-direction: column; gap: 1px; }
   .builtins-toggle .sub { color: var(--muted); font-size: .76rem; }
   .builtins-toggle .chev { display: flex; transition: transform .15s; }
   .builtins-toggle .chev.open { transform: rotate(90deg); }
-  .builtins-list { margin-top: 8px; }
+  .builtins-list { margin: 0; border: 0; border-radius: 0; }
   .acts {
     margin: 6px 0 2px;
     padding: 0 0 0 16px;
@@ -488,7 +568,11 @@
   .action-value { flex:1; max-width:260px; }
   select.action-value[multiple] { min-width:180px; }
   .automation-switch { margin-top: 1px; }
-  @media (max-width: 600px) {
+  @media (max-width: 620px) {
+    .automations-intro { align-items: flex-start; flex-direction: column; gap: 16px; margin-top: 2px; }
+    .new-automation { width: 100%; justify-content: center; }
+    .panel-head { align-items: flex-start; }
+    .panel-hint { display: none; }
     .automation-row { flex-wrap: wrap; gap: 8px; }
     .automation-row > .grow { flex-basis: 100%; }
   }

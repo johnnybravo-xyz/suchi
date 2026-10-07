@@ -363,10 +363,12 @@ and custom fields. `FilingTreeSettings.svelte` owns presets, tree construction,
 and taxonomy files. `ArchiveSettings.svelte` places
 `FolderLayoutsSettings.svelte` first under Advanced; its editor calls the server
 preview rather than duplicating template semantics in JavaScript.
-`Automations.svelte` retains action parameter schemas, loads custom fields and
-rendered-layout API rows in the selected system, and presents named/type-aware
-controls using the **Folder layout** label; the persisted action wire shape
-remains unchanged.
+`Automations.svelte` retains action parameter schemas, reuses the existing
+metadata, user-directory, and filing-system-membership APIs, and presents
+named/type-aware controls for folder layouts, eligible owners, and custom fields.
+IDs remain an internal persisted action contract. Its centered custom-rule panel
+and collapsed filing-tree rules follow the same page hierarchy as `Views.svelte`
+without introducing a shared screen abstraction.
 
 `UserCreateForm.svelte` owns user creation in People and submits no hidden member
 capabilities for admins. Self-disable checks use

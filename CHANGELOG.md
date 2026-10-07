@@ -38,6 +38,10 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Align Automations with the centered Views workspace, use compact positive-count
+  badges and plain zero counts across both screens, keep custom rules ahead of
+  collapsed filing-tree rules, and replace folder-layout, owner, and custom-field
+  ID entry with named selectors.
 - Give Metadata its own tag icon so it is visually distinct from the Archive
   configuration overview.
 - Right-align Document Detail metadata actions, revealing **Manage tags** only

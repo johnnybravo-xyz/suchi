@@ -32,11 +32,15 @@ automation use OR.
 ## Actions
 
 The visual builder exposes title, tag, correspondent, Johnny.Decimal category,
-folder-layout, owner, and custom-field assignment. Folder layouts and custom
-fields use named pickers; the value editor follows the selected custom field's
-declared type. A layout that uses the previous archive number fails atomically
-for a document without that compatibility value.
-The JSON view remains available for inspecting the complete automation.
+folder-layout, owner, and custom-field assignment. Folder layouts, eligible
+owners, and custom fields use named pickers; the value editor follows the
+selected custom field's declared type. The API continues to persist their IDs.
+A layout that uses the previous archive number fails atomically for a document
+without that compatibility value.
+
+The screen keeps custom rules in the main centered list and places filing-tree
+rules in a separate collapsed **Built-in automations** section below it. The JSON
+view remains available for inspecting the complete automation.
 
 The server exposes the current builder vocabulary and parameter schemas at
 `GET /api/automations/schema`. Actions run in order inside one transaction;
