@@ -688,6 +688,8 @@ async function mockAPI(page, options = {}) {
         : (options.jdCategories || []),
     }
     else if (path === '/api/custom_fields/') body = { results: options.customFields || [] }
+    else if (path === '/api/tags/') body = { results: options.tags || [] }
+    else if (path === '/api/correspondents/') body = { results: options.correspondents || [] }
     else if (path === '/api/rendered_layouts/preview' && request.method() === 'POST') {
       const template = request.postDataJSON().template
       const usesASN = template.includes('{{ asn }}')
@@ -749,6 +751,11 @@ async function mockAPI(page, options = {}) {
         { id: 2, email: 'member@example.test', display_name: 'Member', role: 'member', disabled: false, capabilities: ['mailboxes'] },
       ],
     }
+    else if (path === '/api/automations/' && request.method() === 'POST') {
+      const payload = request.postDataJSON()
+      options.automationRequests?.push(payload)
+      body = { ...payload, id: 99 }
+    }
     else if (path === '/api/automations/') body = {
       results: options.automations ?? [{
         id: 7, name: 'Tag utility bills', enabled: true, order: 0,
@@ -759,6 +766,12 @@ async function mockAPI(page, options = {}) {
     else if (path === '/api/automations/schema') body = {
       triggers: [{ code: 2, type: 'document_added', name: 'After a new document lands' }],
       actions: options.automationActions || [{ kind: 'assign_tags', name: 'Add tags', params: [{ name: 'tag_ids' }] }],
+      ask: {
+        max_enabled: 5,
+        trigger_type: 'document_added',
+        answers: [{ type: 'yes_no', name: 'Yes / No' }, { type: 'choice', name: 'Multiple choice', min_choices: 2, max_choices: 10 }],
+        action_kinds: ['assign_tags', 'assign_correspondent', 'assign_jd_category', 'assign_custom_field'],
+      },
     }
     else if (path === '/api/admin/settings/llm') {
       if (request.method() === 'PATCH') {
@@ -1934,6 +1947,44 @@ test('uses named folder-layout and typed custom-field automation controls', asyn
   await expect(page.getByRole('combobox', { name: 'Custom field value' })).toHaveValue('Needs review')
   await fields.selectOption('13')
   await expect(page.getByRole('spinbutton', { name: 'Custom field value' })).toBeVisible()
+})
+
+test('authors a bounded classifier question with answer branches', async ({ page }) => {
+  const writes = []
+  await mockAPI(page, {
+    automations: [],
+    automationRequests: writes,
+    tags: [{ id: 12, name: 'Warranty', slug: 'warranty' }],
+  })
+  await page.goto('/#/automations')
+  await page.getByRole('button', { name: 'New automation' }).click()
+
+  await page.getByPlaceholder('Name, e.g. Tag utility bills').fill('Classify warranty proof')
+  await page.getByPlaceholder('filename matches (glob)').fill('*.pdf')
+  await page.getByRole('checkbox', { name: 'Ask the classifier' }).check()
+  await page.getByLabel('Classifier question').fill('Is this valid warranty proof?')
+  await page.getByLabel('Answer type').selectOption('choice')
+  await page.getByLabel('Answer choice 1').fill('Warranty')
+  await page.getByLabel('Answer choice 2').fill('Not warranty')
+  await page.getByLabel('Answer for action 1').selectOption('Warranty')
+  await page.getByLabel('Tags for action 1').selectOption('12')
+  await page.getByRole('button', { name: 'Save automation' }).click()
+
+  await expect.poll(() => writes.length).toBe(1)
+  expect(writes[0].ask).toEqual({
+    question: 'Is this valid warranty proof?',
+    answer: { type: 'choice', choices: ['Warranty', 'Not warranty'] },
+  })
+  expect(writes[0].triggers).toEqual([expect.objectContaining({
+    type: 2,
+    filter_filename: '',
+    filter_path: '',
+  })])
+  expect(writes[0].actions[0]).toEqual(expect.objectContaining({
+    type: 'assign_tags',
+    when: 'Warranty',
+    params: { tag_ids: [12] },
+  }))
 })
 
 test('reviews category mappings and applies the operator choice', async ({ page }) => {
@@ -4398,6 +4449,32 @@ test('keeps filing reviews compact and explains sources on demand', async ({ pag
   await expect(review.getByRole('link', { name: 'H&M Online Shopping Tax Invoice' })).toBeVisible()
   await expect(review.getByRole('button', { name: 'File document', exact: true })).toBeVisible()
   await expect(review.getByRole('button', { name: 'Dismiss', exact: true })).toBeVisible()
+})
+
+test('labels automation answer reviews without retaining the model transcript', async ({ page }) => {
+  await mockAPI(page, {
+    approvalTasks: [{
+      id: 12, run_id: 6, approval_id: 1, approval_name: 'document-change',
+      doc_id: 234, doc_title: 'Warranty receipt.pdf', doc_has_thumbnail: false,
+      state_key: 'review', assignee: 'user:1',
+      prompt: 'Review suggested document metadata', choices: ['apply', 'reject'],
+      status: 'open', created_at: 1780100000,
+      vars: {
+        field: 'custom_field', field_name: 'Warranty status',
+        current_value: 'No', proposed_value: 'Yes',
+        confidence: 0.81, source: 'llm', reason: 'review_first',
+        policy_version: 'review-first-v1', source_current: true, review_conflict: false,
+        automation_id: 18, automation_name: 'Warranty proof',
+      },
+    }],
+  })
+
+  await page.goto('/#/tasks')
+  const review = page.locator('.decision-row')
+  await expect(review.getByText('Warranty proof proposes setting “Warranty status” to “Yes”.', { exact: true })).toBeVisible()
+  await expect(review.getByText('Automation · Warranty proof', { exact: true })).toBeVisible()
+  await expect(review.getByRole('button', { name: 'Set custom field', exact: true })).toBeVisible()
+  await expect(review.getByText(/Is this valid warranty proof/)).toHaveCount(0)
 })
 
 test('shows dead-job recovery only to administrators', async ({ page }) => {

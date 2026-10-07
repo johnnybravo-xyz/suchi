@@ -26,11 +26,17 @@
 
   let TRIGGER_TYPES = $state([])
   let ACTION_KINDS = $state([])
+  let ASK_SCHEMA = $state({
+    max_enabled: 5,
+    answers: [{ type: 'yes_no', name: 'Yes / No' }, { type: 'choice', name: 'Multiple choice' }],
+    action_kinds: ['assign_tags', 'assign_correspondent', 'assign_jd_category', 'assign_custom_field'],
+  })
   automationsSchema().then(sc => {
     if (sc?.triggers?.length) TRIGGER_TYPES = sc.triggers.map(t => ({ code: t.code, label: t.name || t.type }))
     if (sc?.actions?.length) ACTION_KINDS = sc.actions.map(a => ({
       kind: a.kind, label: a.name || a.kind, description: a.description || '', params: a.params || [],
     }))
+    if (sc?.ask) ASK_SCHEMA = sc.ask
   }).catch(ex => { err = ex.message || 'Could not load the automation schema.' })
 
   const blank = () => ({
@@ -99,7 +105,23 @@
   }
 
   function addTrigger() { editing.triggers.push({ type: 2, filter_filename: '', filter_path: '', filter_title_matching: '', filter_content_matching: '', filter_has_tag: 0, filter_has_correspondent: 0 }) }
-  function addAction() { editing.actions.push({ type: 'assign_tags', params: { tag_ids: [] } }) }
+  function answerBranches(ask = editing?.ask) {
+    if (!ask) return []
+    if (ask.answer?.type === 'yes_no') return ['yes', 'no']
+    return (ask.answer?.choices || []).map(choice => choice.trim()).filter(Boolean)
+  }
+  function availableActionKinds() {
+    if (!editing?.ask) return ACTION_KINDS
+    const allowed = new Set(ASK_SCHEMA.action_kinds || [])
+    return ACTION_KINDS.filter(kind => allowed.has(kind.kind))
+  }
+  function addAction() {
+    const kind = availableActionKinds()[0]?.kind || 'assign_tags'
+    const action = { type: kind, params: {} }
+    actionKindChanged(action)
+    if (editing.ask) action.when = answerBranches()[0] || ''
+    editing.actions.push(action)
+  }
   function actionKindChanged(a) {
     const spec = ACTION_KINDS.find(k => k.kind === a.type)
     a.params = Object.fromEntries((spec?.params || []).map(p => [
@@ -107,8 +129,50 @@
     ]))
   }
 
+  function normalizeActionBranches() {
+    const branches = answerBranches()
+    for (const action of editing.actions || []) {
+      if (!branches.includes(action.when)) action.when = branches[0] || ''
+    }
+  }
+
+  function choiceAnswerSchema() {
+    return ASK_SCHEMA.answers?.find(answer => answer.type === 'choice') || {}
+  }
+
+  function setAskEnabled(enabled) {
+    if (!enabled) {
+      editing.ask = null
+      for (const action of editing.actions || []) delete action.when
+      return
+    }
+    editing.ask = { question: '', answer: { type: 'yes_no', choices: [] } }
+    editing.triggers = (editing.triggers?.length ? editing.triggers : [blank().triggers[0]]).map(trigger => ({
+      ...trigger,
+      type: 2,
+      filter_filename: '',
+      filter_path: '',
+      filter_email_from: '',
+      filter_email_subject: '',
+      filter_email_folder: '',
+      filter_email_has_attachment: null,
+    }))
+    normalizeActionBranches()
+  }
+
+  function askAnswerTypeChanged() {
+    editing.ask.answer.choices = editing.ask.answer.type === 'choice' ? ['Option 1', 'Option 2'] : []
+    normalizeActionBranches()
+  }
+
   function customFieldFor(action) {
     return facets.customFields.find(field => Number(field.id) === Number(action.params?.field_id))
+  }
+
+  function availableCustomFields() {
+    return editing?.ask
+      ? facets.customFields.filter(field => field.data_type !== 'documentlink')
+      : facets.customFields
   }
 
   function customFieldChoices(field) {
@@ -196,42 +260,44 @@
 
   function summary(a) {
     const trig = (a.triggers || []).map(t => TRIGGER_TYPES.find(x => x.code === t.type)?.label || `type ${t.type}`).join(', ')
-    return `${trig || 'no trigger'} → ${(a.actions || []).length} action${(a.actions || []).length === 1 ? '' : 's'}`
+    const ask = a.ask?.question ? ` · asks “${a.ask.question}”` : ''
+    return `${trig || 'no trigger'}${ask} → ${(a.actions || []).length} action${(a.actions || []).length === 1 ? '' : 's'}`
   }
 
   function actionDescribe(a) {
     const spec = ACTION_KINDS.find(k => k.kind === a.type)
     const p = a.params || {}
+    const branch = a.when ? `If “${a.when}”: ` : ''
     switch (a.type) {
       case 'assign_tags': {
         const names = (p.tag_ids || []).map(id => facets.tags.find(t => t.id === id)?.name).filter(Boolean)
-        return names.length ? `Add tags: ${names.join(', ')}` : 'Add tags'
+        return branch + (names.length ? `Add tags: ${names.join(', ')}` : 'Add tags')
       }
       case 'assign_correspondent': {
         const name = facets.correspondents.find(c => c.id === p.correspondent_id)?.name
-        return name ? `Set correspondent → ${name}` : 'Set correspondent'
+        return branch + (name ? `Set correspondent → ${name}` : 'Set correspondent')
       }
       case 'assign_jd_category': {
         const jd = jdCategories.find(x => x.id === p.jd_category_id)
-        return jd ? `Assign filing category → ${jd.code} · ${jd.name}` : 'Assign filing category'
+        return branch + (jd ? `Assign filing category → ${jd.code} · ${jd.name}` : 'Assign filing category')
       }
       case 'assign_title':
-        return p.template ? `Set title → “${p.template}”` : 'Set title'
+        return branch + (p.template ? `Set title → “${p.template}”` : 'Set title')
       case 'assign_owner': {
         const owner = facets.owners.find(candidate => Number(candidate.id) === Number(p.owner_id))
-        return owner ? `Set owner → ${ownerLabel(owner)}` : 'Set owner'
+        return branch + (owner ? `Set owner → ${ownerLabel(owner)}` : 'Set owner')
       }
       case 'assign_storage_path': {
         const layout = facets.renderedLayouts.find(candidate => Number(candidate.id) === Number(p.storage_path_id))
-        return layout ? `Assign folder layout → ${layout.name}` : 'Assign folder layout'
+        return branch + (layout ? `Assign folder layout → ${layout.name}` : 'Assign folder layout')
       }
       case 'assign_custom_field': {
         const field = facets.customFields.find(candidate => Number(candidate.id) === Number(p.field_id))
         const value = Array.isArray(p.value) ? p.value.join(', ') : String(p.value ?? '')
-        return field ? `Set ${field.name} → ${value}` : 'Set custom field'
+        return branch + (field ? `Set ${field.name} → ${value}` : 'Set custom field')
       }
       default:
-        return spec?.label || a.type
+        return branch + (spec?.label || a.type)
     }
   }
 
@@ -306,10 +372,12 @@
       <div class="side-head" style="padding-left:0">When</div>
       {#each editing.triggers as t, i (i)}
         <div class="brow">
-          <select class="input" bind:value={t.type}>
+          <select class="input" bind:value={t.type} disabled={!!editing.ask} aria-label={`Trigger ${i + 1}`}>
             {#each TRIGGER_TYPES as tt}<option value={tt.code}>{tt.label}</option>{/each}
           </select>
-          <input class="input" placeholder="filename matches (glob)" bind:value={t.filter_filename} />
+          {#if !editing.ask}
+            <input class="input" placeholder="filename matches (glob)" bind:value={t.filter_filename} />
+          {/if}
           <input class="input" placeholder="title matches (regex)" bind:value={t.filter_title_matching} />
           <input class="input" placeholder="content matches (regex)" bind:value={t.filter_content_matching} />
           <select class="input" bind:value={t.filter_has_tag}>
@@ -327,16 +395,83 @@
       {/each}
       <button class="btn sm" style="margin:8px 0 4px" onclick={addTrigger}><Icon name="plus" size={12} /> Trigger</button>
 
+      <section class="ask-editor" aria-labelledby="ask-heading">
+        <div class="ask-toggle">
+          <div>
+            <b id="ask-heading">Ask the classifier</b>
+            <p>Ask one closed question after content extraction, then run actions for the selected answer. Up to {ASK_SCHEMA.max_enabled || 5} enabled questions may match a document.</p>
+          </div>
+          <input type="checkbox" aria-label="Ask the classifier"
+                 checked={!!editing.ask}
+                 onchange={(event) => setAskEnabled(event.currentTarget.checked)} />
+        </div>
+        {#if editing.ask}
+          <label class="ask-field">
+            <span>Question</span>
+            <input class="input" aria-label="Classifier question" maxlength="1000"
+                   placeholder="Is this valid warranty proof?"
+                   bind:value={editing.ask.question} />
+          </label>
+          <div class="ask-answer">
+            <label class="ask-field">
+              <span>Answers</span>
+              <select class="input" aria-label="Answer type" bind:value={editing.ask.answer.type}
+                      onchange={askAnswerTypeChanged}>
+                {#each ASK_SCHEMA.answers as answer}
+                  <option value={answer.type}>{answer.name || answer.type}</option>
+                {/each}
+              </select>
+            </label>
+            {#if editing.ask.answer.type === 'yes_no'}
+              <span class="sub">Branches: Yes and No. “Unknown” never runs an action.</span>
+            {:else}
+              <div class="ask-choices">
+                {#each editing.ask.answer.choices as choice, choiceIndex (choiceIndex)}
+                  <div class="ask-choice">
+                    <input class="input" aria-label={`Answer choice ${choiceIndex + 1}`} maxlength="40"
+                           bind:value={editing.ask.answer.choices[choiceIndex]}
+                           onblur={normalizeActionBranches} />
+                    {#if editing.ask.answer.choices.length > (choiceAnswerSchema().min_choices || 2)}
+                      <button class="btn sm" type="button" aria-label={`Remove answer choice ${choiceIndex + 1}`}
+                              onclick={() => { editing.ask.answer.choices.splice(choiceIndex, 1); normalizeActionBranches() }}>
+                        <Icon name="x" size={12} />
+                      </button>
+                    {/if}
+                  </div>
+                {/each}
+                {#if editing.ask.answer.choices.length < (choiceAnswerSchema().max_choices || 10)}
+                  <button class="btn sm" type="button"
+                          onclick={() => editing.ask.answer.choices.push(`Option ${editing.ask.answer.choices.length + 1}`)}>
+                    <Icon name="plus" size={12} /> Choice
+                  </button>
+                {/if}
+              </div>
+            {/if}
+          </div>
+          <p class="sub ask-note">Question rules use persisted title, content, tags, and correspondent filters only. Answers are validated against the configured choices and document evidence.</p>
+        {/if}
+      </section>
+
+
       <div class="side-head" style="padding-left:0">Then</div>
       {#each editing.actions as a, i (i)}
         <div class="brow">
+          {#if editing.ask}
+            <select class="input action-branch" aria-label={`Answer for action ${i + 1}`} bind:value={a.when}>
+              {#each answerBranches() as answer}<option value={answer}>If {answer}</option>{/each}
+            </select>
+          {/if}
           <select class="input" aria-label={`Action ${i + 1}`} value={a.type} onchange={(e) => { a.type = e.target.value; actionKindChanged(a) }}>
-            {#each ACTION_KINDS as k}<option value={k.kind}>{k.label}</option>{/each}
+            {#if editing.ask && !availableActionKinds().some(kind => kind.kind === a.type)}
+              <option value={a.type}>Unsupported for a question</option>
+            {/if}
+            {#each availableActionKinds() as k}<option value={k.kind}>{k.label}</option>{/each}
           </select>
           {#if a.type === 'assign_title'}
             <input class="input" style="flex:1;max-width:none" placeholder={'title template, e.g. {{correspondent}} {{date}}'} bind:value={a.params.template} />
           {:else if a.type === 'assign_tags'}
             <select class="input" multiple size="3" style="max-width:220px"
+                    aria-label={`Tags for action ${i + 1}`}
                     onchange={(e) => (a.params.tag_ids = [...e.target.selectedOptions].map(o => Number(o.value)))}>
               {#each facets.tags as x}<option value={x.id} selected={a.params.tag_ids?.includes(x.id)}>{x.name}</option>{/each}
             </select>
@@ -375,8 +510,8 @@
             <select class="input" aria-label="Custom field" value={a.params.field_id}
                     onchange={(event) => { a.params.field_id = Number(event.currentTarget.value); customFieldChanged(a) }}>
               <option value={0}>Choose custom field…</option>
-              {#each facets.customFields as candidate}<option value={candidate.id}>{candidate.name} · {candidate.data_type}</option>{/each}
-              {#if a.params.field_id && !facets.customFields.some(candidate => Number(candidate.id) === Number(a.params.field_id))}
+              {#each availableCustomFields() as candidate}<option value={candidate.id}>{candidate.name} · {candidate.data_type}</option>{/each}
+              {#if a.params.field_id && !availableCustomFields().some(candidate => Number(candidate.id) === Number(a.params.field_id))}
                 <option value={a.params.field_id}>Unavailable custom field</option>
               {/if}
             </select>
@@ -568,12 +703,31 @@
   .action-value { flex:1; max-width:260px; }
   select.action-value[multiple] { min-width:180px; }
   .automation-switch { margin-top: 1px; }
+  .ask-editor {
+    margin: 14px 0 8px;
+    padding: 14px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface-2);
+  }
+  .ask-toggle { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+  .ask-toggle p { max-width: 680px; margin: 4px 0 0; color: var(--muted); font-size: .8rem; line-height: 1.45; }
+  .ask-toggle input { width: 18px; height: 18px; flex: none; }
+  .ask-field { display: grid; gap: 5px; margin-top: 12px; color: var(--muted); font-size: .75rem; }
+  .ask-field .input { max-width: none; }
+  .ask-answer { display: grid; grid-template-columns: minmax(160px, 220px) 1fr; align-items: end; gap: 12px; }
+  .ask-choices { display: grid; gap: 7px; padding-top: 12px; }
+  .ask-choice { display: flex; gap: 6px; }
+  .ask-choice .input { flex: 1; max-width: none; }
+  .ask-note { display: block; margin-top: 10px; line-height: 1.45; }
+  .action-branch { max-width: 180px; }
   @media (max-width: 620px) {
     .automations-intro { align-items: flex-start; flex-direction: column; gap: 16px; margin-top: 2px; }
     .new-automation { width: 100%; justify-content: center; }
     .panel-head { align-items: flex-start; }
     .panel-hint { display: none; }
     .automation-row { flex-wrap: wrap; gap: 8px; }
+    .ask-answer { grid-template-columns: 1fr; }
     .automation-row > .grow { flex-basis: 100%; }
   }
 </style>

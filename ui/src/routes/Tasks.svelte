@@ -85,7 +85,7 @@
   function taskChoices(t) {
     const choices = Array.isArray(t.choices) ? t.choices : []
     if (t.approval_name === 'document-change') {
-      if (!['jd_category', 'correspondent', 'tag', 'title', 'language'].includes(t.vars?.field)) return []
+      if (!['jd_category', 'correspondent', 'tag', 'title', 'language', 'custom_field'].includes(t.vars?.field)) return []
       return choices.filter(choice => choice === 'reject' || (choice === 'apply' &&
         t.vars?.source_current === true && t.vars?.review_conflict === false &&
         ['review_first', 'low_confidence'].includes(t.vars?.reason)))
@@ -114,6 +114,7 @@
           tag: 'Add tag',
           title: 'Change title',
           language: 'Set language',
+          custom_field: 'Set custom field',
         }[t.vars?.field] || 'Apply change'
       }
     }
@@ -151,14 +152,17 @@
       return t.prompt || t.title || `Task #${t.id}`
     }
     const value = suggestionValue(t.vars)
-    if (!['jd_category', 'correspondent', 'tag', 'title', 'language'].includes(t.vars.field)) return 'Unsupported action · read-only'
-    return {
-      jd_category: `File under “${value}”?`,
-      correspondent: `Set correspondent to “${value}”?`,
-      tag: `Add “${value}” tag?`,
-      title: `Change title to “${value}”?`,
-      language: `Set language to “${value}”?`,
-    }[t.vars.field] || t.prompt
+    if (!['jd_category', 'correspondent', 'tag', 'title', 'language', 'custom_field'].includes(t.vars.field)) return 'Unsupported action · read-only'
+    const action = {
+      jd_category: `filing under “${value}”`,
+      correspondent: `setting the correspondent to “${value}”`,
+      tag: `adding the “${value}” tag`,
+      title: `changing the title to “${value}”`,
+      language: `setting the language to “${value}”`,
+      custom_field: `setting “${t.vars.field_name || 'custom field'}” to “${value}”`,
+    }[t.vars.field]
+    if (t.vars.automation_name) return `${t.vars.automation_name} proposes ${action}.`
+    return action.charAt(0).toUpperCase() + action.slice(1) + '?'
   }
 
   function filingLabel(t) {
@@ -463,7 +467,7 @@
                 {#if t.vars.source}
                   <div class="suggestion-source">
                     <span>Why this was suggested</span>
-                    <strong>{sourceLabel(t.vars.source)}</strong>
+                    <strong>{t.vars.automation_name ? `Automation · ${t.vars.automation_name}` : sourceLabel(t.vars.source)}</strong>
                   </div>
                 {/if}
                 {#if t.vars.evidence_text || t.vars.sources?.length}
