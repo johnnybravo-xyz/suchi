@@ -40,6 +40,7 @@ var coreAfterExtensionObjects = []string{
 	"audit_system",
 	"audit_ts",
 	"automation_actions",
+	"automation_asks",
 	"automation_triggers",
 	"automation_triggers_filter_tag_id_insert",
 	"automation_triggers_filter_tag_id_update",

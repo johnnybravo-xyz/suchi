@@ -18,6 +18,8 @@
 // at /api/approvals/*. Automations live at /api/automations/*.
 package automations
 
+import "encoding/json"
+
 // TriggerType names the event that fires an automation. Values match
 // the on-disk `automation_triggers.type` column and the compat API's
 // integer codes below.
@@ -76,6 +78,7 @@ type Automation struct {
 	Suspended  bool      `json:"suspended,omitempty"`
 	PresetSlug string    `json:"preset_slug,omitempty"`
 	Triggers   []Trigger `json:"triggers"`
+	Ask        *Ask      `json:"ask,omitempty"`
 	Actions    []Action  `json:"actions"`
 	CreatedAt  int64     `json:"created_at"`
 	UpdatedAt  int64     `json:"updated_at"`
@@ -107,12 +110,25 @@ type Trigger struct {
 	FilterEmailHasAttachment *bool       `json:"filter_email_has_attachment,omitempty"`
 }
 
+// Ask is one bounded classifier question attached to an automation.
+type Ask struct {
+	Question string    `json:"question"`
+	Answer   AskAnswer `json:"answer"`
+}
+
+// AskAnswer declares the closed answer vocabulary for an Ask.
+type AskAnswer struct {
+	Type    string   `json:"type"`
+	Choices []string `json:"choices,omitempty"`
+}
+
 // Action is one row in `automation_actions`. Params shape depends on
 // Kind — see automation_actions in 0001_baseline.sql for the per-kind schema.
 type Action struct {
 	ID         int64          `json:"id"`
 	OrderIndex int            `json:"order"`
 	Kind       string         `json:"type"`
+	When       string         `json:"when,omitempty"`
 	Params     map[string]any `json:"params"`
 }
 
@@ -122,9 +138,10 @@ type Action struct {
 // Actions replace wholesale when their pointer is non-nil (empty slice
 // clears the list); leave nil to keep the current rows.
 type AutomationPatch struct {
-	Name       *string    `json:"name,omitempty"`
-	OrderIndex *int       `json:"order,omitempty"`
-	Enabled    *bool      `json:"enabled,omitempty"`
-	Triggers   *[]Trigger `json:"triggers,omitempty"`
-	Actions    *[]Action  `json:"actions,omitempty"`
+	Name       *string         `json:"name,omitempty"`
+	OrderIndex *int            `json:"order,omitempty"`
+	Enabled    *bool           `json:"enabled,omitempty"`
+	Triggers   *[]Trigger      `json:"triggers,omitempty"`
+	Ask        json.RawMessage `json:"ask,omitempty"`
+	Actions    *[]Action       `json:"actions,omitempty"`
 }

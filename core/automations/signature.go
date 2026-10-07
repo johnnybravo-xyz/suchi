@@ -47,6 +47,7 @@ func (e *ErrDuplicateRule) Error() string {
 func signatureOf(a *Automation) (string, error) {
 	sig := ruleSig{
 		Triggers: make([]sigTrigger, 0, len(a.Triggers)),
+		Ask:      a.Ask,
 		Actions:  make([]sigAction, 0, len(a.Actions)),
 	}
 	for _, t := range a.Triggers {
@@ -62,6 +63,7 @@ func signatureOf(a *Automation) (string, error) {
 	for _, act := range a.Actions {
 		sig.Actions = append(sig.Actions, sigAction{
 			Kind:   act.Kind,
+			When:   act.When,
 			Params: act.Params,
 		})
 	}
@@ -75,6 +77,7 @@ func signatureOf(a *Automation) (string, error) {
 // ruleSig is the top-level shape JSON-marshal renders.
 type ruleSig struct {
 	Triggers []sigTrigger `json:"triggers"`
+	Ask      *Ask         `json:"ask,omitempty"`
 	Actions  []sigAction  `json:"actions"`
 }
 
@@ -110,6 +113,7 @@ func (t sigTrigger) sortKey() string {
 // operator's key-insertion order.
 type sigAction struct {
 	Kind   string         `json:"kind"`
+	When   string         `json:"when,omitempty"`
 	Params map[string]any `json:"params,omitempty"`
 }
 

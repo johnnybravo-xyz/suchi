@@ -47,6 +47,27 @@ func TestStableCatalogAndBetaAdoption(t *testing.T) {
 		}
 	})
 
+	t.Run("stable schema 2 upgrades in place", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "suchi.db")
+		d := openAdoptionDB(t, path)
+		if err := db.Migrate(t.Context(), d, stable[:2], log); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := d.ExecWrite(t.Context(),
+			`INSERT INTO settings(key,value_json,updated_at) VALUES('schema-2-probe','\"preserved\"',1)`); err != nil {
+			t.Fatal(err)
+		}
+		if err := migrations.Prepare(t.Context(), d, log); err != nil {
+			t.Fatal(err)
+		}
+		assertStableIdentity(t, d)
+		assertMigrationScalar(t, d, `SELECT count(*) FROM settings WHERE key='schema-2-probe'`, 1)
+		assertMigrationScalar(t, d, `SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='automation_asks'`, 1)
+		if snapshots := adoptionSnapshots(t, path); len(snapshots) != 0 {
+			t.Fatalf("stable forward migration created snapshots: %v", snapshots)
+		}
+	})
+
 	for sourceVersion := 1; sourceVersion <= 4; sourceVersion++ {
 		t.Run(fmt.Sprintf("schema%d", sourceVersion), func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "suchi.db")

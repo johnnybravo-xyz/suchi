@@ -77,6 +77,12 @@ func ListTx(ctx context.Context, tx *sql.Tx, systemID int64) ([]Automation, erro
 		}
 		out[i].Triggers = trs
 
+		ask, err := listAsk(ctx, tx, out[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		out[i].Ask = ask
+
 		acts, err := listActions(ctx, tx, out[i].ID)
 		if err != nil {
 			return nil, err
@@ -105,6 +111,9 @@ func (s *Store) Get(ctx context.Context, systemID, id int64) (*Automation, error
 	if a.Triggers, err = listTriggers(ctx, s.DB.Read, id); err != nil {
 		return nil, err
 	}
+	if a.Ask, err = listAsk(ctx, s.DB.Read, id); err != nil {
+		return nil, err
+	}
 	if a.Actions, err = listActions(ctx, s.DB.Read, id); err != nil {
 		return nil, err
 	}
@@ -113,6 +122,7 @@ func (s *Store) Get(ctx context.Context, systemID, id int64) (*Automation, error
 
 type rowQuery interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
 func listTriggers(ctx context.Context, q rowQuery, atmID int64) ([]Trigger, error) {
@@ -156,9 +166,27 @@ func listTriggers(ctx context.Context, q rowQuery, atmID int64) ([]Trigger, erro
 	return out, rows.Err()
 }
 
+func listAsk(ctx context.Context, q rowQuery, atmID int64) (*Ask, error) {
+	var question, answerType, choicesJSON string
+	if err := q.QueryRowContext(ctx, `
+		SELECT question, answer_type, choices
+		FROM automation_asks WHERE automation_id = ?
+	`, atmID).Scan(&question, &answerType, &choicesJSON); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	ask := &Ask{Question: question, Answer: AskAnswer{Type: answerType}}
+	if err := json.Unmarshal([]byte(choicesJSON), &ask.Answer.Choices); err != nil {
+		return nil, fmt.Errorf("decode automation ask %d: %w", atmID, err)
+	}
+	return ask, nil
+}
+
 func listActions(ctx context.Context, q rowQuery, atmID int64) ([]Action, error) {
 	rows, err := q.QueryContext(ctx, `
-		SELECT id, order_index, kind, params_json
+		SELECT id, order_index, kind, COALESCE(when_answer, ''), params_json
 		FROM automation_actions WHERE automation_id = ? ORDER BY order_index, id
 	`, atmID)
 	if err != nil {
@@ -170,7 +198,7 @@ func listActions(ctx context.Context, q rowQuery, atmID int64) ([]Action, error)
 	for rows.Next() {
 		var a Action
 		var raw string
-		if err := rows.Scan(&a.ID, &a.OrderIndex, &a.Kind, &raw); err != nil {
+		if err := rows.Scan(&a.ID, &a.OrderIndex, &a.Kind, &a.When, &raw); err != nil {
 			return nil, err
 		}
 		a.Params = map[string]any{}
@@ -209,6 +237,9 @@ func (s *Store) CreateInTx(ctx context.Context, tx *sql.Tx, systemID int64, a Au
 	if a.Name == "" {
 		return 0, errors.New("automations: name required")
 	}
+	if err := normalizeAsk(ctx, tx, systemID, &a); err != nil {
+		return 0, err
+	}
 	if err := ValidateTriggers(a.Triggers); err != nil {
 		return 0, err
 	}
@@ -235,7 +266,13 @@ func (s *Store) CreateInTx(ctx context.Context, tx *sql.Tx, systemID int64, a Au
 	if err := writeTriggers(ctx, tx, newID, a.Triggers, now); err != nil {
 		return 0, err
 	}
+	if err := writeAsk(ctx, tx, newID, a.Ask); err != nil {
+		return 0, err
+	}
 	if err := s.writeActions(ctx, tx, newID, a.Actions, now); err != nil {
+		return 0, err
+	}
+	if err := validateAskLimit(ctx, tx, systemID); err != nil {
 		return 0, err
 	}
 	return newID, nil
@@ -278,7 +315,21 @@ func (s *Store) UpdateInTx(ctx context.Context, tx *sql.Tx, systemID, id int64, 
 	if err != nil {
 		return 0, err
 	}
+	ask, askSet, err := decodeAskPatch(p.Ask)
+	if err != nil {
+		return 0, err
+	}
 	post := applyPatch(orig, p)
+	if askSet {
+		post.Ask = ask
+	}
+	if err := normalizeAsk(ctx, tx, systemID, post); err != nil {
+		return 0, err
+	}
+	if p.Actions != nil || askSet {
+		actions := post.Actions
+		p.Actions = &actions
+	}
 	if err := ValidateTriggers(post.Triggers); err != nil {
 		return 0, err
 	}
@@ -291,9 +342,14 @@ func (s *Store) UpdateInTx(ctx context.Context, tx *sql.Tx, systemID, id int64, 
 		return 0, match
 	}
 	if shouldForkPreset(orig, p) {
-		return s.forkPresetRow(ctx, tx, systemID, orig, post)
+		id, err = s.forkPresetRow(ctx, tx, systemID, orig, post)
+	} else {
+		err = s.applyFieldUpdate(ctx, tx, id, p)
 	}
-	if err := s.applyFieldUpdate(ctx, tx, id, p); err != nil {
+	if err != nil {
+		return 0, err
+	}
+	if err := validateAskLimit(ctx, tx, systemID); err != nil {
 		return 0, err
 	}
 	return id, nil
@@ -307,7 +363,7 @@ func shouldForkPreset(orig *Automation, p AutomationPatch) bool {
 	if orig.PresetSlug == "" {
 		return false
 	}
-	return p.Name != nil || p.OrderIndex != nil || p.Triggers != nil || p.Actions != nil
+	return p.Name != nil || p.OrderIndex != nil || p.Triggers != nil || p.Ask != nil || p.Actions != nil
 }
 
 // applyPatch returns a new Automation with the patch's non-nil fields
@@ -347,6 +403,13 @@ func (s *Store) applyFieldUpdate(ctx context.Context, tx *sql.Tx, id int64, p Au
 			return err
 		}
 		if err := writeTriggers(ctx, tx, id, *p.Triggers, now); err != nil {
+			return err
+		}
+	}
+	if ask, set, err := decodeAskPatch(p.Ask); err != nil {
+		return err
+	} else if set {
+		if err := writeAsk(ctx, tx, id, ask); err != nil {
 			return err
 		}
 	}
@@ -416,6 +479,9 @@ func (s *Store) forkPresetRow(ctx context.Context, tx *sql.Tx, systemID int64, o
 		return 0, err
 	}
 	if err := writeTriggers(ctx, tx, newID, post.Triggers, now); err != nil {
+		return 0, err
+	}
+	if err := writeAsk(ctx, tx, newID, post.Ask); err != nil {
 		return 0, err
 	}
 	if err := s.writeActions(ctx, tx, newID, post.Actions, now); err != nil {
@@ -648,11 +714,49 @@ func (s *Store) writeActions(ctx context.Context, tx *sql.Tx, atmID int64, acts 
 			order = i
 		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO automation_actions(automation_id, order_index, kind, params_json, created_at)
-			VALUES (?, ?, ?, ?, ?)
-		`, atmID, order, a.Kind, string(raw), now); err != nil {
+			INSERT INTO automation_actions(automation_id, order_index, kind, when_answer, params_json, created_at)
+			VALUES (?, ?, ?, ?, ?, ?)
+		`, atmID, order, a.Kind, nullIfEmpty(a.When), string(raw), now); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func writeAsk(ctx context.Context, tx *sql.Tx, atmID int64, ask *Ask) error {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM automation_asks WHERE automation_id = ?`, atmID); err != nil {
+		return err
+	}
+	if ask == nil {
+		return nil
+	}
+	choicesList := ask.Answer.Choices
+	if choicesList == nil {
+		choicesList = []string{}
+	}
+	choices, err := json.Marshal(choicesList)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO automation_asks(automation_id, question, answer_type, choices)
+		VALUES (?, ?, ?, ?)
+	`, atmID, ask.Question, ask.Answer.Type, string(choices))
+	return err
+}
+
+func validateAskLimit(ctx context.Context, tx *sql.Tx, systemID int64) error {
+	var count int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT count(*)
+		FROM automation_asks q
+		JOIN automations a ON a.id = q.automation_id
+		WHERE a.system_id = ? AND a.enabled = 1 AND a.suspended = 0
+	`, systemID).Scan(&count); err != nil {
+		return err
+	}
+	if count > MaxEnabledAsks {
+		return fmt.Errorf("automations: at most %d enabled asks are allowed per filing system", MaxEnabledAsks)
 	}
 	return nil
 }

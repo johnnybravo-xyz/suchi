@@ -17,8 +17,8 @@ func TestMetadataCleanupMigratesTypesAndPreservesNotes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migs) != 2 {
-		t.Fatalf("stable migrations = %d, want 2", len(migs))
+	if len(migs) != db.StableSchemaVersion {
+		t.Fatalf("stable migrations = %d, want %d", len(migs), db.StableSchemaVersion)
 	}
 
 	d, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "document-types.db"))
@@ -82,7 +82,7 @@ func TestMetadataCleanupMigratesTypesAndPreservesNotes(t *testing.T) {
 	if err := db.Migrate(t.Context(), d, migs, log); err != nil {
 		t.Fatal(err)
 	}
-	assertSchemaVersion(t, d, 2)
+	assertSchemaVersion(t, d, db.StableSchemaVersion)
 
 	assertMigrationScalar(t, d, `SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='document_types'`, 0)
 	assertMigrationText(t, d, `SELECT note FROM notes WHERE document_id=100 AND user_id=1`, `Follow up with accounting`)

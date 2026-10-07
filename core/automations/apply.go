@@ -147,6 +147,9 @@ func runMatching(ctx context.Context, d *db.DB, actions *Registry, log *slog.Log
 
 	matchedCount := 0
 	for _, atm := range atms {
+		if atm.Ask != nil {
+			continue
+		}
 		matched := false
 		for _, tr := range atm.Triggers {
 			if tr.Type != t {
@@ -273,9 +276,13 @@ func matchesTrigger(tr Trigger, snap *docSnapshot, evCtx Context) bool {
 }
 
 func loadSnapshot(ctx context.Context, d *db.DB, docID int64) (*docSnapshot, error) {
+	return loadSnapshotFrom(ctx, d.Read, docID)
+}
+
+func loadSnapshotFrom(ctx context.Context, q rowQuery, docID int64) (*docSnapshot, error) {
 	var s docSnapshot
 	var content sql.NullString
-	err := d.Read.QueryRowContext(ctx, `
+	err := q.QueryRowContext(ctx, `
 		SELECT COALESCE(d.title, ''), d.content,
 		       (SELECT dc.correspondent_id
 		        FROM document_correspondents dc
@@ -292,7 +299,7 @@ func loadSnapshot(ctx context.Context, d *db.DB, docID int64) (*docSnapshot, err
 
 	// Machine-owned review markers are workflow state, not user-authorized
 	// labels. They must not activate rules that can transfer or trash a doc.
-	rows, err := d.Read.QueryContext(ctx,
+	rows, err := q.QueryContext(ctx,
 		`SELECT tag_id FROM document_tags WHERE document_id = ? AND classifier_owned = 0`, docID)
 	if err != nil {
 		return nil, err

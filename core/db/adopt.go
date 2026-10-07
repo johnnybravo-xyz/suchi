@@ -22,13 +22,14 @@ import (
 
 const (
 	// StableSchemaVersion is the current core schema version in the stable-v1 lineage.
-	StableSchemaVersion = 2
+	StableSchemaVersion = 3
 
 	stableLineage    = "stable-v1"
 	finalBetaLineage = "final-beta-schema-3"
 
 	stableV1Fingerprint             = "9d2a6320eae1582b0f294caa6ed518b5a73ab3dbe6597c9ca1a36cc563e03240"
-	stableFingerprint               = "645e7798d663fff83d120182f661e7148fbd68d263517de9d44783d80aaebae3"
+	stableV2Fingerprint             = "645e7798d663fff83d120182f661e7148fbd68d263517de9d44783d80aaebae3"
+	stableFingerprint               = "cfbdda9e3e80f35be33f763ad14c1c0d83a22ead62e91d04f6dc900331742a82"
 	preIdentityStableFingerprint    = "5d6ac98308eb644b030092178792a46f36e6f8f5041411f020ed2dcf216f46c2"
 	betaOneFingerprint              = "68089660de648a4fcc136bcefc105edc5d29dc4de59dad482124914ea626fb2b"
 	betaTwoFingerprint              = "a341b731c93a7270e3440a18f58911df80b2289bf44cd3baeecff4a2b2b0071c"
@@ -90,6 +91,18 @@ func PrepareStable(ctx context.Context, d *DB, stable, compatibility []Migration
 		}
 		return verifyStableSchema(ctx, d.Write)
 	}
+	if state.version == 2 && state.lineageValid && state.lineage == stableLineage && state.fingerprint == stableV2Fingerprint {
+		if err := checkIntegrity(ctx, d.Write); err != nil {
+			return fmt.Errorf("validate stable schema 2 before upgrade: %w", err)
+		}
+		if err := checkForeignKeys(ctx, d.Write); err != nil {
+			return fmt.Errorf("validate stable schema 2 before upgrade: %w", err)
+		}
+		if err := Migrate(ctx, d, stable, log); err != nil {
+			return err
+		}
+		return verifyStableSchema(ctx, d.Write)
+	}
 
 	profile, ok := classifyBeta(state)
 	if !ok {
@@ -123,7 +136,7 @@ func PrepareStable(ctx context.Context, d *DB, stable, compatibility []Migration
 		return fmt.Errorf("create pre-adoption snapshot: %w", err)
 	}
 	log.Info("db.stable_adoption.snapshot", "source", profile.name, "path", snapshot)
-	if err := adoptBeta(ctx, d, beta, stable[len(stable)-1], profile.nextVersion); err != nil {
+	if err := adoptBeta(ctx, d, beta, stable[1:], profile.nextVersion); err != nil {
 		return fmt.Errorf("adopt %s (snapshot retained at %s): %w", profile.name, snapshot, err)
 	}
 	if err := Migrate(ctx, d, stable, log); err != nil {
@@ -202,7 +215,7 @@ func classifyBeta(state schemaState) (betaProfile, bool) {
 	}
 }
 
-func adoptBeta(ctx context.Context, d *DB, compatibility []Migration, stableMigration Migration, nextVersion int) error {
+func adoptBeta(ctx context.Context, d *DB, compatibility, stableMigrations []Migration, nextVersion int) error {
 	return rebuildTx(ctx, d.Write, func(tx *sql.Tx) error {
 		for _, migration := range compatibility {
 			if migration.Version < nextVersion {
@@ -212,8 +225,10 @@ func adoptBeta(ctx context.Context, d *DB, compatibility []Migration, stableMigr
 				return fmt.Errorf("compatibility migration %d %s: %w", migration.Version, migration.Name, err)
 			}
 		}
-		if _, err := tx.ExecContext(ctx, stableMigration.SQL); err != nil {
-			return fmt.Errorf("stable migration %d %s: %w", stableMigration.Version, stableMigration.Name, err)
+		for _, migration := range stableMigrations {
+			if _, err := tx.ExecContext(ctx, migration.SQL); err != nil {
+				return fmt.Errorf("stable migration %d %s: %w", migration.Version, migration.Name, err)
+			}
 		}
 		result, err := tx.ExecContext(ctx, `UPDATE schema_lineage SET name='stable-v1' WHERE singleton=1`)
 		if err != nil {
