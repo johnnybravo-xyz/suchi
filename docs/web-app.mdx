@@ -202,11 +202,13 @@ also happen there; document screens only assign existing tags.
 
 ## Approvals
 
-Cards show decisions, confidence, evidence and deadlines. Rescan document links
-are under **Affected documents**. Internal workflow identifiers and repetitive
-review boilerplate are omitted.
-See [Approvals](/approvals) for workflow behavior and [Document dates](/document-dates)
-for date review.
+Cards show decisions, confidence, evidence and deadlines. A model-backed
+automation card names the automation and proposed fixed metadata effect,
+including typed custom fields, without exposing or retaining the raw
+question/answer transcript. Rescan document links are under **Affected
+documents**. Internal workflow identifiers and repetitive review boilerplate
+are omitted. See [Approvals](/approvals) for workflow behavior and [Document
+dates](/document-dates) for date review.
 
 ## Trash
 
@@ -334,8 +336,11 @@ Saved rows can be edited or deleted; deleting returns assigned documents to the
 default filing-tree projection. Both **Automations** entry points open the same
 main editor. Folder-layout, eligible-owner, and custom-field actions use named
 selectors rather than asking for numeric IDs; custom-field values use the chosen
-field's real type. Custom rules appear first and filing-tree rules stay in the
-collapsed **Built-in automations** section below them.
+field's real type. **Ask the classifier** adds one bounded Yes/No or
+multiple-choice question and a branch selector to each supported action. It
+uses the existing classifier call and automatic/review-first setting. Custom
+rules appear first and filing-tree rules stay in the collapsed **Built-in
+automations** section below them.
 
 After introduction, **Filing system · CODE** edits a nonblank name of at most 80
 characters and the complete direct membership set, including off-page people.

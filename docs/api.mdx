@@ -1993,14 +1993,21 @@ Both return `404 not_found` unless the referenced row is dead and available with
 the request's system boundary. API tokens cannot retry or dismiss jobs. Neither
 response returns the stored provider error.
 
-Document suggestions from archive matching and the optional LLM classifier
-also appear in `approval_tasks`. Their `approval_name` is `document-change`;
-the `vars` projection includes bounded proposed/current values, confidence,
-reason, policy version, source freshness and authorized supporting documents.
-Raw baselines and session proofs are not exposed. Every inferred field needs
-review regardless of score; unknown actions remain read-only. Source/ACL or
-human-baseline changes prevent application. Resolution records and queues a
-decision, not a completed metadata write; the eventual effect rechecks it.
+Document suggestions from archive matching, the optional LLM classifier, and
+classifier answers mapped through an automation also appear in
+`approval_tasks`. Their `approval_name` is `document-change`; the `vars`
+projection includes bounded proposed/current values, confidence, reason, policy
+version, source freshness and authorized supporting documents. Ask-derived
+proposals additionally expose the automation ID/name and typed custom-field
+label when applicable. The configured question remains part of the ordinary
+automation definition but is not copied into approval tasks; raw answers and
+answer evidence are neither returned nor retained. Raw baselines and session
+proofs are not exposed.
+Eligible high-confidence changes may use automatic mode; review-first and
+below-threshold changes remain human decisions. Unknown actions stay read-only.
+Source/ACL, destination, custom-field baseline, or human-generation changes
+prevent application. Resolution records and queues a decision, not a completed
+metadata write; the eventual effect rechecks it.
 
 ### Automations surface: `/api/automations/*`
 
@@ -2009,19 +2016,25 @@ system. Names, metadata references and rule forks are scoped there. These routes
 require a browser/OIDC session. Full guide at
 [Automations](/automations).
 
-| Method | Path                    | Auth   |
-| ------ | ----------------------- | ------ |
-| GET    | `/api/automations/`     | authed |
-| POST   | `/api/automations/`     | admin  |
-| GET    | `/api/automations/{id}` | authed |
-| PATCH  | `/api/automations/{id}` | admin  |
-| DELETE | `/api/automations/{id}` | admin  |
+| Method | Path                      | Auth   |
+| ------ | ------------------------- | ------ |
+| GET    | `/api/automations/schema` | authed |
+| GET    | `/api/automations/`       | authed |
+| POST   | `/api/automations/`       | admin  |
+| GET    | `/api/automations/{id}`   | authed |
+| PATCH  | `/api/automations/{id}`   | admin  |
+| DELETE | `/api/automations/{id}`   | admin  |
 
 `PATCH` is sparse — send only the fields you want to change. The SPA's
 Enable/Disable button posts `{"enabled": false}`; a full-edit form posts
-name + order + enabled + triggers + actions. When `triggers` or
-`actions` is present, its value replaces the child rows wholesale (an
-empty array clears them); leave the key out to keep them as-is.
+name + order + enabled + triggers + optional `ask` + actions. When `triggers` or
+`actions` is present, its value replaces the child rows wholesale (an empty
+array clears them); leave the key out to keep them as-is. `ask` accepts
+`{"question":"…","answer":{"type":"yes_no"}}` or a `choice` answer with
+2–10 `choices`; send `null` to remove it. Conditional actions add
+`"when":"<declared answer>"`. The schema response advertises the enabled-question
+limit, supported answer types, trigger type, and action kinds. Full validation
+and examples are in [Automations: Ask the classifier](/automations#ask-the-classifier).
 
 ### Approvals surface: `/api/approvals/*`
 

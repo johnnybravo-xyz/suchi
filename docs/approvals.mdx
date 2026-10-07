@@ -157,23 +157,29 @@ investigating a stalled run. Application logs use `component=approvals`.
 
 ## Document suggestions
 
-Archive matching, model metadata and detected-language suggestions that need
-review use the shipped `document-change` definition, assigned to the document
-owner. By default, eligible high-confidence model and local archive changes
-apply automatically. Turn off **Automatically apply high-confidence suggestions**
-to use review-first mode: valid inferred changes need review even at confidence 1.0.
-Below-threshold or otherwise review-required changes still appear here. The
-card leads with current/proposed values and a reason; producer, score and
-authorized source details expand on demand.
-Companion presents title, filing-category and tag suggestions from this same
-feed; other document-change fields remain available in the web review surface.
+Archive matching, model metadata, detected-language suggestions, and fixed
+metadata actions selected by a classifier-backed automation question use the
+shipped `document-change` definition when review is required. The task is
+assigned to the document owner. By default, eligible high-confidence model and
+local archive changes apply automatically. Turn off **Automatically apply
+high-confidence suggestions** to use review-first mode: valid inferred changes
+need review even at confidence 1.0. Below-threshold or otherwise review-required
+changes still appear here. The card leads with current/proposed values and a
+reason; producer, score and authorized source details expand on demand. An
+ask-derived card names the automation and proposed effect, not the discarded
+question/answer transcript. Companion presents title, filing-category and tag
+suggestions from this same feed; other document-change fields, including typed
+custom fields, remain available in the web review surface.
 
 The retained proposal binds the target's immutable source and field generation,
-plus any supporting documents. Human writes and explicit clears invalidate older
-proposals even when the final value is unchanged. Source, membership, document
-ACL, destination and reviewer authority are checked at resolution and again at
-the queued write. Creating new shared metadata also requires its current
-administrative authority. Hidden supporting documents are never exposed by review.
+plus any supporting documents. A custom-field proposal also binds a one-way
+fingerprint of the prior typed display value; the value itself is shown through
+the ordinary authorized projection, not copied into hidden model history. A
+changed, cleared, or newly created prior value invalidates the proposal. Source,
+membership, document ACL, destination and reviewer authority are checked at
+resolution and again at the queued write. Creating new shared metadata also
+requires its current administrative authority. Hidden supporting documents are
+never exposed by review.
 
 **Apply** records a decision and queues the effect; it does not promise the field
 already changed. A later credential revocation, scope removal, source edit or

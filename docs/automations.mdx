@@ -3,10 +3,12 @@ title: "Automations"
 description: "Deterministic filing with typed triggers and ordered metadata actions."
 ---
 
-Automations are Suchi's deterministic filing layer. Each automation combines
-one or more event filters with an ordered action list, lives in SQLite, and can
-be managed in the Automations screen or through the API. Human decisions
-belong in [Approvals](/approvals).
+Automations are Suchi's filing layer. Each automation combines one or more event
+filters with an ordered action list, lives in SQLite, and can be managed in the
+Automations screen or through the API. Ordinary rules are deterministic; an
+optional **Ask the classifier** branch maps one bounded model answer onto
+administrator-configured local actions. Human decisions belong in
+[Approvals](/approvals).
 
 Rules and their vocabulary belong to one [filing system](/jd). Matching, offered
 categories, symbolic names and runtime metadata IDs stay in the document's system;
@@ -84,13 +86,160 @@ Title templates support `{{title}}`, `{{correspondent}}`, `{{tags}}`, and
 erase text. The visual builder resolves names to IDs; direct JSON action
 parameters continue to use IDs.
 
+## Ask the classifier
+
+An administrator can attach one closed question to a `document_added`
+automation. The Automations builder supports **Yes / No** or 2–10 named choices;
+`unknown` is always added as a no-action answer. At most five enabled question
+automations may exist in one filing system.
+
+Question automations use only state available after extraction: title/content
+regular expressions plus existing tag and correspondent filters. Intake-only
+path, filename and mail-envelope filters are rejected. Matching is recomputed
+for each eligible classifier job, including an explicit LLM rescan. Refile and
+`document_updated` events do not invoke the question branch.
+
+Each action names the answer that activates it. Supported effects are adding
+existing tags, assigning one existing correspondent or filing category, and
+setting a fixed typed custom-field value. Document-link custom fields are not
+available. Destinations and fixed values remain in Suchi; the model receives
+only the automation ID, question text, and allowed answers. It cannot choose an
+action, metadata ID, or arbitrary value.
+
+### Example: warranty proof
+
+Ask whether warranty language constitutes proof, then set an existing boolean
+field and add an existing tag. If `Warranty proof` already has a value, Suchi
+preserves it and can still apply the independent tag.
+
+```json
+{
+  "name": "Warranty proof",
+  "enabled": true,
+  "triggers": [
+    {
+      "type": 2,
+      "filter_content_matching": "warranty|guarantee"
+    }
+  ],
+  "ask": {
+    "question": "Is this valid warranty proof?",
+    "answer": { "type": "yes_no" }
+  },
+  "actions": [
+    {
+      "type": "assign_tags",
+      "when": "yes",
+      "params": { "tag_ids": [7] }
+    },
+    {
+      "type": "assign_custom_field",
+      "when": "yes",
+      "params": { "field_id": 12, "value": true }
+    }
+  ]
+}
+```
+
+### Example: tax document type
+
+A multiple-choice branch can file an invoice or mark a credit note without
+letting the model invent a category or tag. Category assignment applies only
+while the document is in Inbox.
+
+```json
+{
+  "name": "Classify tax documents",
+  "enabled": true,
+  "triggers": [
+    {
+      "type": 2,
+      "filter_content_matching": "invoice|credit note|tax"
+    }
+  ],
+  "ask": {
+    "question": "What kind of tax document is this?",
+    "answer": {
+      "type": "choice",
+      "choices": ["Tax invoice", "Credit note", "Other"]
+    }
+  },
+  "actions": [
+    {
+      "type": "assign_jd_category",
+      "when": "Tax invoice",
+      "params": { "jd_category_id": 21 }
+    },
+    {
+      "type": "assign_tags",
+      "when": "Credit note",
+      "params": { "tag_ids": [13] }
+    }
+  ]
+}
+```
+
+### Example: contract renewal clause
+
+Use a narrow content filter so only likely contracts receive the question.
+The `yes` branch records a fixed flag and review tag; `no` and `unknown` leave
+the document unchanged.
+
+```json
+{
+  "name": "Flag automatic renewals",
+  "enabled": true,
+  "triggers": [
+    {
+      "type": 2,
+      "filter_content_matching": "renew|extension|term"
+    }
+  ],
+  "ask": {
+    "question": "Does this contract say that it renews automatically?",
+    "answer": { "type": "yes_no" }
+  },
+  "actions": [
+    {
+      "type": "assign_custom_field",
+      "when": "yes",
+      "params": { "field_id": 44, "value": true }
+    },
+    {
+      "type": "assign_tags",
+      "when": "yes",
+      "params": { "tag_ids": [19] }
+    }
+  ]
+}
+```
+
+These IDs are examples. The visual builder uses names and saves the IDs of
+destinations that already exist in the current filing system.
+
+All matching questions share the classifier's existing single request. Each
+returned answer must use an offered ID and answer, contain a confidence from
+zero to one, and—except for `unknown`—include a short exact quote from the
+document. Duplicate IDs, invented answers, and ungrounded evidence are ignored.
+Question definitions and their ordered match set are compared again in the final
+write transaction; if that set changed during the provider call, every question
+answer from the call is discarded while ordinary classifier output may still
+apply.
+
+Answer actions use the same confidence threshold and automatic/review-first
+setting as ordinary classifier metadata. A review card names the automation and
+the proposed fixed effect. Suchi does not retain the question, raw answer, or
+evidence quote as ask history; normal audit and approval records retain only
+bounded automation attribution and metadata-change provenance.
+
 ## Classification order
 
 For a newly extracted document Suchi runs:
 
 1. local archive matching, when enabled
-2. user automations in configured order
-3. the optional LLM classifier
+2. ordinary user automations in configured order
+3. the optional LLM classifier, including questions from matching ask
+   automations
 
 Archive matching uses authorized lexical neighbours. With the shared automatic
 application mode on (the default), eligible matches at or above `0.90` apply;

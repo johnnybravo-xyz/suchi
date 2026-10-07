@@ -3,11 +3,13 @@ title: "LLM classifier"
 description: "Optional local or hosted model assistance, source-grounded research, and threshold-based suggestions with optional review."
 ---
 
-Suchi ships deterministic automations and local archive matching. The
-optional LLM classifier adds one fixed post-extraction model call for title,
-correspondent, tags, Johnny.Decimal category, confidence, and language.
-The same configured transport also powers read-only, source-grounded archive
-questions for authorized users.
+Suchi ships deterministic automations and local archive matching. The optional
+LLM classifier adds one fixed post-extraction model call for title,
+correspondent, tags, Johnny.Decimal category, confidence, and language. Up to
+five matching administrator-authored automation questions can join that same
+call; each answer maps only to fixed local metadata actions. The same configured
+transport also powers read-only, source-grounded archive questions for
+authorized users.
 
 Provider/model/OCR and classification controls are instance-wide. Each document's
 offered categories, local neighbors, metadata creation, rules and approval
@@ -135,6 +137,8 @@ For hosted model assistance, Suchi sends:
 - extracted text from the current document
 - bounded filing context and a small set of similar-document titles
 - the requested structured-output instructions
+- for each matching ask automation, its numeric ID, question text, and closed
+  answer list (never its action mapping, destination IDs, or fixed values)
 
 For **Archive research**, it instead sends the question, newest complete history
 pairs within four messages/12 KB, and at most six sources selected from
@@ -154,9 +158,13 @@ redacted egress inventory and boundary logs.
 
 Suchi accepts only validated JSON contracts. Text lengths, tag count, language
 shape, confidence ranges, JD code, extracted date count and calendar values,
-evidence quotes, and archive-research citations are bounded before persistence
-or rendering. Invalid provider output fails without exposing raw output or
-document text in logs or API errors.
+evidence quotes, automation-answer IDs/choices, and archive-research citations
+are bounded before persistence or rendering. A non-`unknown` automation answer
+must include a normalized exact quote present in the text sent to the model and
+the current document. Duplicate IDs, unknown IDs, unavailable destinations,
+invented choices, and stale question definitions produce no mapped action.
+Invalid provider output fails or is ignored according to its bounded field
+without exposing raw output or document text in logs or API errors.
 
 The confidence threshold ranges from `0.50` to `0.95` in `0.05` steps and
 defaults to `0.70`.
@@ -168,6 +176,14 @@ model-reported signals, not calibrated probabilities of correctness.
 An unset correspondent and Inbox-only filing remain eligibility checks. Human
 edits, clears and language locks take precedence over in-flight inference;
 automatic language changes do not create a human language lock.
+
+Automation answers use their own model-reported confidence against the same
+threshold and application mode. Answer actions are mapped before ordinary
+classifier metadata in the final transaction; configured automation order wins
+for single-value destinations, while tags combine. All question answers from a
+request are discarded if the ordered matching question/action definitions
+changed during the call. The ordinary classifier result remains independently
+eligible. No question-specific request, retry, or answer-history row is created.
 
 Local archive matching shares the same mode, with a default automatic threshold
 of `0.90` and minimum review-suggestion score of `0.50`. Explicit user-authored
@@ -205,9 +221,10 @@ Trash, restore and rescan alone do not count as review.
 
 ## Test and live reload
 
-**Test connection** sends fixed synthetic text and validates the response with
-the production parser. It returns latency and sanitized synthetic fields only.
-It does not save settings, send archive content, or reveal raw provider output.
+**Test connection** sends fixed synthetic text without live automation questions
+and validates the response with the production parser. It returns latency and
+sanitized synthetic fields only. It does not save settings, send archive
+content, or reveal raw provider output.
 
 Saving local archive settings or the model's enabled state, endpoint, model,
 key, timeout, acknowledgement or confidence threshold applies immediately.

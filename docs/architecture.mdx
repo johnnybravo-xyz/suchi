@@ -603,6 +603,18 @@ Document/system admission and refile admin rechecks remain outside the handler;
 only built-in discard can revisit Trash. Custom callbacks are trusted compiled
 code, not an authorization or inference interface. Enqueue extension work in the
 same transaction as its state change; keep network/subprocess calls outside it.
+
+An ask automation remains an automation definition, not a second workflow
+engine. `core/automations/ask.go` validates the bounded question/answer/action
+mapping and selects matching `document_added` questions from one read snapshot.
+The LLM transport receives only model-safe `{automation_id, question,
+allowed_answers}` objects. `plugins/llm-classifier/handler.go` keeps local action
+mappings and custom-field baselines outside the prompt, maps validated answers
+before ordinary classifier fields, and submits the resulting fixed effects
+through the existing automatic/document-change approval paths. The configured
+question lives only with its automation definition; raw answers and evidence
+quotes have no durable run-history table.
+
 [Automations](/automations#compiled-actions) owns the action contract. Integrations
 must not add another workflow engine. Advancement jobs carry system/run revision;
 handlers run outside the writer, then their transactional effects/tasks recheck
@@ -666,30 +678,40 @@ review decisions and human edits; see [Archive research](/archive-chat).
 ### Automatic application and review eligibility
 
 `core/documentstate` captures source and field generations before inference.
-Unreleased migration 0003 adds monotonic counters and triggers, including
-same-value reassertions; explicit no-op junction removals advance intent in their
-domain writer. `core/similar.TopDocsInTx` keeps selection, metadata and supporting
-snapshots in one read transaction. Matching and model naming context use
-owner-level visibility, never an administrator's corpus-wide bypass.
+Stable migration 0003 adds the one-to-one `automation_asks` definition and
+conditional action column. Monotonic document counters and triggers in the
+baseline schema include same-value reassertions; explicit no-op junction
+removals advance intent in their domain writer. `core/similar.TopDocsInTx` keeps
+selection, metadata and supporting snapshots in one read transaction. Matching
+and model naming context use owner-level visibility, never an administrator's
+corpus-wide bypass.
 
 The classifier performs provider work outside the writer. Before committing it
-rechecks runtime identity, target source and naming-context authorization.
+rechecks runtime identity, target source and naming-context authorization. For
+ask automations it also reloads and compares the complete ordered matching
+question/answer/action signatures. Any mismatch discards the whole ask-answer
+batch while leaving independently validated ordinary classifier output eligible;
+there is no partial per-answer salvage or extra provider retry.
 `settings.ResolveAutoApply` reads the shared policy under the writer: a missing
 value enables automatic application; malformed values or errors fail closed.
 `core/approvals.ApplyAutomaticDocumentChangeInTx` checks that policy, the explicit
-threshold and score, and current source, field, supporters and destination guards.
-Only model/archive sources can take this path; explicit rules stay independent.
-Review-required changes use `core/approvals.ProposeDocumentChangeInTx`, which
-invokes shared review eligibility with host-validated checks and atomically
-stores bounded source/human bindings and review jobs. Unsupported, stale or
-contradictory candidates cannot gain mutation authority.
+per-result threshold and score, and current source, field, supporters and
+destination guards. Only model/archive sources can take this path; explicit
+rules stay independent. Review-required changes use
+`core/approvals.ProposeDocumentChangeInTx`, which invokes shared review
+eligibility with host-validated checks and atomically stores bounded
+source/human bindings, optional automation attribution, and review jobs.
+Unsupported, stale or contradictory candidates cannot gain mutation authority.
 
 Automatic and reviewed metadata use a shared guarded value writer, not duplicate
-field-update SQL. Machine policy and interactive human authorization remain
-distinct: automatic application never fabricates a reviewer or locks language.
-Within a multi-tag batch, successful automatic writes advance the application
-baseline without discarding the original snapshot checks against human races.
-Successful writes cancel competing reviews made stale by the new field generation.
+field-update SQL. Typed custom-field effects reuse `core/customfield` validation,
+storage and rendering; their proposal binds the prior presence plus a one-way
+rendered-value fingerprint rather than adding another revision table. Machine
+policy and interactive human authorization remain distinct: automatic
+application never fabricates a reviewer or locks language. Within a multi-action
+batch, successful automatic writes advance the application baseline without
+discarding the original snapshot checks against human races. Successful writes
+cancel competing reviews made stale by the new field generation.
 
 Metadata resolution stores the interactive principal's session digest and expiry,
 not a bearer cookie. `plugin-api.Principal` keeps these fields off the wire;

@@ -16,7 +16,7 @@ Outbound traffic occurs only when an operator configures or uses an integration:
 | OIDC                        | Discovery, authorization, and token requests to the configured issuer                                                                                                                                                                                                                                                                           |
 | IMAP intake                 | Mailbox credentials or OAuth tokens and mailbox reads                                                                                                                                                                                                                                                                                           |
 | Microsoft mailbox sign-in   | Device-code and token requests to Microsoft                                                                                                                                                                                                                                                                                                     |
-| Hosted model assistance     | Extracted text and bounded classification context from the document's filing system; for an authorized archive question, the question, newest complete history pairs within four messages/12 KB, and up to six system/membership/ACL-filtered sources containing title, sensitivity, snippet, and capability-gated accepted fact value/evidence |
+| Hosted model assistance     | Extracted text and bounded classification context from the document's filing system, including matching automation IDs, question text, and closed answers but not action mappings or destination values; for an authorized archive question, the question, newest complete history pairs within four messages/12 KB, and up to six system/membership/ACL-filtered sources containing title, sensitivity, snippet, and capability-gated accepted fact value/evidence |
 | Operator pre-consume script | Whatever the operator's executable chooses to send                                                                                                                                                                                                                                                                                              |
 
 Hosted LLM use requires an explicit egress acknowledgement. Local LLM endpoints
@@ -26,6 +26,12 @@ destinations at boot; `suchi doctor` prints the same inventory without exposing
 credentials. A pre-consume script is not network-isolated and its destinations
 cannot be inventoried by Suchi; constrain process or container egress when
 needed.
+
+Classifier question answers are transient. Suchi validates them against the
+offered ID/answer and current document text, then maps them to fixed local
+actions. It does not persist question-specific raw answers, evidence quotes, or
+prompt transcripts. Approval and audit rows retain only bounded automation
+ID/name attribution, confidence, policy, and the resulting metadata proposal.
 
 ## Encryption
 

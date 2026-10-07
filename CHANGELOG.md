@@ -5,6 +5,11 @@ Notable user-visible changes to Suchi are recorded here.
 ## [Unreleased]
 ### Added
 
+- Add bounded **Ask the classifier** branches to Automations. Up to five
+  Yes/No or multiple-choice questions share the existing classifier call and
+  map validated, evidence-grounded answers to fixed tags, correspondents,
+  filing categories, or typed custom-field values through the existing
+  automatic/review-first policy.
 - Add linear document replacement history with current-head uploads, exact
   historical URLs, idempotent retries, caller-relative latest discovery,
   explicit metadata inheritance boundaries, and a badge that counts only other
