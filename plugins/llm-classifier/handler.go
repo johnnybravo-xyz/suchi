@@ -305,7 +305,8 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 					claimedCategory = true
 				case "assign_custom_field":
 					fieldID := automationActionID(action.Params["field_id"])
-					if fieldID == 0 || claimedCustomFields[fieldID] {
+					captured, exists := customFieldBaselines[fieldID]
+					if fieldID == 0 || !exists || captured.present || claimedCustomFields[fieldID] {
 						continue
 					}
 					value, err := json.Marshal(action.Params["value"])

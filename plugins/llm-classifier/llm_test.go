@@ -440,10 +440,13 @@ func TestHandlerMapsAskAnswerActionsWithAnswerConfidence(t *testing.T) {
 	d, docID := openHandlerDocument(t, "Warranty receipt", "Warranty period is two years.")
 	if _, err := d.Write.ExecContext(ctx, `
 		INSERT INTO custom_fields(id,name,data_type,extra_data,created_at,updated_at,system_id)
-		VALUES (41,'Warranty proof','bool','{}',0,0,1);
+		VALUES (41,'Warranty proof','bool','{}',0,0,1),
+		       (43,'Existing warranty decision','bool','{}',0,0,1);
+		INSERT INTO document_custom_field_values(document_id,field_id,value_bool)
+		VALUES (?,43,0);
 		INSERT INTO tags(id,system_id,name,slug,created_at,updated_at)
 		VALUES (42,1,'warranty','warranty',0,0)
-	`); err != nil {
+	`, docID); err != nil {
 		t.Fatal(err)
 	}
 	store := askAutomationStore(t, d)
@@ -453,6 +456,7 @@ func TestHandlerMapsAskAnswerActionsWithAnswerConfidence(t *testing.T) {
 		Ask:      &automations.Ask{Question: "Is this valid warranty proof?", Answer: automations.AskAnswer{Type: "yes_no"}},
 		Actions: []automations.Action{
 			{Kind: "assign_custom_field", When: "yes", Params: map[string]any{"field_id": int64(41), "value": true}},
+			{Kind: "assign_custom_field", When: "yes", Params: map[string]any{"field_id": int64(43), "value": true}},
 			{Kind: "assign_tags", When: "yes", Params: map[string]any{"tag_ids": []int64{42}}},
 		},
 	})
@@ -480,17 +484,18 @@ func TestHandlerMapsAskAnswerActionsWithAnswerConfidence(t *testing.T) {
 	if err := NewHandler(p, d, silentLog()).Handle(ctx, pluginapi.Event{SystemID: 1, Kind: Kind, DocID: docID}); err != nil {
 		t.Fatal(err)
 	}
-	var warranty, tagged, reviews int
+	var warranty, existing, tagged, reviews int
 	if err := d.Read.QueryRowContext(ctx, `
 		SELECT COALESCE((SELECT value_bool FROM document_custom_field_values WHERE document_id=? AND field_id=41),-1),
+		       COALESCE((SELECT value_bool FROM document_custom_field_values WHERE document_id=? AND field_id=43),-1),
 		       EXISTS(SELECT 1 FROM document_tags WHERE document_id=? AND tag_id=42),
 		       (SELECT COUNT(*) FROM approval_runs r JOIN approval_defs a ON a.id=r.def_id
 		        WHERE r.doc_id=? AND a.slug=?)
-	`, docID, docID, docID, approvals.DocumentChangeSlug).Scan(&warranty, &tagged, &reviews); err != nil {
+	`, docID, docID, docID, docID, approvals.DocumentChangeSlug).Scan(&warranty, &existing, &tagged, &reviews); err != nil {
 		t.Fatal(err)
 	}
-	if warranty != 1 || tagged != 1 || reviews != 0 {
-		t.Fatalf("mapped effects: warranty=%d tagged=%d reviews=%d", warranty, tagged, reviews)
+	if warranty != 1 || existing != 0 || tagged != 1 || reviews != 0 {
+		t.Fatalf("mapped effects: warranty=%d existing=%d tagged=%d reviews=%d", warranty, existing, tagged, reviews)
 	}
 }
 
