@@ -144,9 +144,8 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		if err := checkNamingContext(ctx, tx, e.DocID, current, supporters); err != nil {
 			return err
 		}
-		currentQuestions := matchedQuestions
 		if len(matchedQuestions) > 0 {
-			currentQuestions, err = automations.MatchingQuestionsTx(ctx, tx, baseline.SystemID, e.DocID)
+			currentQuestions, err := automations.MatchingQuestionsTx(ctx, tx, baseline.SystemID, e.DocID)
 			if err != nil {
 				return err
 			}
