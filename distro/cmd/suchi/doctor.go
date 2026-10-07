@@ -45,6 +45,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/sandbox"
 	"github.com/johnnybravo-xyz/suchi/core/settings"
 	"github.com/johnnybravo-xyz/suchi/distro/internal/diagnostics"
+	llmclassifier "github.com/johnnybravo-xyz/suchi/plugins/llm-classifier"
 )
 
 func runDoctor(args []string) int {
@@ -448,12 +449,22 @@ func humanBytes(n int64) string {
 
 func resolveDoctorLLMEndpoint(ctx context.Context, d *db.DB, cfg *config.Config) string {
 	endpoint, ack, disabled := cfg.LLMEndpointURL, cfg.LLMEgressAck, false
-	var storedEndpoint string
-	if err := settings.Get(ctx, d, settings.KeyLLMEndpointURL, &storedEndpoint); err == nil && storedEndpoint != "" {
-		endpoint = storedEndpoint
+	_, endpointPinned := os.LookupEnv("LLM_ENDPOINT_URL")
+	if !endpointPinned {
+		var storedEndpoint string
+		if err := settings.Get(ctx, d, settings.KeyLLMEndpointURL, &storedEndpoint); err == nil && storedEndpoint != "" {
+			endpoint = storedEndpoint
+		}
+		var provider string
+		_ = settings.Get(ctx, d, settings.KeyLLMSubscriptionProvider, &provider)
+		if provider != "" {
+			endpoint = llmclassifier.NewSubscriptions(d, nil).Endpoint(provider)
+		}
+		_ = settings.Get(ctx, d, settings.KeyLLMDisabled, &disabled)
 	}
-	_ = settings.Get(ctx, d, settings.KeyLLMEgressAck, &ack)
-	_ = settings.Get(ctx, d, settings.KeyLLMDisabled, &disabled)
+	if _, ackPinned := os.LookupEnv("LLM_EGRESS_ACK"); !ackPinned {
+		_ = settings.Get(ctx, d, settings.KeyLLMEgressAck, &ack)
+	}
 	if disabled || endpoint == "" {
 		return ""
 	}

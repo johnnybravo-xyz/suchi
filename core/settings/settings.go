@@ -26,6 +26,7 @@ import (
 const (
 	KeyLLMEndpointURL          = "llm.endpoint_url"
 	KeyLLMModel                = "llm.model"
+	KeyLLMSubscriptionProvider = "llm.subscription_provider"
 	KeyLLMAPIKeySealed         = "llm.api_key_sealed"
 	KeyLLMEgressAck            = "llm.egress_ack"
 	KeyLLMDisabled             = "llm.disabled"
@@ -326,11 +327,12 @@ func ResolveAutoApply(ctx context.Context, q interface {
 // LLMConfig is the shape callers merge into their plugin config. Uses
 // plain scalars so this package doesn't import plugins/*.
 type LLMConfig struct {
-	EndpointURL         string
-	Model               string
-	APIKey              string
-	EgressAck           bool
-	ConfidenceThreshold float64
+	SubscriptionProvider string
+	EndpointURL          string
+	Model                string
+	APIKey               string
+	EgressAck            bool
+	ConfidenceThreshold  float64
 	// Disabled is persisted separately from EndpointURL so a web-managed
 	// classifier can be turned off without erasing its setup.
 	Disabled bool
@@ -389,11 +391,12 @@ type sealedSecret struct {
 // encrypted empty value. Explicit file and environment keys still win.
 func SaveLLMConfig(ctx context.Context, database *db.DB, cfg LLMConfig, box SecretBox, apiKey *string) error {
 	values := map[string]any{
-		KeyLLMEndpointURL: cfg.EndpointURL,
-		KeyLLMModel:       cfg.Model,
-		KeyLLMEgressAck:   cfg.EgressAck,
-		KeyLLMDisabled:    cfg.Disabled,
-		KeyLLMConfidence:  cfg.ConfidenceThreshold,
+		KeyLLMSubscriptionProvider: cfg.SubscriptionProvider,
+		KeyLLMEndpointURL:          cfg.EndpointURL,
+		KeyLLMModel:                cfg.Model,
+		KeyLLMEgressAck:            cfg.EgressAck,
+		KeyLLMDisabled:             cfg.Disabled,
+		KeyLLMConfidence:           cfg.ConfidenceThreshold,
 	}
 	if apiKey != nil {
 		secret, err := sealLLMAPIKey(box, *apiKey)
@@ -425,6 +428,11 @@ func sealLLMAPIKey(box SecretBox, apiKey string) (sealedSecret, error) {
 // remain authoritative.
 func ResolveLLMConfig(ctx context.Context, database *db.DB, fb LLMConfig, box SecretBox) (LLMConfig, error) {
 	out := fb
+	if !envSet("LLM_ENDPOINT_URL") {
+		if err := Get(ctx, database, KeyLLMSubscriptionProvider, &out.SubscriptionProvider); err != nil && !errors.Is(err, ErrNotFound) {
+			return LLMConfig{}, err
+		}
+	}
 	var s string
 	if !envSet("LLM_ENDPOINT_URL") {
 		if err := Get(ctx, database, KeyLLMEndpointURL, &s); err == nil && s != "" {

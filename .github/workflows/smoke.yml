@@ -177,7 +177,7 @@ jobs:
           test -s /tmp/spa-manifest.webmanifest
           test -s /tmp/spa-third-party-notices.txt
           shell=$(cat /tmp/spa-index.html)
-          if [[ "$shell" =~ src=\"\\./(assets/index-[^\"]+\\.js)\" ]]; then
+          if [[ "$shell" =~ src=\"\./(assets/index-[^\"]+\.js)\" ]]; then
             entry=${BASH_REMATCH[1]}
           else
             echo "hashed SPA entry asset missing from /app/" >&2

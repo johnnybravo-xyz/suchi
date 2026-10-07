@@ -99,6 +99,69 @@ func TestResolveDoctorLLMEndpointRetainsEnvironmentFallbackForEmptySetting(t *te
 	}
 }
 
+func TestResolveDoctorSubscriptionEgress(t *testing.T) {
+	ctx := context.Background()
+	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "suchi.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	migs, err := db.LoadMigrations(migrations.FS, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrate(ctx, d, migs, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range map[string]any{settings.KeyLLMSubscriptionProvider: "openai_chatgpt", settings.KeyLLMEndpointURL: "", settings.KeyLLMEgressAck: true, settings.KeyLLMDisabled: false} {
+		if err := settings.Set(ctx, d, key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	endpoint := resolveDoctorLLMEndpoint(ctx, d, &config.Config{})
+	inventory, err := diagnostics.EnumerateEgress(ctx, d, &config.Config{}, endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(inventory, "\n"), "llm-classifier https://chatgpt.com") {
+		t.Fatalf("inventory = %v", inventory)
+	}
+	if got := resolveDoctorLLMEndpoint(ctx, d, &config.Config{LLMEndpointURL: "http://127.0.0.1:11434/v1"}); got != endpoint {
+		t.Fatalf("config-file fallback suppressed subscription: %q", got)
+	}
+	t.Run("environment endpoint overrides subscription", func(t *testing.T) {
+		t.Setenv("LLM_ENDPOINT_URL", "http://127.0.0.1:11434/v1")
+		cfg := &config.Config{LLMEndpointURL: "http://127.0.0.1:11434/v1"}
+		if got := resolveDoctorLLMEndpoint(ctx, d, cfg); got != cfg.LLMEndpointURL {
+			t.Fatalf("endpoint = %q", got)
+		}
+	})
+	t.Run("empty environment endpoint disables subscription", func(t *testing.T) {
+		t.Setenv("LLM_ENDPOINT_URL", "")
+		if got := resolveDoctorLLMEndpoint(ctx, d, &config.Config{}); got != "" {
+			t.Fatalf("endpoint = %q", got)
+		}
+	})
+	t.Run("environment consent overrides stored consent", func(t *testing.T) {
+		t.Setenv("LLM_EGRESS_ACK", "false")
+		if got := resolveDoctorLLMEndpoint(ctx, d, &config.Config{}); got != "" {
+			t.Fatalf("endpoint = %q", got)
+		}
+	})
+
+	for key, value := range map[string]any{settings.KeyLLMDisabled: true, settings.KeyLLMEgressAck: false} {
+		if err := settings.Set(ctx, d, key, value); err != nil {
+			t.Fatal(err)
+		}
+		if got := resolveDoctorLLMEndpoint(ctx, d, &config.Config{}); got != "" {
+			t.Fatalf("endpoint with %s = %q", key, got)
+		}
+		if err := settings.Set(ctx, d, key, !value.(bool)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestClassifyOCRLanguagesReportsConfiguredPacks(t *testing.T) {
 	output := []byte("List of available languages in /usr/share/tessdata (4):\nosd\neng\nscript/Devanagari\neng\n")
 	available, missing, err := classifyOCRLanguages(output, []string{"eng", "nep", "deu", "nep"})

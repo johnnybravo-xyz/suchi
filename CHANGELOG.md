@@ -30,6 +30,11 @@ Notable user-visible changes to Suchi are recorded here.
   server-validated sample previews, named automation controls, transactional
   rerenders, and compatibility guards for layouts that use read-only previous
   archive numbers.
+- Add Account subscription mode in Classification settings, with OpenAI
+  ChatGPT (Codex) as the first provider, using device
+  login, encrypted credentials, automatic refresh and streaming Responses for
+  classification and archive research, plus an account-backed model dropdown.
+  Document egress requires consent; connection testing explains that requirement.
 
 ### Fixed
 
@@ -37,6 +42,18 @@ Notable user-visible changes to Suchi are recorded here.
   configuration overview.
 - Right-align Document Detail metadata actions, revealing **Manage tags** only
   while editing tags, while keeping values readable at narrow widths.
+- Include active account subscription destinations in startup and doctor egress
+  reports; preserve mode-specific endpoint/model drafts and restore the saved
+  subscription model after reconnecting.
+
+- Keep local matching options editable after an account subscription disconnect,
+  without changing or reloading the saved model configuration.
+
+- Save subscription model dropdown selections automatically and restore them after refresh,
+  while keeping model activation and document egress consent explicit.
+
+- Read finalized text from ChatGPT subscription stream events when the completion
+  envelope omits its output, so connection testing and classification succeed.
 - Repair rendered links created by beta.1 and beta.2 when a stable-v1 refile
   verifies that the linked blob belongs to the document.
 - Keep operational dead-job details and the Retry/Dismiss recovery controls out

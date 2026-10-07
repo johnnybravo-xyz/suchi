@@ -5,6 +5,7 @@
 dist
 ui/node_modules
 ui/dist
+core/ui/spa/dist
 ui/playwright-report
 ui/test-results
 docs
