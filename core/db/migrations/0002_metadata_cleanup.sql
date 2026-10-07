@@ -1,8 +1,13 @@
 -- suchi: rebuild-tables
 -- SPDX-License-Identifier: AGPL-3.0-or-later
 
--- Document types were a second flat label vocabulary inherited from Paperless.
--- Preserve every type as a namespaced tag before removing that duplicate model.
+-- Document types were a second flat label vocabulary inherited from the source
+-- archive. Preserve every type as a namespaced tag before removing that model.
+
+-- Native notes gain edit timestamps without rewriting their authorship.
+ALTER TABLE notes ADD COLUMN updated_at INTEGER;
+UPDATE notes SET updated_at = created_at WHERE updated_at IS NULL;
+
 INSERT INTO tags(
     name, slug, color, matching_algorithm, match, is_insensitive,
     is_inbox_tag, created_at, updated_at, parent_id, system_id
@@ -187,8 +192,8 @@ SET filter_json = json_set(
 )
 WHERE id IN (SELECT view_id FROM final_queries);
 
--- Paperless-style flat saved-view filters may also exist. Normalize the tag
--- list to the CSV form accepted by the API and remove the retired key.
+-- Source-style flat saved-view filters may also exist. Normalize the tag list
+-- to the CSV form accepted by the API and remove the retired key.
 UPDATE saved_views AS sv
 SET filter_json = json_remove(
     json_set(
@@ -220,7 +225,7 @@ WHERE json_valid(sv.filter_json)
 CREATE TABLE object_acls_new (
   id             INTEGER PRIMARY KEY,
   object_kind    TEXT    NOT NULL CHECK (object_kind IN (
-      'document', 'tag', 'correspondent', 'storage_path'
+      'document', 'tag', 'correspondent', 'rendered_layout'
   )),
   object_id      INTEGER NOT NULL,
   principal_kind TEXT    NOT NULL CHECK (principal_kind IN ('user', 'group')),
@@ -232,7 +237,9 @@ CREATE TABLE object_acls_new (
 ) STRICT;
 
 INSERT INTO object_acls_new(id, object_kind, object_id, principal_kind, principal_id, perm_bits, created_at, created_by)
-SELECT id, object_kind, object_id, principal_kind, principal_id, perm_bits, created_at, created_by
+SELECT id,
+       CASE object_kind WHEN 'storage_path' THEN 'rendered_layout' ELSE object_kind END,
+       object_id, principal_kind, principal_id, perm_bits, created_at, created_by
 FROM object_acls
 WHERE object_kind <> 'document_type';
 
@@ -290,3 +297,108 @@ ALTER TABLE documents DROP COLUMN document_type_revision;
 DROP TABLE document_types;
 
 DROP TABLE _document_type_tags;
+
+-- Preserve replacement chains as explicit version families and make reverse
+-- document-link lookup efficient.
+ALTER TABLE documents ADD COLUMN version_family_key TEXT;
+
+CREATE INDEX documents_version_family
+    ON documents(system_id, version_family_key, id)
+    WHERE version_family_key IS NOT NULL;
+
+CREATE INDEX dcfv_documentlink_target
+    ON document_custom_field_values(value_int, field_id, document_id)
+    WHERE value_int IS NOT NULL;
+
+CREATE TRIGGER dcfv_documentlink_topology_insert
+BEFORE INSERT ON document_custom_field_values
+WHEN NEW.value_int IS NOT NULL
+ AND (SELECT data_type FROM custom_fields WHERE id = NEW.field_id) = 'documentlink'
+ AND (
+    NEW.document_id = NEW.value_int
+    OR EXISTS (
+        SELECT 1
+        FROM documents AS source
+        JOIN documents AS target ON target.id = NEW.value_int
+        WHERE source.id = NEW.document_id
+          AND source.system_id = target.system_id
+          AND source.version_family_key IS NOT NULL
+          AND source.version_family_key = target.version_family_key
+    )
+ )
+BEGIN
+    SELECT RAISE(ABORT, 'invalid document link topology');
+END;
+
+CREATE TRIGGER dcfv_documentlink_topology_update
+BEFORE UPDATE OF document_id, field_id, value_int ON document_custom_field_values
+WHEN NEW.value_int IS NOT NULL
+ AND (SELECT data_type FROM custom_fields WHERE id = NEW.field_id) = 'documentlink'
+ AND (
+    NEW.document_id = NEW.value_int
+    OR EXISTS (
+        SELECT 1
+        FROM documents AS source
+        JOIN documents AS target ON target.id = NEW.value_int
+        WHERE source.id = NEW.document_id
+          AND source.system_id = target.system_id
+          AND source.version_family_key IS NOT NULL
+          AND source.version_family_key = target.version_family_key
+    )
+ )
+BEGIN
+    SELECT RAISE(ABORT, 'invalid document link topology');
+END;
+
+CREATE TEMP TABLE version_family_backfill_guard (
+    ok INTEGER NOT NULL CONSTRAINT version_family_tree_valid CHECK (ok = 1)
+) STRICT;
+
+WITH RECURSIVE version_tree(id, root_id) AS (
+    SELECT id, id
+    FROM documents
+    WHERE previous_version_id IS NULL
+    UNION
+    SELECT child.id, version_tree.root_id
+    FROM documents AS child
+    JOIN version_tree ON child.previous_version_id = version_tree.id
+)
+INSERT INTO version_family_backfill_guard(ok)
+SELECT CASE WHEN EXISTS (
+    SELECT 1
+    FROM documents AS candidate
+    WHERE candidate.previous_version_id IS NOT NULL
+      AND NOT EXISTS (
+          SELECT 1
+          FROM version_tree
+          WHERE version_tree.id = candidate.id
+      )
+) THEN 0 ELSE 1 END;
+
+WITH RECURSIVE version_tree(id, root_id) AS (
+    SELECT id, id
+    FROM documents
+    WHERE previous_version_id IS NULL
+    UNION
+    SELECT child.id, version_tree.root_id
+    FROM documents AS child
+    JOIN version_tree ON child.previous_version_id = version_tree.id
+), version_families AS (
+    SELECT root_id
+    FROM version_tree
+    GROUP BY root_id
+    HAVING count(*) > 1
+)
+UPDATE documents
+SET version_family_key = (
+    SELECT 'm:' || lower(printf('%032x', version_tree.root_id))
+    FROM version_tree
+    WHERE version_tree.id = documents.id
+)
+WHERE id IN (
+    SELECT version_tree.id
+    FROM version_tree
+    JOIN version_families USING (root_id)
+);
+
+DROP TABLE version_family_backfill_guard;

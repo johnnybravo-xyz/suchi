@@ -15,18 +15,20 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
 
 const (
-	// StableSchemaVersion is the latest schema in the stable-v1 lineage.
+	// StableSchemaVersion is the current core schema version in the stable-v1 lineage.
 	StableSchemaVersion = 2
 
-	stableLineage                   = "stable-v1"
-	finalBetaLineage                = "final-beta-schema-3"
-	stableFingerprint               = "8e722073006db789f8aa44a6f0aa1b6f7af4dc689f23983666ce207d7b56d165"
+	stableLineage    = "stable-v1"
+	finalBetaLineage = "final-beta-schema-3"
+
 	stableV1Fingerprint             = "9d2a6320eae1582b0f294caa6ed518b5a73ab3dbe6597c9ca1a36cc563e03240"
+	stableFingerprint               = "645e7798d663fff83d120182f661e7148fbd68d263517de9d44783d80aaebae3"
 	preIdentityStableFingerprint    = "5d6ac98308eb644b030092178792a46f36e6f8f5041411f020ed2dcf216f46c2"
 	betaOneFingerprint              = "68089660de648a4fcc136bcefc105edc5d29dc4de59dad482124914ea626fb2b"
 	betaTwoFingerprint              = "a341b731c93a7270e3440a18f58911df80b2289bf44cd3baeecff4a2b2b0071c"
@@ -77,6 +79,12 @@ func PrepareStable(ctx context.Context, d *DB, stable, compatibility []Migration
 		return nil
 	}
 	if state.version == 1 && state.lineageValid && state.lineage == stableLineage && state.fingerprint == stableV1Fingerprint {
+		if err := checkIntegrity(ctx, d.Write); err != nil {
+			return fmt.Errorf("validate stable schema 1 before upgrade: %w", err)
+		}
+		if err := checkForeignKeys(ctx, d.Write); err != nil {
+			return fmt.Errorf("validate stable schema 1 before upgrade: %w", err)
+		}
 		if err := Migrate(ctx, d, stable, log); err != nil {
 			return err
 		}
@@ -115,7 +123,7 @@ func PrepareStable(ctx context.Context, d *DB, stable, compatibility []Migration
 		return fmt.Errorf("create pre-adoption snapshot: %w", err)
 	}
 	log.Info("db.stable_adoption.snapshot", "source", profile.name, "path", snapshot)
-	if err := adoptBeta(ctx, d, beta, profile.nextVersion); err != nil {
+	if err := adoptBeta(ctx, d, beta, stable[len(stable)-1], profile.nextVersion); err != nil {
 		return fmt.Errorf("adopt %s (snapshot retained at %s): %w", profile.name, snapshot, err)
 	}
 	if err := Migrate(ctx, d, stable, log); err != nil {
@@ -194,7 +202,7 @@ func classifyBeta(state schemaState) (betaProfile, bool) {
 	}
 }
 
-func adoptBeta(ctx context.Context, d *DB, compatibility []Migration, nextVersion int) error {
+func adoptBeta(ctx context.Context, d *DB, compatibility []Migration, stableMigration Migration, nextVersion int) error {
 	return rebuildTx(ctx, d.Write, func(tx *sql.Tx) error {
 		for _, migration := range compatibility {
 			if migration.Version < nextVersion {
@@ -203,6 +211,9 @@ func adoptBeta(ctx context.Context, d *DB, compatibility []Migration, nextVersio
 			if _, err := tx.ExecContext(ctx, migration.SQL); err != nil {
 				return fmt.Errorf("compatibility migration %d %s: %w", migration.Version, migration.Name, err)
 			}
+		}
+		if _, err := tx.ExecContext(ctx, stableMigration.SQL); err != nil {
+			return fmt.Errorf("stable migration %d %s: %w", stableMigration.Version, stableMigration.Name, err)
 		}
 		result, err := tx.ExecContext(ctx, `UPDATE schema_lineage SET name='stable-v1' WHERE singleton=1`)
 		if err != nil {
@@ -215,25 +226,14 @@ func adoptBeta(ctx context.Context, d *DB, compatibility []Migration, nextVersio
 		if changed != 1 {
 			return fmt.Errorf("set stable lineage: changed %d rows, want 1", changed)
 		}
-		if _, err := tx.ExecContext(ctx, "PRAGMA user_version = 1"); err != nil {
+		if _, err := tx.ExecContext(ctx, "PRAGMA user_version = "+strconv.Itoa(StableSchemaVersion)); err != nil {
 			return fmt.Errorf("set stable user_version: %w", err)
 		}
 		if err := checkIntegrity(ctx, tx); err != nil {
 			return err
 		}
-		return verifyStableV1Schema(ctx, tx)
+		return verifyStableSchema(ctx, tx)
 	})
-}
-
-func verifyStableV1Schema(ctx context.Context, q schemaQueryer) error {
-	state, err := inspectSchema(ctx, q)
-	if err != nil {
-		return err
-	}
-	if state.version != 1 || !state.lineageValid || state.lineage != stableLineage || state.fingerprint != stableV1Fingerprint {
-		return fmt.Errorf("stable-v1 schema mismatch: user_version=%d lineage=%q fingerprint=%s", state.version, state.lineage, state.fingerprint)
-	}
-	return nil
 }
 
 func verifyStableSchema(ctx context.Context, q schemaQueryer) error {

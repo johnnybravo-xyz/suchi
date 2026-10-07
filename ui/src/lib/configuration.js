@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 export const TAGS_SETTINGS_HASH = '#/settings?tab=archive&section=metadata&metadata=tags'
+export const CUSTOM_FIELDS_SETTINGS_HASH = '#/settings?tab=archive&section=metadata&metadata=custom_fields'
 
 export const FILING_TREE_SETTINGS_ITEM = {
   name: 'filing-tree', label: 'Filing tree', icon: 'docs',
@@ -20,8 +21,8 @@ export const ARCHIVE_SETTINGS_GROUPS = [
         href: '#/settings?tab=archive&section=users',
       },
       {
-        name: 'metadata', label: 'Metadata', icon: 'settings',
-        description: 'Manage document labels, correspondents, storage paths, and custom fields.',
+        name: 'metadata', label: 'Metadata', icon: 'tag',
+        description: 'Manage document labels, correspondents, and custom fields.',
         href: '#/settings?tab=archive&section=metadata',
       },
     ],
@@ -61,10 +62,15 @@ export const ARCHIVE_SETTINGS_GROUPS = [
     ],
   },
   {
-    name: 'maintenance',
-    label: 'Maintenance',
-    description: 'OCR coverage and archive recovery settings.',
+    name: 'advanced',
+    label: 'Advanced',
+    description: 'Local filesystem output, OCR, and archive recovery settings.',
     items: [
+      {
+        name: 'folder-layouts', label: 'Folder layouts', icon: 'docs',
+        description: 'Control how documents appear in the local rendered filesystem.',
+        href: '#/settings?tab=archive&section=folder-layouts',
+      },
       {
         name: 'preferences', label: 'OCR and backups', icon: 'settings',
         description: 'Set OCR languages and the automatic backup schedule.',

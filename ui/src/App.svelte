@@ -632,7 +632,7 @@
         </button>
         <h1>{pageTitle}{#if scopeReady && systems.introduced}<small style="display:block;font-size:.68rem;font-weight:400;max-width:28ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{systems.code} · {systems.results.find(item => item.code === systems.code)?.name}</small>{/if}</h1>
         {#if scopeReady}<Omnibox pages={session.user?.role === 'admin'
-          ? [...PAGES, { href: '#/settings?tab=archive', label: 'Archive configuration', ico: 'settings' }, { href: '#/settings?tab=archive&section=users', label: 'People', ico: 'shield' }, { href: '#/settings?tab=archive&section=metadata', label: 'Metadata', ico: 'settings' }]
+          ? [...PAGES, { href: '#/settings?tab=archive', label: 'Archive configuration', ico: 'settings' }, { href: '#/settings?tab=archive&section=users', label: 'People', ico: 'shield' }, { href: '#/settings?tab=archive&section=metadata', label: 'Metadata', ico: 'tag' }]
           : PAGES} commands={COMMANDS} canAsk={chatEnabled && canUseArchiveChat} onAsk={openArchiveChat} />{/if}
         {#if chatParked && ChatDrawer}
           <button class="research-ribbon" bind:this={chatRibbon} onclick={resumeArchiveChat}

@@ -73,12 +73,37 @@ into:
 
 1. one positive FTS5 `MATCH` expression for text clauses;
 2. fixed SQL predicates for negation and metadata filters;
-3. the caller's visibility predicate; and
-4. live-document exclusion unless `is:trash` controls trash state.
+3. typed custom-field value predicates plus presence predicates, with target
+   ACL/liveness inside a `documentlink` `EXISTS`;
+4. numeric/null predicates for read-only previous archive numbers;
+5. the caller's source-document visibility predicate;
+6. the caller-relative version currentness predicate; and
+7. live-document exclusion unless `is:trash` controls trash state.
 
 Text results include a content snippet with `<mark>` around the matching span.
 The snippet window is 20 FTS tokens. Filter-only queries do not join FTS; they
 return an empty snippet and use newest-first ordering.
+
+Currentness is evaluated inside the candidate query before count, ranking, and
+pagination. A version family contributes its greatest live document ID visible
+to that caller unless `version:all` or `version:older` changes the mode. Metadata
+filters stay outside the newer-version subquery: a newer visible revision
+suppresses an older revision even when only the older row matches another
+filter. This avoids presenting stale metadata as current. Exact-ID retrieval and
+Trash bypass family currentness.
+
+`has-field:` resolves a field ID in the selected system before compilation.
+Ordinary fields test for one stored value row. Document-link fields additionally
+join the exact target and require its intrinsic visibility and live state inside
+the `EXISTS`; negation wraps that complete predicate. Hidden target identity
+therefore cannot change a count or page in a way that claims the link is present.
+
+`field:` resolves the definition and data type in the selected system before
+compilation. Text-like equality checks the typed text column, multi-choice
+equality tests JSON membership, numbers/money compare `value_number`, dates
+compare `value_date`, and booleans compare `value_bool`. `asn:` compares the
+nullable compatibility column on the document row. These predicates stay inside
+the same visible/current candidate query used for counts and pages.
 
 Default recency-ranked searches first materialize only the requested page of
 document IDs and scores. A row-ID-restricted FTS pass then builds one snippet
@@ -161,8 +186,11 @@ recognized query qualifier, the endpoint returns full replacement queries for:
 - Johnny.Decimal categories;
 - tags;
 - correspondents;
+- custom fields for `has-field:` and `field:`;
 - sensitivity values;
-- Calendar date roles; and
+- Calendar date roles;
+- version modes;
+- `asn:none`; and
 - `is:` states.
 
 The browser debounces requests by 160 ms and discards stale responses. Selecting

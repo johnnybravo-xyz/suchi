@@ -5,7 +5,7 @@
   import { adminListUsers, adminPatchUser,
            listGroups, createGroup, deleteGroup, groupMembers, addGroupMember, removeGroupMember,
            listCustomFields, createCustomField, patchCustomField, deleteCustomField,
-           listAllTags, listCorrespondents, listStoragePaths,
+           listAllTags, listCorrespondents,
            createTaxon, patchTaxon, deleteTaxon, deleteTags } from '../lib/api.js'
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
   import UserCreateForm from '../lib/UserCreateForm.svelte'
@@ -150,7 +150,9 @@
   let fieldsLoaded = $state(false)
   let fieldsLoading = $state(false)
   let fieldsError = $state('')
-  let nf = $state({ name: '', data_type: 'text' })
+  let nf = $state({ name: '', data_type: 'text', choices: '' })
+  let fieldChoiceDrafts = $state({})
+  let fieldChoiceBusy = $state(null)
   const FIELD_TYPES = {
     text: 'Text', number: 'Number', date: 'Date', bool: 'Yes / no',
     select: 'Single choice', multi: 'Multiple choices', url: 'Web link',
@@ -166,6 +168,9 @@
       const r = await listCustomFields()
       if (version !== fieldsLoadVersion || !scopeCurrent(scope) || tab !== 'metadata' || taxon !== 'custom_fields') return
       fields = r?.results || r || []
+      fieldChoiceDrafts = Object.fromEntries(fields
+        .filter(field => field.data_type === 'select' || field.data_type === 'multi')
+        .map(field => [field.id, customFieldChoices(field).join('\n')]))
       fieldsLoaded = true
     } catch (ex) {
       if (version === fieldsLoadVersion && scopeCurrent(scope) && tab === 'metadata' && taxon === 'custom_fields') fieldsError = ex.message || 'Could not load custom fields.'
@@ -173,11 +178,30 @@
       if (version === fieldsLoadVersion && scopeCurrent(scope) && tab === 'metadata' && taxon === 'custom_fields') fieldsLoading = false
     }
   }
+  function customFieldChoices(field) {
+    try {
+      return JSON.parse(field.extra_data || '{}')?.choices || []
+    } catch {
+      return []
+    }
+  }
+  function normalizedChoices(value) {
+    return value.split('\n').map(choice => choice.trim()).filter(Boolean)
+  }
   async function addField(e) {
     e.preventDefault()
     if (!nf.name.trim()) return
-    try { await createCustomField({ name: nf.name.trim(), data_type: nf.data_type }); nf = { name: '', data_type: 'text' }; notify?.('Field created'); loadFields() }
-    catch (ex) { notify?.(ex.message || 'Could not create the field') }
+    const choiceType = nf.data_type === 'select' || nf.data_type === 'multi'
+    const choices = normalizedChoices(nf.choices)
+    if (choiceType && !choices.length) return
+    const payload = { name: nf.name.trim(), data_type: nf.data_type }
+    if (choiceType) payload.extra_data = JSON.stringify({ choices })
+    try {
+      await createCustomField(payload)
+      nf = { name: '', data_type: 'text', choices: '' }
+      notify?.('Field created')
+      loadFields()
+    } catch (ex) { notify?.(ex.message || 'Could not create the field') }
   }
   async function renameField(f, name) {
     if (!name.trim() || name === f.name) return
@@ -189,12 +213,29 @@
     try { await deleteCustomField(f.id); fields = fields.filter(x => x.id !== f.id); notify?.('Field deleted') }
     catch (ex) { notify?.(ex.message || 'Could not delete') }
   }
+  async function saveFieldChoices(field) {
+    const choices = normalizedChoices(fieldChoiceDrafts[field.id] || '')
+    if (!choices.length || fieldChoiceBusy != null) return
+    fieldChoiceBusy = field.id
+    try {
+      const extra_data = JSON.stringify({ choices })
+      await patchCustomField(field.id, { extra_data })
+      field.extra_data = extra_data
+      fieldChoiceDrafts = { ...fieldChoiceDrafts, [field.id]: choices.join('\n') }
+      notify?.('Choices updated')
+    } catch (ex) {
+      notify?.(ex.code === 'choice_in_use'
+        ? 'A choice still used by a document cannot be removed.'
+        : (ex.message || 'Could not update choices'))
+    } finally {
+      fieldChoiceBusy = null
+    }
+  }
 
   // ---------- document metadata ----------
   const TAXA = [
     { kind: 'tags', label: 'Tags', singular: 'tag', description: 'Labels for finding and grouping documents across your filing tree.', load: listAllTags },
     { kind: 'correspondents', label: 'Correspondents', singular: 'correspondent', description: 'People and organizations you send documents to or receive them from.', load: listCorrespondents },
-    { kind: 'storage_paths', label: 'Storage paths', singular: 'storage path', description: 'Named storage paths used when filing documents.', load: listStoragePaths },
     { kind: 'custom_fields', label: 'Custom fields', description: 'Extra document details, such as an invoice number, renewal date, or web link.' },
   ]
   const taxon = $derived(TAXA.some(t => t.kind === initialMetadata) ? initialMetadata : 'tags')
@@ -519,7 +560,14 @@
             </select>
           </label>
         </div>
-        <div class="form-actions"><button class="btn primary" disabled={!nf.name.trim()}><Icon name="plus" size={14} />Create field</button></div>
+        {#if nf.data_type === 'select' || nf.data_type === 'multi'}
+          <label class="field choice-field">Choices
+            <textarea class="input" rows="4" bind:value={nf.choices}
+                      placeholder={'One choice per line\ne.g. Pending\nApproved'} required></textarea>
+            <small>One choice per line. Choices can be extended later; choices already used by documents cannot be removed.</small>
+          </label>
+        {/if}
+        <div class="form-actions"><button class="btn primary" disabled={!nf.name.trim() || ((nf.data_type === 'select' || nf.data_type === 'multi') && !normalizedChoices(nf.choices).length)}><Icon name="plus" size={14} />Create field</button></div>
       </form>
     {:else}
       <form onsubmit={addTaxon}>
@@ -561,10 +609,27 @@
       {:else}
         <div class="index">
           {#each fields as f (f.id)}
-            <div class="irow">
-              <span class="grow"><input class="inline-edit" aria-label={`Rename ${f.name}`} value={f.name} onchange={(e) => renameField(f, e.target.value)} /></span>
-              <span class="pill">{FIELD_TYPES[f.data_type] || f.data_type}</span>
-              <button class="btn sm danger" onclick={() => rmField(f)} title="Delete field" aria-label={`Delete ${f.name}`}><Icon name="trash" size={13} /></button>
+            <div class="field-entry">
+              <div class="irow">
+                <span class="grow"><input class="inline-edit" aria-label={`Rename ${f.name}`} value={f.name} onchange={(e) => renameField(f, e.target.value)} /></span>
+                <span class="pill">{FIELD_TYPES[f.data_type] || f.data_type}</span>
+                <button class="btn sm danger" onclick={() => rmField(f)} title="Delete field" aria-label={`Delete ${f.name}`}><Icon name="trash" size={13} /></button>
+              </div>
+              {#if f.data_type === 'select' || f.data_type === 'multi'}
+                <div class="choice-editor">
+                  <label class="field">Choices
+                    <textarea class="input" rows="3" aria-label={`Choices for ${f.name}`}
+                              value={fieldChoiceDrafts[f.id] || ''}
+                              oninput={(event) => (fieldChoiceDrafts = { ...fieldChoiceDrafts, [f.id]: event.currentTarget.value })}
+                              disabled={fieldChoiceBusy != null}></textarea>
+                  </label>
+                  <button class="btn sm" type="button"
+                          disabled={fieldChoiceBusy != null || !normalizedChoices(fieldChoiceDrafts[f.id] || '').length}
+                          onclick={() => saveFieldChoices(f)}>
+                    {fieldChoiceBusy === f.id ? 'Saving…' : 'Save choices'}
+                  </button>
+                </div>
+              {/if}
             </div>
           {:else}
             <p class="empty">No custom fields yet. Add a field when a document needs a detail that the standard fields do not cover.</p>
@@ -628,6 +693,14 @@
   .input { min-width: 0; min-height: 42px; font-weight: 400; }
   .field-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 14px; }
   .form-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+  .choice-field { display:grid; gap:6px; margin-top:14px; }
+  .choice-field textarea, .choice-editor textarea { width:100%; max-width:none; resize:vertical; line-height:1.4; }
+  .choice-field small { color:var(--muted); font-size:.7rem; font-weight:400; }
+  .field-entry { border-bottom:1px solid var(--line); }
+  .field-entry:last-child { border-bottom:0; }
+  .field-entry > .irow { border-bottom:0; }
+  .choice-editor { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:end; gap:10px; padding:0 16px 14px; background:var(--bg); }
+  .choice-editor .field { display:grid; gap:5px; }
   .irow { cursor: default; }
   .quiet, .empty { color: var(--muted); font-size: .78rem; }
   .empty { padding: 18px; margin: 0; }

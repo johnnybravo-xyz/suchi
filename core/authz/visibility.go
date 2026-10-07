@@ -11,33 +11,42 @@ import "strings"
 // DemoCorpusVisibilityWhere admits the designated seeded corpus and, for an
 // upgraded scratch visitor, that visitor's own documents.
 func DemoCorpusVisibilityWhere(userID int64) (string, []any) {
-	corpus := `d.owner_id IN (SELECT id FROM users WHERE email = ? AND role = 'admin')`
+	return DemoCorpusVisibilityWhereAlias(userID, "d")
+}
+
+// DemoCorpusVisibilityWhereAlias is DemoCorpusVisibilityWhere for a static SQL alias.
+func DemoCorpusVisibilityWhereAlias(userID int64, alias string) (string, []any) {
+	corpus := alias + `.owner_id IN (SELECT id FROM users WHERE email = ? AND role = 'admin')`
 	if userID == 0 {
 		return corpus, []any{DemoCorpusOwnerEmail}
 	}
-	return "(d.owner_id = ? OR " + corpus + ")", []any{userID, DemoCorpusOwnerEmail}
+	return "(" + alias + ".owner_id = ? OR " + corpus + ")", []any{userID, DemoCorpusOwnerEmail}
 }
 
-// systemBoundaryWhere uses alias d for a namespace-owned table. Zero selected
-// system means intrinsic object access, never an unrestricted token.
 func systemBoundaryWhere(p Principal) (string, []any) {
+	return systemBoundaryWhereAlias(p, "d")
+}
+
+// systemBoundaryWhereAlias constrains a namespace-owned table through a static
+// alias. Zero selected system means intrinsic object access, never unrestricted.
+func systemBoundaryWhereAlias(p Principal, alias string) (string, []any) {
 	parts := make([]string, 0, 3)
 	args := make([]any, 0, 3)
 	if p.SystemID != 0 {
-		parts = append(parts, "d.system_id = ?")
+		parts = append(parts, alias+".system_id = ?")
 		args = append(args, p.SystemID)
 	}
 	if p.TokenSystemID != 0 {
-		parts = append(parts, "d.system_id = ?")
+		parts = append(parts, alias+".system_id = ?")
 		args = append(args, p.TokenSystemID)
 	}
 	if p.Kind == KindDemoAnon || p.Kind == KindDemoScratch {
-		parts = append(parts, "d.system_id = 1 AND EXISTS (SELECT 1 FROM jd_systems WHERE id = 1 AND code = '')")
+		parts = append(parts, alias+".system_id = 1 AND EXISTS (SELECT 1 FROM jd_systems WHERE id = 1 AND code = '')")
 	} else {
 		parts = append(parts, `EXISTS (
 			SELECT 1 FROM users u WHERE u.id = ? AND u.disabled = 0
 			AND (u.role = 'admin' OR EXISTS (
-				SELECT 1 FROM jd_system_members m WHERE m.user_id = u.id AND m.system_id = d.system_id
+				SELECT 1 FROM jd_system_members m WHERE m.user_id = u.id AND m.system_id = `+alias+`.system_id
 			))
 		)`)
 		args = append(args, p.UserID)
@@ -46,15 +55,32 @@ func systemBoundaryWhere(p Principal) (string, []any) {
 }
 
 // DocVisibilityWhere returns the selected-system, entry, and ACL predicates.
-// Every fragment references documents as d; admins must not omit the filter.
 func DocVisibilityWhere(p Principal, systemID int64) (string, []any) {
+	return DocVisibilityWhereAlias(p, systemID, "d")
+}
+
+// DocVisibilityWhereAlias returns document visibility predicates for a static
+// SQL alias chosen by the caller.
+func DocVisibilityWhereAlias(p Principal, systemID int64, alias string) (string, []any) {
 	if systemID <= 0 || (p.SystemID != 0 && p.SystemID != systemID) {
 		return "1=0", nil
 	}
 	p.SystemID = systemID
-	boundary, args := systemBoundaryWhere(p)
+	return docVisibilityWhereAlias(p, alias)
+}
+
+// DocVisibilityIntrinsicWhereAlias applies system entry, token, and ACL
+// predicates using each document's own system. It is for exact cross-system
+// relationships, not ordinary collection listing.
+func DocVisibilityIntrinsicWhereAlias(p Principal, alias string) (string, []any) {
+	p.SystemID = 0
+	return docVisibilityWhereAlias(p, alias)
+}
+
+func docVisibilityWhereAlias(p Principal, alias string) (string, []any) {
+	boundary, args := systemBoundaryWhereAlias(p, alias)
 	if p.Kind == KindDemoAnon || p.Kind == KindDemoScratch {
-		corpus, corpusArgs := DemoCorpusVisibilityWhere(p.UserID)
+		corpus, corpusArgs := DemoCorpusVisibilityWhereAlias(p.UserID, alias)
 		return boundary + " AND (" + corpus + ")", append(args, corpusArgs...)
 	}
 	if p.UserID <= 0 {
@@ -72,9 +98,9 @@ func DocVisibilityWhere(p Principal, systemID int64) (string, []any) {
 		}
 	}
 	return boundary + ` AND (
-		d.owner_id = ? OR EXISTS (
+		` + alias + `.owner_id = ? OR EXISTS (
 			SELECT 1 FROM object_acls a
-			WHERE a.object_kind = 'document' AND a.object_id = d.id
+			WHERE a.object_kind = 'document' AND a.object_id = ` + alias + `.id
 			  AND (a.perm_bits & 1) = 1 AND (` + principals + `)
 		)
 	)`, args

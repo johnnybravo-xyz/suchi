@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/johnnybravo-xyz/suchi/core/searchquery"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
@@ -18,6 +19,8 @@ const maxDocumentScopeIDs = 100
 
 type documentScope struct {
 	Query            string
+	Version          searchquery.VersionMode
+	VersionExplicit  bool
 	DocumentIDs      []int64
 	JDCategoryID     int64
 	Sensitivity      string
@@ -39,6 +42,15 @@ func (e *documentScopeError) Error() string { return e.Message }
 func documentScopeFromQuery(values url.Values) (documentScope, error) {
 	scope := documentScope{Query: strings.TrimSpace(values.Get("q"))}
 	var err error
+	if rawVersion := strings.TrimSpace(values.Get("version")); rawVersion != "" {
+		scope.Version, err = parseVersionMode(rawVersion)
+		if err != nil {
+			return documentScope{}, &documentScopeError{
+				Code: "bad_version", Message: "version must be latest, all, or older",
+			}
+		}
+		scope.VersionExplicit = true
+	}
 	if scope.DocumentIDs, err = parseBoundedCSVIDs(values.Get("document_ids"), maxDocumentScopeIDs); err != nil {
 		return documentScope{}, &documentScopeError{
 			Code: "bad_document_ids", Message: fmt.Sprintf("document_ids must contain at most %d positive integers", maxDocumentScopeIDs),
@@ -87,6 +99,17 @@ func documentScopeFromSavedViewJSON(raw string) (documentScope, error) {
 	scope := documentScope{}
 	if value, ok := values["q"].(string); ok {
 		scope.Query = value
+	}
+	if value, exists := values["version"]; exists && value != nil {
+		raw, ok := value.(string)
+		if !ok {
+			return documentScope{}, &savedViewFilterError{message: "filter key version must be latest, all, or older"}
+		}
+		scope.Version, err = parseVersionMode(raw)
+		if err != nil {
+			return documentScope{}, &savedViewFilterError{message: "filter key version must be latest, all, or older"}
+		}
+		scope.VersionExplicit = true
 	}
 	if scope.DocumentIDs, err = scopeIDs(values["document_ids"]); err != nil || len(scope.DocumentIDs) > maxDocumentScopeIDs {
 		return documentScope{}, &savedViewFilterError{message: "filter key document_ids must contain 1 to 100 ids"}
@@ -175,6 +198,47 @@ func appendDocumentScopePredicates(ctx context.Context, where []string, args []a
 		}
 	}
 	return where, args
+}
+
+func resolveDocumentVersionMode(scope documentScope, plan searchquery.Plan, exactRows bool) (searchquery.VersionMode, error) {
+	if scope.VersionExplicit {
+		switch scope.Version {
+		case searchquery.VersionLatest, searchquery.VersionAll, searchquery.VersionOlder:
+		default:
+			return "", &documentScopeError{
+				Code: "bad_version", Message: "version must be latest, all, or older",
+			}
+		}
+	}
+	if exactRows {
+		if scope.VersionExplicit || plan.VersionExplicit {
+			return "", &documentScopeError{
+				Code: "incompatible_version", Message: "version cannot be combined with exact document or Trash scopes",
+			}
+		}
+		return searchquery.VersionAll, nil
+	}
+	if scope.VersionExplicit && plan.VersionExplicit && scope.Version != plan.VersionMode {
+		return "", &documentScopeError{
+			Code: "conflicting_version", Message: "structured and query version selectors must match",
+		}
+	}
+	if plan.VersionExplicit {
+		return plan.VersionMode, nil
+	}
+	if scope.VersionExplicit {
+		return scope.Version, nil
+	}
+	return searchquery.VersionLatest, nil
+}
+
+func parseVersionMode(value string) (searchquery.VersionMode, error) {
+	switch mode := searchquery.VersionMode(strings.TrimSpace(value)); mode {
+	case searchquery.VersionLatest, searchquery.VersionAll, searchquery.VersionOlder:
+		return mode, nil
+	default:
+		return "", fmt.Errorf("invalid version mode")
+	}
 }
 
 func normalizedScopeLanguage(value string) (string, error) {

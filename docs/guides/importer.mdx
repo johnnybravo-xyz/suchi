@@ -144,13 +144,15 @@ The importer:
 
 1. Loads every manifest object (top-level `manifest.json` plus any
    per-document sidecar files under `<root>/` or `<root>/documents/`).
-2. Upserts source tags, correspondents, storage paths, and custom-field
-   definitions within the selected system. Each Paperless document type becomes
-   an ordinary `type:<name>` tag with its source matching settings.
+2. Upserts source tags, correspondents, storage-path definitions as **Rendered
+   layouts**, and custom-field definitions within the selected system. Each
+   source document type becomes an ordinary `type:<name>` tag with its matching
+   settings.
 3. For each document, streams the original (and optional archive) file into the
    CAS by SHA-256, then inserts one `documents` row plus tag junctions and
    custom-field values in a single transaction. `legacy_id` is preserved for
-   round-tripping and dedup.
+   round-tripping and dedup; a source archive serial number is retained as
+   read-only compatibility metadata.
 
 Document-type assignments therefore remain searchable without creating a
 second metadata vocabulary. Storage templates using `{{document_type}}` become
@@ -294,15 +296,15 @@ document-type expression is dropped and reported.
 
 ## Saved views
 
-Paperless saved views migrate into suchi's `saved_views` — with a
-lossy translation from paperless's 50-way `filter_rules.rule_type`
-enum onto suchi's allow-listed `filter_json` keys (`q`, `tags__id__in`,
-`correspondents__id__in`, `jd_category_id`, `sensitivity`, `ordering`).
-Paperless type filters target the corresponding `type:<name>` tag.
+Source saved views migrate into suchi's `saved_views` with a lossy translation
+from the source `filter_rules.rule_type` enum onto suchi's allow-listed
+`filter_json` keys (`q`, `tags__id__in`, `correspondents__id__in`,
+`jd_category_id`, `sensitivity`, `ordering`). Source type filters target the
+corresponding `type:<name>` tag.
 
 A view is `Full` when every rule maps 1:1; `Partial` when at least one
-rule degrades (e.g., storage-path rule → text search); `Failed` when
-zero rules map — the view row is skipped and reported.
+rule degrades (for example, a source rendered-layout rule becomes text search);
+`Failed` when zero rules map — the view row is skipped and reported.
 
 **Rule-type mapping** (source `rule_type` int → target filter_json):
 
@@ -310,7 +312,7 @@ zero rules map — the view row is skipped and reported.
 | -------------------------------------------------------------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | 0 title contains                                                     | `q`                       | Full                                                                                                                                     |
 | 1 content contains                                                   | `q`                       | Partial (q matches title+content combined)                                                                                               |
-| 2 ASN is / 18 not-has ASN / 23-24 ASN gt/lt                          | —                         | Failed — the importer does not translate ASN filters, although document ASN identity is retained within the target system                |
+| 2 ASN is / 18 not-has ASN / 23-24 ASN gt/lt                          | `q` with `asn:`          | Full — exact, `none`, greater-than, and less-than retain read-only compatibility retrieval                                                |
 | 3 correspondent is                                                   | `correspondents__id__in`  | Full                                                                                                                                     |
 | 4 document type is                                                   | `tags__id__in`            | Full                                                                                                                                     |
 | 5 is in inbox                                                        | —                         | Partial — suchi surfaces Inbox natively                                                                                                  |
@@ -354,7 +356,7 @@ Every non-dry-run import writes a markdown report to `--report
 - **Header** — timestamp, source bundle root, target datadir,
   duration, active JD strategy.
 - **Summary** — rows per model class (Documents / Tags /
-  Correspondents / Document types → tags / Storage paths / Custom fields /
+  Correspondents / Document types → tags / Folder layouts / Custom fields /
   Notes / Workflows / Saved views), columns Full / Partial / Failed.
 - **Partial migrations** — one row per Partial with source, target,
   reason.

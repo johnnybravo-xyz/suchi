@@ -2,7 +2,14 @@
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { canonicalSavedViewQuery, documentListHash, parseSavedViewFilters } from './documentFilters.js'
+import {
+  canonicalSavedViewQuery,
+  documentListHash,
+  extractFieldPresence,
+  fieldPresenceSelection,
+  parseFieldPresenceSelection,
+  parseSavedViewFilters,
+} from './documentFilters.js'
 
 test('keeps backend JD field names out of document routes', () => {
   const hash = documentListHash({ q: 'paris', jd_category_id: 6, sensitivity: 'internal' })
@@ -32,6 +39,19 @@ test('serializes new saved views to one stable query string', () => {
   assert.equal(
     query,
     '"distribution advice" tag:"income tax" from:"Bagmane \\"Prime\\"" jd:22 sensitivity:internal date:>=2026-09-01 date:<=2026-09-30 date-role:renewal',
+  )
+})
+
+test('round-trips one custom-field presence control through the rich query', () => {
+  const selection = fieldPresenceSelection('Payment "receipt"', true)
+  assert.deepEqual(parseFieldPresenceSelection(selection), { name: 'Payment "receipt"', missing: true })
+  assert.equal(
+    canonicalSavedViewQuery({ q: 'type:invoice', fieldPresence: selection }),
+    'type:invoice -has-field:"Payment \\"receipt\\""',
+  )
+  assert.deepEqual(
+    extractFieldPresence('type:invoice -has-field:"Payment \\"receipt\\""'),
+    { query: 'type:invoice', selection },
   )
 })
 

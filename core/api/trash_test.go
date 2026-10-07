@@ -166,6 +166,74 @@ func TestPurgeTrashDocumentRequiresTrashedStateAndDeletePermission(t *testing.T)
 	}
 }
 
+func TestVersionFamilySurvivesRestoreAndPermanentDeletion(t *testing.T) {
+	server, mux, cas := newTrashAPIServer(t)
+	now := time.Now().Unix()
+	rootID := seedTrashAPIDocument(t, server, cas, 1, "Root version", false, now-2)
+	middleID := seedTrashAPIDocument(t, server, cas, 1, "Middle version", true, now-1)
+	headID := seedTrashAPIDocument(t, server, cas, 1, "Head version", false, now)
+	const family = "v:11111111111111111111111111111111"
+	if _, err := server.DB.Write.Exec(`
+		UPDATE documents
+		SET version_family_key=?,
+		    previous_version_id=CASE id WHEN ? THEN ? WHEN ? THEN ? ELSE previous_version_id END
+		WHERE id IN (?,?,?)
+	`, family, middleID, rootID, headID, middleID, rootID, middleID, headID); err != nil {
+		t.Fatal(err)
+	}
+
+	response := doTrashAPIRequest(t, mux, http.MethodDelete,
+		"/api/trash/"+itoa(middleID), memberPrincipal(1))
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("purge middle status=%d body=%s", response.Code, response.Body.String())
+	}
+	var (
+		headPrevious sql.NullInt64
+		headFamily   string
+	)
+	if err := server.DB.Read.QueryRow(`
+		SELECT previous_version_id, version_family_key FROM documents WHERE id=?
+	`, headID).Scan(&headPrevious, &headFamily); err != nil {
+		t.Fatal(err)
+	}
+	if headPrevious.Valid || headFamily != family {
+		t.Fatalf("head after middle purge previous=%v family=%q", headPrevious, headFamily)
+	}
+
+	if _, err := server.DB.Write.Exec(`UPDATE documents SET trashed_at=? WHERE id=?`, now, rootID); err != nil {
+		t.Fatal(err)
+	}
+	response = doTrashAPIRequest(t, mux, http.MethodPost,
+		"/api/documents/"+itoa(rootID)+"/restore", memberPrincipal(1))
+	if response.Code != http.StatusOK {
+		t.Fatalf("restore root status=%d body=%s", response.Code, response.Body.String())
+	}
+	var rootFamily string
+	if err := server.DB.Read.QueryRow(`SELECT version_family_key FROM documents WHERE id=?`, rootID).Scan(&rootFamily); err != nil {
+		t.Fatal(err)
+	}
+	if rootFamily != family {
+		t.Fatalf("restored root family=%q, want %q", rootFamily, family)
+	}
+
+	if _, err := server.DB.Write.Exec(`UPDATE documents SET trashed_at=? WHERE id=?`, now, rootID); err != nil {
+		t.Fatal(err)
+	}
+	response = doTrashAPIRequest(t, mux, http.MethodDelete,
+		"/api/trash/"+itoa(rootID), memberPrincipal(1))
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("purge root status=%d body=%s", response.Code, response.Body.String())
+	}
+	if err := server.DB.Read.QueryRow(`
+		SELECT version_family_key FROM documents WHERE id=?
+	`, headID).Scan(&headFamily); err != nil {
+		t.Fatal(err)
+	}
+	if headFamily != family {
+		t.Fatalf("surviving head family=%q, want %q", headFamily, family)
+	}
+}
+
 func TestEmptyTrashUsesMemberAndAdminScopes(t *testing.T) {
 	t.Run("member owner scope", func(t *testing.T) {
 		server, mux, cas := newTrashAPIServer(t)

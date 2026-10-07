@@ -2,12 +2,13 @@
 <script>
   import { scopedHash as filingHref, systems } from '../lib/systems.svelte.js'
   import { setupState, adminListUsers, getIngestSettings, getLLMSettings,
-           getPreferences, listEmailAccounts, listAutomations } from '../lib/api.js'
+           getPreferences, listEmailAccounts, listAutomations, listRenderedLayouts } from '../lib/api.js'
   import { ARCHIVE_SETTINGS_GROUPS, ARCHIVE_SETTINGS_ITEMS, FILING_TREE_SETTINGS_ITEM } from '../lib/configuration.js'
   import Icon from '../lib/Icon.svelte'
   import SystemSettings from '../lib/SystemSettings.svelte'
   import ConfigurationSection from './ConfigurationSection.svelte'
   import FilingTreeSettings from './FilingTreeSettings.svelte'
+  import FolderLayoutsSettings from './FolderLayoutsSettings.svelte'
   import PeopleSettings from './PeopleSettings.svelte'
 
   let { notify, initialSection = '', initialPeople = '', initialMetadata = '', onTaxonomyChanged } = $props()
@@ -30,9 +31,9 @@
   }
 
   async function loadOverview() {
-    const [setup, users, ingest, llm, preferences, mail, automations] = await Promise.allSettled([
+    const [setup, users, ingest, llm, preferences, mail, automations, layouts] = await Promise.allSettled([
       setupState(), adminListUsers(), getIngestSettings(), getLLMSettings(),
-      getPreferences(), listEmailAccounts(), listAutomations(),
+      getPreferences(), listEmailAccounts(), listAutomations(), listRenderedLayouts(),
     ])
     const next = Object.fromEntries(ARCHIVE_SETTINGS_ITEMS.map((item) => [
       item.name, status('Unavailable', 'Could not load status', 'warn'),
@@ -46,7 +47,11 @@
       const count = rows(users.value).length
       next.users = status(`${count} ${count === 1 ? 'user' : 'users'}`, 'Roles and archive capabilities')
     }
-    next.metadata = status('4 catalogs', 'Tags, correspondents, storage paths, and fields')
+    next.metadata = status('3 catalogs', 'Tags, correspondents, and custom fields')
+    if (layouts.status === 'fulfilled') {
+      const count = rows(layouts.value).length
+      next['folder-layouts'] = status(`${count} saved`, 'Local rendered filesystem paths')
+    }
     if (ingest.status === 'fulfilled') {
       const directory = ingest.value?.fs_watch_dir || ''
       next.sources = status(directory ? 'Active' : 'Not set', directory || 'Uploads and API remain available', directory ? 'ok' : 'warn')
@@ -95,7 +100,7 @@
   </aside>
 
   <div class="archive-content" role="region" aria-label="Configuration content">
-    {#if systems.introduced && (current === 'overview' || current === 'users' || current === 'metadata' || current === 'filing-tree')}
+    {#if systems.introduced && (current === 'overview' || current === 'users' || current === 'metadata' || current === 'filing-tree' || current === 'folder-layouts')}
       <SystemSettings {notify} />
     {/if}
     {#if current === 'overview'}
@@ -156,6 +161,8 @@
       </header>
       {#if current === 'filing-tree'}
         <FilingTreeSettings {notify} {onTaxonomyChanged} />
+      {:else if current === 'folder-layouts'}
+        <FolderLayoutsSettings {notify} />
       {:else if current === 'users'}
         <PeopleSettings view="people" {notify} {initialPeople} {initialMetadata} />
       {:else if current === 'metadata'}

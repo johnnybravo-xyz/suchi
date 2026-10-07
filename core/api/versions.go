@@ -3,7 +3,9 @@
 package api
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,6 +35,15 @@ type VersionView struct {
 	IsHead            bool   `json:"is_head"`
 }
 
+type versionListResponse struct {
+	Count     int           `json:"count"`
+	Next      string        `json:"next,omitempty"`
+	Previous  string        `json:"previous,omitempty"`
+	Results   []VersionView `json:"results"`
+	HeadID    *int64        `json:"head_id"`
+	CanUpload bool          `json:"can_upload"`
+}
+
 type uploadVersionResponse struct {
 	ID                int64  `json:"id"`
 	SystemCode        string `json:"system_code,omitempty"`
@@ -55,7 +66,16 @@ var (
 	errVersionPermissionChanged  = errors.New("version permission changed")
 	errVersionPredecessorChanged = errors.New("version predecessor changed")
 	errVersionTargetUnavailable  = errors.New("version replay target unavailable")
+	errVersionHeadChanged        = errors.New("version head changed")
 )
+
+func newVersionFamilyKey() (string, error) {
+	var random [16]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		return "", fmt.Errorf("generate version family key: %w", err)
+	}
+	return "v:" + hex.EncodeToString(random[:]), nil
+}
 
 // UploadNewVersion — POST /api/documents/{id}/versions/. Multipart
 // upload same as UploadDocument, except the resulting row's
@@ -106,6 +126,11 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 	if upload == nil {
 		return
 	}
+	proposedFamilyKey, err := newVersionFamilyKey()
+	if err != nil {
+		s.serverErr(w, "version.family_key", err)
+		return
+	}
 	var (
 		newID           int64
 		duplicateLiveID int64
@@ -113,6 +138,7 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 		prevTitle       string
 		prevJDCatID     int64
 		prevSensitivity sql.NullString
+		familyKey       sql.NullString
 		title           string
 		response        uploadVersionResponse
 		replay          *storedUploadResponse
@@ -145,9 +171,11 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 		// authorization after acquiring the write lock so ACL revocation or
 		// trashing cannot race the version insert.
 		err := tx.QueryRowContext(r.Context(), `
-			SELECT owner_id, title, jd_category_id, sensitivity
+			SELECT owner_id, title, jd_category_id, sensitivity, version_family_key
 			FROM documents WHERE id = ? AND trashed_at IS NULL
-		`, prevID).Scan(&prevOwner, &prevTitle, &prevJDCatID, &prevSensitivity)
+		`, prevID).Scan(
+			&prevOwner, &prevTitle, &prevJDCatID, &prevSensitivity, &familyKey,
+		)
 		if errors.Is(err, sql.ErrNoRows) {
 			return errVersionPredecessorChanged
 		}
@@ -163,12 +191,7 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 		if !allowed {
 			return errVersionPermissionChanged
 		}
-		title = upload.Title
-		if title == "Untitled" && prevTitle != "" {
-			// Carry the predecessor title forward when the uploader didn't
-			// provide a distinguishing filename.
-			title = prevTitle
-		}
+		title = prevTitle
 
 		stored, found, err := loadStoredUploadResponse(
 			r.Context(), tx, p.UserID, upload.Idempotency,
@@ -222,6 +245,20 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		if familyKey.Valid {
+			var headID int64
+			if err := tx.QueryRowContext(r.Context(), `
+				SELECT max(id)
+				FROM documents
+				WHERE system_id = ? AND version_family_key = ?
+			`, systemID, familyKey.String).Scan(&headID); err != nil {
+				return err
+			}
+			if headID != prevID {
+				return errVersionHeadChanged
+			}
+		}
+
 		err = tx.QueryRowContext(r.Context(), `
 			SELECT id FROM documents
 			WHERE system_id = ? AND owner_id = ? AND original_blob = ? AND trashed_at IS NULL
@@ -243,17 +280,28 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 
+		if !familyKey.Valid {
+			if _, err := tx.ExecContext(r.Context(), `
+				UPDATE documents
+				SET version_family_key = ?
+				WHERE id = ? AND version_family_key IS NULL
+			`, proposedFamilyKey, prevID); err != nil {
+				return err
+			}
+			familyKey = sql.NullString{String: proposedFamilyKey, Valid: true}
+		}
 		now := time.Now().Unix()
 		dbValues := upload.Metadata.databaseValues(s.deviceOCRMinConfidence, now)
 		res, err := tx.ExecContext(r.Context(), `
 			INSERT INTO documents(
 				system_id, owner_id, original_blob, original_size, title, mime_type,
-				jd_category_id, sensitivity, added_at, created_at, updated_at,
-				previous_version_id, source_mtime, content, content_source,
-				device_content_confidence, device_ocr_language,
-				device_content_received_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, systemID, prevOwner, upload.SHA256, upload.Size, title, upload.MIME, prevJDCatID, prevSensitivity,
+				jd_category_id, sensitivity, version_family_key,
+				added_at, created_at, updated_at, previous_version_id, source_mtime,
+				content, content_source, device_content_confidence,
+				device_ocr_language, device_content_received_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, systemID, prevOwner, upload.SHA256, upload.Size, title, upload.MIME,
+			prevJDCatID, prevSensitivity, familyKey,
 			now, now, now, prevID, dbValues.SourceMTime, dbValues.Content,
 			dbValues.ContentSource, dbValues.DeviceConfidence,
 			dbValues.DeviceLanguage, dbValues.DeviceContentTime)
@@ -286,6 +334,23 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 
+		if _, err := tx.ExecContext(r.Context(), `
+			INSERT INTO document_tags(document_id, tag_id, classifier_owned)
+			SELECT ?, tag_id, 0
+			FROM document_tags
+			WHERE document_id = ? AND classifier_owned = 0
+		`, newID, prevID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(r.Context(), `
+			INSERT INTO document_correspondents(document_id, correspondent_id, role, position)
+			SELECT ?, correspondent_id, role, position
+			FROM document_correspondents
+			WHERE document_id = ?
+		`, newID, prevID); err != nil {
+			return err
+		}
+
 		payload, err := json.Marshal(postIngestPayload{
 			SHA256: upload.SHA256, Size: upload.Size, MIME: upload.MIME,
 			Filename: upload.Filename,
@@ -311,6 +376,11 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 	})
 	if errors.Is(err, errVersionPermissionChanged) {
 		s.writeError(w, http.StatusNotFound, "not_found", "object not found")
+		return
+	}
+	if errors.Is(err, errVersionHeadChanged) {
+		s.writeError(w, http.StatusConflict, "version_head_changed",
+			"the document version head changed; reload and upload from the latest revision")
 		return
 	}
 	if errors.Is(err, errVersionPredecessorChanged) {
@@ -377,13 +447,8 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusCreated, response)
 }
 
-// ListVersions — GET /api/documents/{id}/versions/. Returns every row
-// in the chain that contains {id} — walks previous_version_id BACK
-// to the root, then walks forward through direct children to the
-// head. Result is ordered oldest → newest.
-//
-// The doc id doesn't have to be the head or the root. Every returned node is
-// authorized independently because ACLs can change after a version is made.
+// ListVersions — GET /api/documents/{id}/versions/. Returns the visible live
+// members of the requested document's version family, newest first.
 func (s *Server) ListVersions(w http.ResponseWriter, r *http.Request) {
 	if !auth.RequireScope(w, r, auth.ScopeDocumentsRead) {
 		return
@@ -394,130 +459,130 @@ func (s *Server) ListVersions(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_id", err.Error())
 		return
 	}
-	// The requested node is the authorization anchor. This keeps an arbitrary
-	// chain id from becoming a metadata oracle even if another node is shared.
+	// The requested row is the authorization anchor. Family membership never
+	// turns a visible sibling into an oracle for an inaccessible anchor.
 	if !s.authorize(w, r, principal, authz.KindDocument, id, authz.PermView) {
 		return
 	}
-	groups, err := s.principalGroups(r.Context(), principal.UserID)
-	if err != nil {
-		s.serverErr(w, "versions.load_groups", err)
+
+	var (
+		familyKey sql.NullString
+		trashedAt sql.NullInt64
+	)
+	err = s.DB.Read.QueryRowContext(r.Context(), `
+		SELECT version_family_key, trashed_at
+		FROM documents
+		WHERE id = ?
+	`, id).Scan(&familyKey, &trashedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		s.writeError(w, http.StatusNotFound, "not_found", "document not found")
 		return
 	}
-	authzPrincipal := systemPrincipal(r.Context(), principal, groups)
-	// Walk back to the root: while previous_version_id is not null,
-	// jump. Cap the loop to avoid pathological cycles that shouldn't
-	// exist but let's not trust the schema alone.
-	rootID := id
-	for hops := 0; hops < 1024; hops++ {
-		var prev sql.NullInt64
-		err := s.DB.Read.QueryRowContext(r.Context(),
-			`SELECT previous_version_id FROM documents WHERE id = ?`, rootID).Scan(&prev)
-		if errors.Is(err, sql.ErrNoRows) {
-			s.writeError(w, http.StatusNotFound, "not_found", "document not found")
-			return
-		}
-		if err != nil {
-			s.writeError(w, http.StatusInternalServerError, "db_read", err.Error())
-			return
-		}
-		if !prev.Valid {
-			break
-		}
-		rootID = prev.Int64
+	if err != nil {
+		s.serverErr(w, "versions.anchor", err)
+		return
 	}
-	// Walk forward: collect root + every doc that transitively points
-	// at it via previous_version_id. Single query using a recursive CTE.
+
+	var groups []int64
+	if principal.Role != "admin" {
+		groups, err = s.principalGroups(r.Context(), principal.UserID)
+		if err != nil {
+			s.serverErr(w, "versions.load_groups", err)
+			return
+		}
+	}
+	visibility, visibilityArgs := documentVisibilityWhere(r.Context(), principal, groups)
+	where := "d.trashed_at IS NULL AND (" + visibility + ") AND d.id = ?"
+	args := append(append([]any{}, visibilityArgs...), id)
+	if familyKey.Valid {
+		where = "d.trashed_at IS NULL AND (" + visibility + ") AND d.version_family_key = ?"
+		args = append(append([]any{}, visibilityArgs...), familyKey.String)
+	}
+
+	var (
+		count int
+		head  sql.NullInt64
+	)
+	if err := s.DB.Read.QueryRowContext(r.Context(),
+		"SELECT count(*), max(d.id) FROM documents d WHERE "+where, args...,
+	).Scan(&count, &head); err != nil {
+		s.serverErr(w, "versions.count", err)
+		return
+	}
+
+	pp := ParsePageParams(r, 50, 200)
+	predecessorVisibility, predecessorArgs := documentVisibilityWhereAlias(
+		r.Context(), principal, groups, "predecessor",
+	)
+	rowArgs := append([]any{}, predecessorArgs...)
+	rowArgs = append(rowArgs, args...)
+	rowArgs = append(rowArgs, pp.PageSize, pp.Offset())
 	rows, err := s.DB.Read.QueryContext(r.Context(), `
-		WITH RECURSIVE chain(id) AS (
-			SELECT ? UNION ALL
-			SELECT d.id FROM documents d JOIN chain c ON d.previous_version_id = c.id
-		)
 		SELECT d.id, d.title, d.original_blob, d.original_size,
 		       COALESCE(d.mime_type, ''), d.created_at,
-		       d.previous_version_id, d.trashed_at
+		       CASE WHEN d.previous_version_id IS NOT NULL AND EXISTS (
+		           SELECT 1
+		           FROM documents predecessor
+		           WHERE predecessor.id = d.previous_version_id
+		             AND predecessor.trashed_at IS NULL
+		             AND predecessor.version_family_key = d.version_family_key
+		             AND (`+predecessorVisibility+`)
+		       ) THEN d.previous_version_id END
 		FROM documents d
-		JOIN chain USING (id)
-		ORDER BY d.created_at ASC, d.id ASC
-	`, rootID)
+		WHERE `+where+`
+		ORDER BY d.id DESC
+		LIMIT ? OFFSET ?
+	`, rowArgs...)
 	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, "db_read", err.Error())
+		s.serverErr(w, "versions.list", err)
 		return
 	}
 	defer rows.Close()
 
-	type candidate struct {
-		view VersionView
-		live bool
-	}
-	var chain []candidate
+	results := make([]VersionView, 0, pp.PageSize)
 	for rows.Next() {
 		var (
-			v       VersionView
-			mime    string
-			prev    sql.NullInt64
-			trashed sql.NullInt64
+			view VersionView
+			prev sql.NullInt64
 		)
-		if err := rows.Scan(&v.ID, &v.Title, &v.SHA256, &v.Size, &mime,
-			&v.CreatedAt, &prev, &trashed); err != nil {
-			s.writeError(w, http.StatusInternalServerError, "db_read", err.Error())
+		if err := rows.Scan(
+			&view.ID, &view.Title, &view.SHA256, &view.Size,
+			&view.MIME, &view.CreatedAt, &prev,
+		); err != nil {
+			s.serverErr(w, "versions.scan", err)
 			return
 		}
-		v.MIME = mime
 		if prev.Valid {
-			pid := prev.Int64
-			v.PreviousVersionID = &pid
+			value := prev.Int64
+			view.PreviousVersionID = &value
 		}
-		chain = append(chain, candidate{view: v, live: !trashed.Valid})
+		view.IsHead = head.Valid && view.ID == head.Int64
+		results = append(results, view)
 	}
 	if err := rows.Err(); err != nil {
-		s.writeError(w, http.StatusInternalServerError, "db_read", err.Error())
-		return
-	}
-	if err := rows.Close(); err != nil {
-		s.writeError(w, http.StatusInternalServerError, "db_read", err.Error())
+		s.serverErr(w, "versions.rows", err)
 		return
 	}
 
-	// Close the chain cursor before ACL checks: ACLAuthorizer performs its own
-	// reads, and holding one connection per request while acquiring another can
-	// exhaust the bounded read pool under concurrency.
-	candidates := make([]candidate, 0, len(chain))
-	for _, item := range chain {
-		if item.view.ID != id {
-			err := s.Authz.Can(r.Context(), authzPrincipal,
-				authz.KindDocument, item.view.ID, authz.PermView)
-			if err != nil {
-				var denied *authz.ErrDenied
-				if errors.As(err, &denied) {
-					continue
-				}
-				s.serverErr(w, "versions.authorize_node", err)
-				return
-			}
-		}
-		candidates = append(candidates, item)
+	var headID *int64
+	if head.Valid {
+		value := head.Int64
+		headID = &value
 	}
-	visible := make(map[int64]bool, len(candidates))
-	for _, item := range candidates {
-		visible[item.view.ID] = true
-	}
-	liveChildren := make(map[int64]bool, len(candidates))
-	for _, item := range candidates {
-		if item.live && item.view.PreviousVersionID != nil && visible[*item.view.PreviousVersionID] {
-			liveChildren[*item.view.PreviousVersionID] = true
+	canUpload := false
+	if head.Valid && head.Int64 == id && !trashedAt.Valid &&
+		!isDemoCorpusKind(principal.Kind) && auth.HasScope(principal, auth.ScopeDocumentsWrite) {
+		canUpload, err = s.authorized(
+			r.Context(), nil, principal, authz.KindDocument, id, authz.PermChange,
+		)
+		if err != nil {
+			s.serverErr(w, "versions.can_upload", err)
+			return
 		}
 	}
-	out := make([]VersionView, 0, len(candidates))
-	for _, item := range candidates {
-		v := item.view
-		if v.PreviousVersionID != nil && !visible[*v.PreviousVersionID] {
-			// Do not leak the id of an omitted predecessor through the remaining
-			// node's relationship field.
-			v.PreviousVersionID = nil
-		}
-		v.IsHead = !liveChildren[v.ID]
-		out = append(out, v)
-	}
-	s.writeJSON(w, http.StatusOK, map[string]any{"results": out})
+	envelope := BuildEnvelope(r, count, pp, results)
+	s.writeJSON(w, http.StatusOK, versionListResponse{
+		Count: envelope.Count, Next: envelope.Next, Previous: envelope.Previous,
+		Results: envelope.Results, HeadID: headID, CanUpload: canUpload,
+	})
 }

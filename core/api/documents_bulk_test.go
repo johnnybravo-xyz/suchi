@@ -114,6 +114,39 @@ func TestBulkEdit_TrashHappyPath(t *testing.T) {
 	}
 }
 
+func TestBulkRenderedLayoutRequiresPreviousArchiveNumber(t *testing.T) {
+	s := newBulkServer(t)
+	docID := seedStatsDoc(t, s.DB, 1, "layout-sha", "Layout", seedStatsJDInbox(t, s.DB), false, 0)
+	if _, err := s.DB.Write.Exec(`
+		INSERT INTO storage_paths(id, system_id, name, slug, path, created_at, updated_at)
+		VALUES (901, 1, 'Imported folders', 'imported-folders', 'Legacy/{{ asn }}/{{ title }}', 0, 0)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	request := map[string]any{
+		"documents": []int64{docID}, "method": "set_rendered_layout",
+		"parameters": map[string]any{"rendered_layout_id": 901},
+	}
+	code, _ := doBulkEdit(t, s, request, adminPrincipal(1))
+	if code != http.StatusConflict {
+		t.Fatalf("layout without previous archive number status=%d, want 409", code)
+	}
+	var stored sql.NullInt64
+	if err := s.DB.Read.QueryRow(`SELECT storage_path_id FROM documents WHERE id=?`, docID).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.Valid {
+		t.Fatalf("failed layout assignment stored %d", stored.Int64)
+	}
+	if _, err := s.DB.Write.Exec(`UPDATE documents SET archive_serial_number=77 WHERE id=?`, docID); err != nil {
+		t.Fatal(err)
+	}
+	code, response := doBulkEdit(t, s, request, adminPrincipal(1))
+	if code != http.StatusOK || response.Applied != 1 {
+		t.Fatalf("compatible layout status=%d response=%+v", code, response)
+	}
+}
+
 func TestBulkRestoreRejectsExpiredDocumentsAtomically(t *testing.T) {
 	s := newBulkServer(t)
 	inbox := seedStatsJDInbox(t, s.DB)

@@ -54,6 +54,16 @@ func setWorkflowLink(s *Server, p *pluginapi.Principal, source, field, target in
 	return w
 }
 
+func deleteWorkflowLink(s *Server, p *pluginapi.Principal, source, field int64) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(http.MethodDelete, "/api/documents/"+strconv.FormatInt(source, 10)+"/custom_fields/"+strconv.FormatInt(field, 10), nil)
+	r.SetPathValue("id", strconv.FormatInt(source, 10))
+	r.SetPathValue("field", strconv.FormatInt(field, 10))
+	r = r.WithContext(auth.WithPrincipal(r.Context(), p))
+	w := httptest.NewRecorder()
+	s.DeleteCustomField(w, r)
+	return w
+}
+
 func TestDocumentLinksRequireBothSystemsAndDocumentPermissions(t *testing.T) {
 	for _, tc := range []struct {
 		name               string
@@ -165,6 +175,60 @@ func TestDocumentLinkWriterRejectsRemovedAndReadmittedToken(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatal("revoked token wrote a document link")
+	}
+}
+
+func TestDocumentLinkWriterRechecksTargetLiveness(t *testing.T) {
+	s, d := workflowSystemsFixture(t)
+	if _, err := d.Write.Exec(`INSERT INTO object_acls(object_kind,object_id,principal_kind,principal_id,perm_bits,created_at) VALUES ('document',201,'user',5,1,0)`); err != nil {
+		t.Fatal(err)
+	}
+	pause := &pausedWorkflowAuthorizer{base: s.Authz, entered: make(chan struct{}), release: make(chan struct{})}
+	s.Authz = pause
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- setWorkflowLink(s, memberPrincipal(5), 101, 101, 201, "") }()
+	<-pause.entered
+	if _, err := d.Write.Exec(`UPDATE documents SET trashed_at=1 WHERE id=201`); err != nil {
+		t.Fatal(err)
+	}
+	close(pause.release)
+	w := <-done
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("trashed target write: %d %s", w.Code, w.Body.String())
+	}
+	var count int
+	if err := d.Read.QueryRow(`SELECT COUNT(*) FROM document_custom_field_values WHERE document_id=101`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatal("link to target trashed before writer transaction was stored")
+	}
+}
+
+func TestDocumentLinkClearRechecksSourceLiveness(t *testing.T) {
+	s, d := workflowSystemsFixture(t)
+	if _, err := d.Write.Exec(`INSERT INTO document_custom_field_values(document_id,field_id,value_int) VALUES (101,101,102)`); err != nil {
+		t.Fatal(err)
+	}
+	pause := &pausedWorkflowAuthorizer{base: s.Authz, entered: make(chan struct{}), release: make(chan struct{})}
+	s.Authz = pause
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- deleteWorkflowLink(s, memberPrincipal(5), 101, 101) }()
+	<-pause.entered
+	if _, err := d.Write.Exec(`UPDATE documents SET trashed_at=1 WHERE id=101`); err != nil {
+		t.Fatal(err)
+	}
+	close(pause.release)
+	w := <-done
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("trashed source clear: %d %s", w.Code, w.Body.String())
+	}
+	var count int
+	if err := d.Read.QueryRow(`SELECT COUNT(*) FROM document_custom_field_values WHERE document_id=101 AND field_id=101`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatal("clear removed a value after its source entered Trash")
 	}
 }
 

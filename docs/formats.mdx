@@ -633,14 +633,16 @@ Version, split and attachment documents inherit their source system.
 | `jd_category`      | int               | JD code (e.g. `31` = "Utilities" under area 30–39). Falls through to inbox when unresolved.                                                                  |
 | `jd_system`        | string, optional  | Source/expected system code. When supplied, must match the configured intake target; never routes or creates a system.                                       |
 | `jd_address`       | string, optional  | Informational source location. Does not request a document ID or override current filing.                                                                    |
-| `notes`            | string            | Free-form; stored on the document row.                                                                                                                       |
-| `custom_fields`    | object            | Map of custom-field name → value. Field must exist (`/api/custom_fields/`); type coercion follows the field's declared type.                                 |
+| `notes`            | string            | Creates an attributed note owned by the intake owner on this exact document revision.                                                                        |
+| `custom_fields`    | object            | Map of exact custom-field name → typed value. The field must already exist (`/api/custom_fields/`); API validation follows its declared type.                |
 
-**Source of truth**: `core/ingest/sidecar/sidecar.go`. Parser accepts
-the native shape and a flat-JSON compat shape (no `suchi_sidecar` key,
-top-level `title/created/correspondent/tags`). Bad JSON or an
-explicit-but-mismatched `suchi_sidecar` version fails ingest; the
-file moves to `<dir>/errors/` with a `.err` companion.
+**Source of truth**: `core/ingest/sidecar/sidecar.go` parses the wire shape;
+`core/ingest/fswatch` applies it. Metadata, the note, typed custom fields, and
+the ingest outbox commit together. An unknown custom field, invalid typed value,
+bad JSON, or explicit-but-mismatched `suchi_sidecar` version rejects the intake
+without partial metadata; the file moves to `<dir>/errors/` with a `.err`
+companion. Producers that omit `suchi_sidecar` get the flat-JSON compatibility
+shape (`title`/`created`/`correspondent`/`tags` only).
 
 The native `suchi export` sidecar is a partial takeout, not a complete restore
 contract. It carries title, source date, correspondents, tags, and JD category,

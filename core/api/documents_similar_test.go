@@ -155,6 +155,45 @@ func TestSimilarDocuments_FindsOverlappingDocs(t *testing.T) {
 	}
 }
 
+func TestSimilarDocumentsUsesLatestVisibleFamilyMember(t *testing.T) {
+	s := newSimilarServer(t)
+	for i := range 15 {
+		seedSimilarDoc(t, s, 1,
+			"Cooking notes "+strconv.Itoa(i),
+			"ingredients tomato basil olive garlic pepper simmer recipe kitchen")
+	}
+	source := seedSimilarDoc(t, s, 1, "Electricity account",
+		"electricity utility residential consumption kilowatt billing statement")
+	older := seedSimilarDoc(t, s, 1, "Older electricity statement",
+		"electricity utility residential consumption kilowatt billing statement")
+	current := seedSimilarDoc(t, s, 1, "Current electricity statement",
+		"electricity utility residential consumption kilowatt billing statement current")
+	const family = "v:66666666666666666666666666666666"
+	if _, err := s.DB.Write.Exec(`
+		UPDATE documents
+		SET version_family_key=?,
+		    previous_version_id=CASE id WHEN ? THEN ? ELSE previous_version_id END
+		WHERE id IN (?,?)
+	`, family, current, older, older, current); err != nil {
+		t.Fatal(err)
+	}
+
+	code, body := doSimilar(t, s, source, adminPrincipal(1))
+	if code != 200 {
+		t.Fatalf("status=%d", code)
+	}
+	foundCurrent := false
+	for _, result := range body.Results {
+		if result.ID == older {
+			t.Fatalf("older family member appeared in similar results: %+v", body.Results)
+		}
+		foundCurrent = foundCurrent || result.ID == current
+	}
+	if !foundCurrent {
+		t.Fatalf("current family member missing from similar results: %+v", body.Results)
+	}
+}
+
 func TestSimilarDocuments_EmptyContentReturnsEmpty(t *testing.T) {
 	s := newSimilarServer(t)
 	// Zero-content doc — tokenizer returns nothing → empty result.

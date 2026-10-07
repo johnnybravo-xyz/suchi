@@ -305,7 +305,7 @@ func TestSystemsCollectionsFilterBeforeCountsPagesAndHydration(t *testing.T) {
 		{"/api/intelligence/?system=S01&type=date&status=pending", 101, 1},
 		{"/api/tags/?system=S01", 101, 1},
 		{"/api/correspondents/?system=S01", 101, 1},
-		{"/api/storage_paths/?system=S01", 101, 1},
+		{"/api/rendered_layouts/?system=S01", 101, 1},
 		{"/api/custom_fields/?system=S01", 101, 1},
 	} {
 		w = systemsBoundaryRequest(mux, "GET", tc.path, "", p)
@@ -493,7 +493,7 @@ func TestSystemsForeignMetadataRejectsWithoutPartialWritesOrOutbox(t *testing.T)
 	}{
 		{"POST", "/api/documents/bulk_edit?system=S01", `{"documents":[101,103],"method":"set_jd_category","parameters":{"jd_category_id":201}}`, 400},
 		{"POST", "/api/documents/bulk_edit?system=S01", `{"documents":[101,103],"method":"set_correspondent","parameters":{"correspondent_id":201}}`, 400},
-		{"POST", "/api/documents/bulk_edit?system=S01", `{"documents":[101,103],"method":"set_storage_path","parameters":{"storage_path_id":201}}`, 400},
+		{"POST", "/api/documents/bulk_edit?system=S01", `{"documents":[101,103],"method":"set_rendered_layout","parameters":{"rendered_layout_id":201}}`, 400},
 		{"POST", "/api/documents/bulk_edit?system=S01", `{"documents":[101,103],"method":"add_tag","parameters":{"tag_id":201}}`, 400},
 		{"POST", "/api/documents/201/correspondents/?system=S01", `{"name":"Must not be created","role":"sender"}`, 404},
 		{"PATCH", "/api/correspondents/201?system=S01", `{"name":"Must not change"}`, 404},

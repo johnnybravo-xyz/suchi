@@ -123,11 +123,24 @@ func topDocs(ctx context.Context, reader systems.Queryer, id int64, limit int, p
 
 	visibility := " AND d.system_id = ?"
 	visArgs := []any{systemID}
+	newerVisibility := "newer.system_id = ?"
+	newerArgs := []any{systemID}
 	if p != nil {
 		frag, args := authz.DocVisibilityWhere(principal, systemID)
 		visibility = " AND " + frag
 		visArgs = args
+		newerVisibility, newerArgs = authz.DocVisibilityWhereAlias(principal, systemID, "newer")
 	}
+	currentness := ` AND (
+		d.version_family_key IS NULL OR NOT EXISTS (
+			SELECT 1 FROM documents newer
+			WHERE newer.system_id = d.system_id
+			  AND newer.version_family_key = d.version_family_key
+			  AND newer.id > d.id
+			  AND newer.trashed_at IS NULL
+			  AND (` + newerVisibility + `)
+		)
+	)`
 
 	// BM25F with the same title/content weights the search endpoint
 	// uses (title 3x, content 1x). Same rationale: a neighbour whose
@@ -142,10 +155,11 @@ func topDocs(ctx context.Context, reader systems.Queryer, id int64, limit int, p
 		  JOIN documents d ON d.id = documents_fts.rowid
 		 WHERE documents_fts MATCH ?
 		   AND d.id != ?
-		   AND d.trashed_at IS NULL` + visibility + `
+		   AND d.trashed_at IS NULL` + visibility + currentness + `
 		 ORDER BY rank
 		 LIMIT ?`
 	args := append([]any{match, id}, visArgs...)
+	args = append(args, newerArgs...)
 	args = append(args, limit)
 
 	rows, err := reader.QueryContext(ctx, q, args...)

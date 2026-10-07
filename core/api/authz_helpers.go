@@ -14,6 +14,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
+	"github.com/johnnybravo-xyz/suchi/core/searchquery"
 )
 
 func (s *Server) requireAuth(w http.ResponseWriter, r *http.Request) *pluginapi.Principal {
@@ -137,20 +138,98 @@ func (s *Server) principalGroups(ctx context.Context, userID int64) ([]int64, er
 }
 
 func documentVisibilityWhere(ctx context.Context, p *pluginapi.Principal, groups []int64) (string, []any) {
-	return authz.DocVisibilityWhere(systemPrincipal(ctx, p, groups), collectionSystemID(ctx, p))
+	return documentVisibilityWhereAlias(ctx, p, groups, "d")
+}
+
+func documentVisibilityWhereAlias(ctx context.Context, p *pluginapi.Principal, groups []int64, alias string) (string, []any) {
+	return authz.DocVisibilityWhereAlias(systemPrincipal(ctx, p, groups), collectionSystemID(ctx, p), alias)
+}
+
+func intrinsicDocumentVisibilityWhereAlias(p *pluginapi.Principal, groups []int64, alias string) (string, []any) {
+	actor := authz.Principal{
+		UserID:        p.UserID,
+		Role:          p.Role,
+		Kind:          p.Kind,
+		Groups:        groups,
+		TokenSystemID: tokenSystemID(p),
+	}
+	return authz.DocVisibilityIntrinsicWhereAlias(actor, alias)
 }
 
 func (s *Server) collectionVisibility(ctx context.Context, p *pluginapi.Principal) (string, []any, error) {
+	where, args, _, err := s.collectionVisibilityWithGroups(ctx, p)
+	return where, args, err
+}
+
+func (s *Server) collectionVisibilityWithGroups(ctx context.Context, p *pluginapi.Principal) (string, []any, []int64, error) {
 	var groups []int64
 	if p.Role != "admin" {
 		var err error
 		groups, err = s.principalGroups(ctx, p.UserID)
 		if err != nil {
-			return "", nil, err
+			return "", nil, nil, err
 		}
 	}
 	where, args := documentVisibilityWhere(ctx, p, groups)
-	return where, args, nil
+	return where, args, groups, nil
+}
+
+func documentVersionWhere(ctx context.Context, p *pluginapi.Principal, groups []int64, mode searchquery.VersionMode) (string, []any) {
+	if mode == searchquery.VersionAll {
+		return "", nil
+	}
+	newerVisibility, args := documentVisibilityWhereAlias(ctx, p, groups, "newer")
+	newerExists := `EXISTS (
+		SELECT 1
+		FROM documents newer
+		WHERE d.version_family_key IS NOT NULL
+		  AND newer.system_id = d.system_id
+		  AND newer.version_family_key = d.version_family_key
+		  AND newer.id > d.id
+		  AND newer.trashed_at IS NULL
+		  AND (` + newerVisibility + `)
+	)`
+	if mode == searchquery.VersionOlder {
+		return "d.version_family_key IS NOT NULL AND " + newerExists, args
+	}
+	return "(d.version_family_key IS NULL OR NOT " + newerExists + ")", args
+}
+
+func documentFieldPresenceWhere(p *pluginapi.Principal, groups []int64, field searchquery.FieldPresence) (string, []any) {
+	targetVisibility, targetArgs := intrinsicDocumentVisibilityWhereAlias(p, groups, "sq_target")
+	presence := `EXISTS (
+		SELECT 1
+		FROM document_custom_field_values sq_value
+		JOIN custom_fields sq_field ON sq_field.id = sq_value.field_id
+		WHERE sq_value.document_id = d.id
+		  AND sq_value.field_id = ?
+		  AND (
+			sq_field.data_type <> 'documentlink'
+			OR EXISTS (
+				SELECT 1
+				FROM documents sq_target
+				WHERE sq_target.id = sq_value.value_int
+				  AND sq_target.trashed_at IS NULL
+				  AND (` + targetVisibility + `)
+			)
+		  )
+	)`
+	if field.Negated {
+		presence = "NOT " + presence
+	}
+	args := make([]any, 0, len(targetArgs)+1)
+	args = append(args, field.FieldID)
+	args = append(args, targetArgs...)
+	return presence, args
+}
+
+func appendDocumentFieldPresence(where []string, args []any, p *pluginapi.Principal, groups []int64, plan searchquery.Plan) ([]string, []any) {
+	for _, field := range plan.FieldPresence {
+		predicate, predicateArgs := documentFieldPresenceWhere(p, groups, field)
+		where = append(where, predicate)
+		args = append(args, predicateArgs...)
+	}
+	return where, args
 }
 
 // documentPermissionDecisions resolves a bulk request with one group lookup.

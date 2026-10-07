@@ -24,6 +24,8 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/lang"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
+	renderpaths "github.com/johnnybravo-xyz/suchi/core/render/paths"
+	"github.com/johnnybravo-xyz/suchi/core/render/view"
 	"github.com/johnnybravo-xyz/suchi/core/trash"
 )
 
@@ -433,6 +435,11 @@ func (s *Server) RestoreDocument(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]any{"id": id, "affected": affected})
 }
 
+var (
+	errRenderedLayoutUnavailable = errors.New("rendered layout is unavailable")
+	errRenderedLayoutNeedsASN    = errors.New("rendered layout requires a previous archive number")
+)
+
 // PatchDocument — PATCH /api/documents/{id}. Partial update of the
 // fields callers can set from a mobile or API client: title,
 // sensitivity, jd_category_id. Adding a new field is a two-line
@@ -467,6 +474,10 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if in.RenderedLayoutID != nil && *in.RenderedLayoutID < 0 {
+		s.writeError(w, http.StatusBadRequest, "bad_rendered_layout", "rendered_layout_id must be zero or a positive integer")
+		return
+	}
 
 	// Build UPDATE dynamically, columns hard-coded, values in ? bindings.
 	sets := []string{}
@@ -491,6 +502,15 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 		sets = append(sets, "jd_category_id = ?")
 		args = append(args, *in.JDCategoryID)
 		after["jd_category_id"] = *in.JDCategoryID
+	}
+	if in.RenderedLayoutID != nil {
+		sets = append(sets, "storage_path_id = ?")
+		if *in.RenderedLayoutID == 0 {
+			args = append(args, sql.NullInt64{})
+		} else {
+			args = append(args, *in.RenderedLayoutID)
+		}
+		after["rendered_layout_id"] = *in.RenderedLayoutID
 	}
 	// Languages — accepts CSV string or JSON array. Normalised to
 	// the comma-bracketed storage form. Setting the field implies
@@ -522,14 +542,15 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 
 	// Snapshot the before-values so the audit log carries a diff.
 	var (
-		curTitle       sql.NullString
-		curSensitivity sql.NullString
-		curJDCatID     sql.NullInt64
+		curTitle            sql.NullString
+		curSensitivity      sql.NullString
+		curJDCatID          sql.NullInt64
+		curRenderedLayoutID sql.NullInt64
 	)
 	err = s.DB.Read.QueryRowContext(r.Context(),
-		`SELECT title, sensitivity, jd_category_id FROM documents
+		`SELECT title, sensitivity, jd_category_id, storage_path_id FROM documents
 		 WHERE id = ?`,
-		id).Scan(&curTitle, &curSensitivity, &curJDCatID)
+		id).Scan(&curTitle, &curSensitivity, &curJDCatID, &curRenderedLayoutID)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "document not found")
 		return
@@ -550,6 +571,13 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.JDCategoryID != nil && curJDCatID.Valid {
 		before["jd_category_id"] = curJDCatID.Int64
+	}
+	if in.RenderedLayoutID != nil {
+		if curRenderedLayoutID.Valid {
+			before["rendered_layout_id"] = curRenderedLayoutID.Int64
+		} else {
+			before["rendered_layout_id"] = int64(0)
+		}
 	}
 
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
@@ -572,6 +600,27 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 		}
+		if in.RenderedLayoutID != nil && *in.RenderedLayoutID != 0 {
+			var (
+				template string
+				asn      sql.NullInt64
+			)
+			err := tx.QueryRowContext(r.Context(), `
+				SELECT sp.path, d.archive_serial_number
+				FROM storage_paths sp
+				JOIN documents d ON d.system_id = sp.system_id
+				WHERE sp.id = ? AND d.id = ?
+			`, *in.RenderedLayoutID, id).Scan(&template, &asn)
+			if errors.Is(err, sql.ErrNoRows) {
+				return errRenderedLayoutUnavailable
+			}
+			if err != nil {
+				return err
+			}
+			if renderpaths.UsesVariable(template, "asn") && !asn.Valid {
+				return errRenderedLayoutNeedsASN
+			}
+		}
 		res, err := tx.ExecContext(r.Context(),
 			"UPDATE documents SET "+strings.Join(sets, ", ")+
 				" WHERE id = ?", args...)
@@ -585,7 +634,13 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 		if n == 0 {
 			return errNotFound
 		}
-		return reconcileClassifierReview(r.Context(), tx, selectedSystemID(r.Context()), []int64{id})
+		if err := reconcileClassifierReview(r.Context(), tx, selectedSystemID(r.Context()), []int64{id}); err != nil {
+			return err
+		}
+		if in.Title != nil || in.JDCategoryID != nil || in.RenderedLayoutID != nil {
+			return view.EnqueueMove(r.Context(), tx, id)
+		}
+		return nil
 	})
 	if err != nil {
 		if errors.Is(err, errBadParams) {
@@ -594,6 +649,14 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 		}
 		if errors.Is(err, errNotFound) {
 			s.writeError(w, http.StatusNotFound, "not_found", "document not found")
+			return
+		}
+		if errors.Is(err, errRenderedLayoutUnavailable) {
+			s.writeError(w, http.StatusBadRequest, "rendered_layout_unavailable", "folder layout is unavailable in this filing system")
+			return
+		}
+		if errors.Is(err, errRenderedLayoutNeedsASN) {
+			s.writeError(w, http.StatusConflict, "rendered_layout_requires_archive_number", "this folder layout requires a previous archive number")
 			return
 		}
 		s.serverErr(w, "api.patch.update", err)
@@ -619,14 +682,16 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 // content lands under `content`, correspondent list mirrors the multi-
 // party junction, tags are slugs. Nil-safe: empty slices, not null.
 type DocumentDetail struct {
-	EncryptionState string `json:"encryption_state,omitempty"`
-	ID              int64  `json:"id"`
-	SystemCode      string `json:"system_code,omitempty"`
-	JDAddress       string `json:"jd_address,omitempty"`
-	OwnerID         int64  `json:"owner_id"`
-	Title           string `json:"title"`
-	Content         string `json:"content"`
-	ContentSource   string `json:"content_source"`
+	EncryptionState     string                  `json:"encryption_state,omitempty"`
+	ID                  int64                   `json:"id"`
+	SystemCode          string                  `json:"system_code,omitempty"`
+	JDAddress           string                  `json:"jd_address,omitempty"`
+	OwnerID             int64                   `json:"owner_id"`
+	ArchiveSerialNumber *int64                  `json:"archive_serial_number,omitempty"`
+	RenderedLayout      *DocumentRenderedLayout `json:"rendered_layout,omitempty"`
+	Title               string                  `json:"title"`
+	Content             string                  `json:"content"`
+	ContentSource       string                  `json:"content_source"`
 	// Device OCR provenance remains visible after server text supersedes it.
 	DeviceContentConfidence *float64 `json:"device_content_confidence,omitempty"`
 	DeviceOCRLanguage       string   `json:"device_ocr_language,omitempty"`
@@ -652,17 +717,25 @@ type DocumentDetail struct {
 	// SourceMTime is the mtime of the source file captured at ingest
 	// (browser upload, watcher, importer) — the closest thing to a
 	// real creation date. Nil when the ingest path didn't carry it.
-	SourceMTime    *int64             `json:"source_mtime,omitempty"`
-	TrashedAt      *int64             `json:"trashed_at,omitempty"`
-	DeletesAt      *int64             `json:"deletes_at,omitempty"`
-	Sources        []DocumentSource   `json:"sources"`
-	Tags           []string           `json:"tags"`
-	Correspondents []DocCorrespondent `json:"correspondents"`
-	// Languages — comma-separated ISO-639-1 codes (e.g. "de", "de,en").
+	SourceMTime    *int64                     `json:"source_mtime,omitempty"`
+	TrashedAt      *int64                     `json:"trashed_at,omitempty"`
+	DeletesAt      *int64                     `json:"deletes_at,omitempty"`
+	Sources        []DocumentSource           `json:"sources"`
+	Tags           []string                   `json:"tags"`
+	Correspondents []DocCorrespondent         `json:"correspondents"`
+	CustomFields   []DocumentCustomFieldValue `json:"custom_fields"`
+	Notes          []DocumentNote             `json:"notes"`
 	// Stored comma-bracketed in the column; serialised without the
 	// leading/trailing commas for JSON clients.
 	Languages       string `json:"languages,omitempty"`
 	LanguagesLocked bool   `json:"languages_locked,omitempty"`
+}
+
+type DocumentRenderedLayout struct {
+	ID      int64  `json:"id"`
+	Name    string `json:"name"`
+	Path    string `json:"path"`
+	UsesASN bool   `json:"uses_asn"`
 }
 
 type DocumentSource struct {
@@ -676,9 +749,10 @@ type DocumentSource struct {
 // pointers so unset != empty — the handler only writes columns the
 // client explicitly named.
 type DocumentUpdate struct {
-	Title        *string `json:"title,omitempty"`
-	Sensitivity  *string `json:"sensitivity,omitempty"`
-	JDCategoryID *int64  `json:"jd_category_id,omitempty"`
+	Title            *string `json:"title,omitempty"`
+	Sensitivity      *string `json:"sensitivity,omitempty"`
+	JDCategoryID     *int64  `json:"jd_category_id,omitempty"`
+	RenderedLayoutID *int64  `json:"rendered_layout_id,omitempty"`
 	// Languages accepts either a CSV string ("de,en") or a JSON array
 	// (["de","en"]). Normalised server-side to the comma-bracketed
 	// storage format. Setting this implicitly sets languages_locked=1
@@ -776,11 +850,16 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 		languagesStored         string
 		languagesLocked         int
 		sourceMTime             sql.NullInt64
+		archiveSerialNumber     sql.NullInt64
+		renderedLayoutID        sql.NullInt64
+		renderedLayoutName      sql.NullString
+		renderedLayoutPath      sql.NullString
 		deviceContentConfidence sql.NullFloat64
 		deviceContentReceivedAt sql.NullInt64
 	)
 	err = s.DB.Read.QueryRowContext(r.Context(), `
-		SELECT d.id, d.owner_id, d.title, js.code,
+		SELECT d.id, d.owner_id, d.title, js.code, d.archive_serial_number,
+		       sp.id, sp.name, sp.path,
 		       CASE WHEN ? THEN COALESCE(d.content, '') ELSE '' END,
 		       d.original_blob, d.original_size,
 		       d.archive_blob, d.archive_size, d.mime_type,
@@ -794,8 +873,10 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 		JOIN jd_systems js ON js.id = d.system_id
 		LEFT JOIN jd_categories jc ON jc.id = d.jd_category_id
 		LEFT JOIN jd_areas      ja ON ja.code_start = jc.area_start AND ja.system_id = d.system_id
+		LEFT JOIN storage_paths sp ON sp.id = d.storage_path_id AND sp.system_id = d.system_id
 		WHERE d.id = ?
-	`, includeContent, id).Scan(&d.ID, &d.OwnerID, &d.Title, &d.SystemCode, &content, &d.OriginalBlob, &d.OriginalSize,
+	`, includeContent, id).Scan(&d.ID, &d.OwnerID, &d.Title, &d.SystemCode, &archiveSerialNumber,
+		&renderedLayoutID, &renderedLayoutName, &renderedLayoutPath, &content, &d.OriginalBlob, &d.OriginalSize,
 		&archBlob, &archSize, &mimeNull,
 		&d.JDCategoryID, &sensitivity, &d.CreatedAt, &d.AddedAt, &d.UpdatedAt, &trashed,
 		&jdCode, &jdName, &jdAreaName, &languagesStored, &languagesLocked,
@@ -843,6 +924,16 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 	if sourceMTime.Valid {
 		v := sourceMTime.Int64
 		d.SourceMTime = &v
+	}
+	if archiveSerialNumber.Valid {
+		value := archiveSerialNumber.Int64
+		d.ArchiveSerialNumber = &value
+	}
+	if renderedLayoutID.Valid {
+		d.RenderedLayout = &DocumentRenderedLayout{
+			ID: renderedLayoutID.Int64, Name: renderedLayoutName.String, Path: renderedLayoutPath.String,
+			UsesASN: renderpaths.UsesVariable(renderedLayoutPath.String, "asn"),
+		}
 	}
 	if deviceContentConfidence.Valid {
 		v := deviceContentConfidence.Float64
@@ -941,6 +1032,17 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 	}
 	if d.Sources == nil {
 		d.Sources = []DocumentSource{}
+	}
+
+	d.CustomFields, err = s.loadCustomFieldValues(r.Context(), principal, id)
+	if err != nil {
+		s.serverErr(w, "documents.custom_fields", err)
+		return
+	}
+	d.Notes, err = s.loadDocumentNotes(r.Context(), principal, id)
+	if err != nil {
+		s.serverErr(w, "documents.notes", err)
+		return
 	}
 
 	s.writeJSON(w, http.StatusOK, d)

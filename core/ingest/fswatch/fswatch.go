@@ -51,6 +51,7 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/blob"
+	"github.com/johnnybravo-xyz/suchi/core/customfield"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	ingestmeta "github.com/johnnybravo-xyz/suchi/core/ingest"
 	"github.com/johnnybravo-xyz/suchi/core/ingest/sidecar"
@@ -506,9 +507,9 @@ func (w *Watcher) ingest(ctx context.Context, path string, side *sidecar.V1) (in
 	return docID, deduped, err
 }
 
-// applySidecar upserts correspondent/tags/notes for a freshly-created
-// doc row. Idempotent on the correspondent + tag names (upsert-by-name
-// matches the importer's contract).
+// applySidecar upserts correspondent, tags, notes, and declared custom fields
+// for a freshly-created document. Any invalid metadata aborts the ingest
+// transaction, so producers never get a partially annotated document.
 func applySidecar(ctx context.Context, tx *sql.Tx, docID int64, s *sidecar.V1, ownerID, systemID int64) error {
 	now := time.Now().Unix()
 
@@ -559,10 +560,39 @@ func applySidecar(ctx context.Context, tx *sql.Tx, docID int64, s *sidecar.V1, o
 
 	if s.Notes != "" {
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO notes(document_id, user_id, note, created_at)
-			VALUES (?, ?, ?, ?)
-		`, docID, ownerID, s.Notes, now); err != nil {
+			INSERT INTO notes(document_id, user_id, note, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?)
+		`, docID, ownerID, s.Notes, now, now); err != nil {
 			return err
+		}
+	}
+	for name, raw := range s.CustomFields {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return errors.New("custom field name must not be empty")
+		}
+		var (
+			fieldID  int64
+			dataType string
+			extra    string
+		)
+		if err := tx.QueryRowContext(ctx, `
+			SELECT id, data_type, extra_data
+			FROM custom_fields
+			WHERE system_id = ? AND name = ?
+		`, systemID, name).Scan(&fieldID, &dataType, &extra); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("custom field %q is not defined in this filing system", name)
+			}
+			return fmt.Errorf("resolve custom field %q: %w", name, err)
+		}
+		handler := customfield.Lookup(dataType)
+		typed, err := handler.Validate(json.RawMessage(extra), raw)
+		if err != nil {
+			return fmt.Errorf("custom field %q: %w", name, err)
+		}
+		if err := handler.Write(ctx, tx, docID, fieldID, typed); err != nil {
+			return fmt.Errorf("custom field %q: %w", name, err)
 		}
 	}
 	return nil

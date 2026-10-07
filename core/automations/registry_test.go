@@ -164,6 +164,45 @@ func TestRegistryRejectsDuplicateAndIncompleteDefinitions(t *testing.T) {
 	}
 }
 
+func TestAssignRenderedLayoutRequiresPreviousArchiveNumber(t *testing.T) {
+	ctx := t.Context()
+	d, log := setup(t, ctx)
+	seedUser(t, ctx, d)
+	docID := seedDoc(t, ctx, d, "Original", "body")
+	if _, err := d.ExecWrite(ctx, `
+		INSERT INTO storage_paths(id, system_id, name, slug, path, created_at, updated_at)
+		VALUES (801, 1, 'Imported folders', 'imported-folders', 'Legacy/{{ asn }}/{{ title }}', 0, 0)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	registry := testActions(t)
+	store := automations.New(d, registry)
+	_, err := store.Create(ctx, 1, automations.Automation{
+		Name: "Assign imported layout", Enabled: true,
+		Triggers: []automations.Trigger{{Type: automations.TriggerDocumentAdded}},
+		Actions: []automations.Action{{
+			Kind: "assign_storage_path", Params: map[string]any{"storage_path_id": float64(801)},
+		}},
+	})
+	must(t, err)
+	if err := automations.ApplyOnDocumentAdded(ctx, d, registry, log, docID); err == nil ||
+		!strings.Contains(err.Error(), "requires a previous archive number") {
+		t.Fatalf("automation without previous archive number = %v", err)
+	}
+	var assigned sql.NullInt64
+	must(t, d.Read.QueryRowContext(ctx, `SELECT storage_path_id FROM documents WHERE id=?`, docID).Scan(&assigned))
+	if assigned.Valid {
+		t.Fatalf("failed automation stored rendered layout %d", assigned.Int64)
+	}
+	_, err = d.ExecWrite(ctx, `UPDATE documents SET archive_serial_number=77 WHERE id=?`, docID)
+	must(t, err)
+	must(t, automations.ApplyOnDocumentAdded(ctx, d, registry, log, docID))
+	must(t, d.Read.QueryRowContext(ctx, `SELECT storage_path_id FROM documents WHERE id=?`, docID).Scan(&assigned))
+	if !assigned.Valid || assigned.Int64 != 801 {
+		t.Fatalf("assigned rendered layout = %+v", assigned)
+	}
+}
+
 func TestRegistryBuiltinActionParity(t *testing.T) {
 	ctx := t.Context()
 	d, log := setup(t, ctx)

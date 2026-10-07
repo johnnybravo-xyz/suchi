@@ -81,8 +81,8 @@ document.
 
 - PDF and image OCR, thumbnails, barcodes, encrypted PDFs, and ZUGFeRD invoices.
 - EPUB, Office, OpenDocument, RTF, CSV, DjVu, HEIC/HEIF, EML, and Outlook MSG.
-- Full-text search, Johnny.Decimal filing, custom fields, saved views, and
-  rendered filesystem views.
+- Full-text search, Johnny.Decimal filing, revision notes, typed custom fields,
+  named exact-document links, saved views, and folder layouts.
 - Import-introduced filing systems with permanent codes, direct membership plus
   document ACLs, and `SYS.AC.documentID` addresses using existing global IDs.
   Unprefixed archives keep their existing UI and paths until first prefixed Apply.

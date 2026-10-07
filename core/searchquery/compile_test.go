@@ -64,6 +64,40 @@ func TestResolveAndCompile(t *testing.T) {
 	}
 }
 
+func TestCompileTypedCustomFieldsAndArchiveNumbers(t *testing.T) {
+	parsed, err := Parse(`field:"Invoice amount">=100 field:Regions=north field:Approved=yes asn:<500`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := Resolve(context.Background(), parsed, fakeResolver{values: map[string][]Candidate{
+		"field:Invoice amount": {{ID: 10, Label: "Invoice amount", DataType: "monetary"}},
+		"field:Regions":        {{ID: 11, Label: "Regions", DataType: "multi"}},
+		"field:Approved":       {{ID: 12, Label: "Approved", DataType: "bool"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := Compile(resolved)
+	if len(plan.Predicates) != 4 {
+		t.Fatalf("predicates=%+v", plan.Predicates)
+	}
+	if !strings.Contains(plan.Predicates[0].SQL, "value_number >= ?") ||
+		!reflect.DeepEqual(plan.Predicates[0].Args, []any{int64(10), float64(100)}) {
+		t.Fatalf("money predicate=%+v", plan.Predicates[0])
+	}
+	if !strings.Contains(plan.Predicates[1].SQL, "json_each") ||
+		!reflect.DeepEqual(plan.Predicates[1].Args, []any{int64(11), "north"}) {
+		t.Fatalf("multi predicate=%+v", plan.Predicates[1])
+	}
+	if !reflect.DeepEqual(plan.Predicates[2].Args, []any{int64(12), 1}) {
+		t.Fatalf("bool predicate=%+v", plan.Predicates[2])
+	}
+	if plan.Predicates[3].SQL != "d.archive_serial_number < ?" ||
+		!reflect.DeepEqual(plan.Predicates[3].Args, []any{int64(500)}) {
+		t.Fatalf("asn predicate=%+v", plan.Predicates[3])
+	}
+}
+
 func TestCompileAcceptedIntelligenceFilters(t *testing.T) {
 	parsed, err := Parse(`date:>=2026-09-01 date-role:renewal is:dated`)
 	if err != nil {
@@ -178,5 +212,62 @@ func TestCompileTrashMode(t *testing.T) {
 		if !plan.HasTrashFilter {
 			t.Errorf("%q did not suppress the default live-only predicate", input)
 		}
+	}
+}
+
+func TestCompileVersionSelector(t *testing.T) {
+	parsed, err := Parse(`version:older`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := Resolve(context.Background(), parsed, fakeResolver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := Compile(resolved)
+	if plan.VersionMode != VersionOlder || !plan.VersionExplicit || len(plan.Predicates) != 0 {
+		t.Fatalf("version plan=%+v", plan)
+	}
+	if normalized := Normalize(parsed); normalized != "version:older" {
+		t.Fatalf("normalized=%q", normalized)
+	}
+
+	for _, input := range []string{"version:newest", "-version:all", "version:latest version:older"} {
+		parsed, err := Parse(input)
+		if err == nil {
+			_, err = Resolve(context.Background(), parsed, fakeResolver{})
+		}
+		if err == nil {
+			t.Fatalf("%q was accepted", input)
+		}
+	}
+}
+
+func TestCompileFieldPresence(t *testing.T) {
+	parsed, err := Parse(`has-field:"Governing contract" -has-field:Receipt`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := Resolve(context.Background(), parsed, fakeResolver{values: map[string][]Candidate{
+		"has-field:Governing contract": {{ID: 12, Label: "Governing contract"}},
+		"has-field:Receipt":            {{ID: 13, Label: "Receipt"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := Compile(resolved)
+	want := []FieldPresence{{FieldID: 12}, {FieldID: 13, Negated: true}}
+	if !reflect.DeepEqual(plan.FieldPresence, want) || len(plan.Predicates) != 0 {
+		t.Fatalf("field presence plan=%+v", plan)
+	}
+	if normalized := Normalize(parsed); normalized != `has-field:"Governing contract" -has-field:Receipt` {
+		t.Fatalf("normalized=%q", normalized)
+	}
+
+	invalid := Query{Clauses: []Clause{{
+		Kind: ClauseFilter, Filter: "has-field", Operator: OpGreater, Value: "Receipt",
+	}}}
+	if _, err := Resolve(context.Background(), invalid, fakeResolver{}); err == nil {
+		t.Fatal("ordered field presence was accepted")
 	}
 }

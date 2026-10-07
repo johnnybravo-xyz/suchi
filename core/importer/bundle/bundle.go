@@ -251,8 +251,8 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 		}
 		rewritten, changed, unsupported := rewriteDocumentTypePath(f.Path)
 		if unsupported {
-			mrep.Failed(KindStoragePath, f.Name, "unsupported document_type template expression; documents use the default path")
-			rep.Warnings = append(rep.Warnings, fmt.Sprintf("storage path %q skipped: unsupported document_type template expression", f.Name))
+			mrep.Failed(KindStoragePath, f.Name, "unsupported document_type template expression; documents use the default folder layout")
+			rep.Warnings = append(rep.Warnings, fmt.Sprintf("folder layout %q skipped: unsupported document_type template expression", f.Name))
 			continue
 		}
 		f.Path = rewritten

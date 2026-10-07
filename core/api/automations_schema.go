@@ -39,7 +39,7 @@ type AutomationActionParam struct {
 	Required    bool   `json:"required"`
 	Description string `json:"description,omitempty"`
 	// TargetKind is set for `id` and `tag_ids` params so the SPA knows which
-	// picker to render: tag, correspondent, storage_path, custom_field, or user.
+	// picker to render: tag, correspondent, rendered_layout, custom_field, or user.
 	TargetKind string `json:"target_kind,omitempty"`
 }
 
@@ -90,9 +90,9 @@ var automationSchema = AutomationSchema{
 			},
 		},
 		{
-			Kind: "assign_storage_path", Name: "Assign storage path",
+			Kind: "assign_storage_path", Name: "Assign folder layout",
 			Params: []AutomationActionParam{
-				{Name: "storage_path_id", Type: "id", Required: true, TargetKind: "storage_path"},
+				{Name: "storage_path_id", Type: "id", Required: true, TargetKind: "rendered_layout"},
 			},
 		},
 		{

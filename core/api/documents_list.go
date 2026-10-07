@@ -123,6 +123,16 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 		where = append(where, "d.trashed_at IS NULL")
 	}
 
+	versionMode, err := resolveDocumentVersionMode(
+		scope, queryPlan,
+		len(scope.DocumentIDs) > 0 || trashed == "1" || trashed == "true" || queryPlan.SelectsTrash,
+	)
+	if err != nil {
+		scopeErr := err.(*documentScopeError)
+		s.writeError(w, http.StatusBadRequest, scopeErr.Code, scopeErr.Message)
+		return
+	}
+
 	where, args = appendDocumentScopePredicates(r.Context(), where, args, scope, p)
 
 	// Positive text starts from FTS; metadata filters remain additive.
@@ -137,13 +147,19 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 		args = append(args, id)
 	}
 
-	frag, vargs, err := s.collectionVisibility(r.Context(), p)
+	frag, vargs, groups, err := s.collectionVisibilityWithGroups(r.Context(), p)
 	if err != nil {
 		s.serverErr(w, "docs.list.visibility", err)
 		return
 	}
 	where = append(where, frag)
 	args = append(args, vargs...)
+	where, args = appendDocumentFieldPresence(where, args, p, groups, queryPlan)
+	versionWhere, versionArgs := documentVersionWhere(r.Context(), p, groups, versionMode)
+	if versionWhere != "" {
+		where = append(where, versionWhere)
+		args = append(args, versionArgs...)
+	}
 
 	whereSQL := strings.Join(where, " AND ")
 

@@ -111,16 +111,17 @@ type ChatHistoryMessage struct {
 }
 
 type ChatScope struct {
-	Query            string  `json:"query,omitempty"`
-	DocumentIDs      []int64 `json:"document_ids,omitempty"`
-	JDCategoryID     int64   `json:"jd_category_id,omitempty"`
-	Sensitivity      string  `json:"sensitivity,omitempty"`
-	TagIDs           []int64 `json:"tag_ids,omitempty"`
-	CorrespondentIDs []int64 `json:"correspondent_ids,omitempty"`
-	CreatedAtGTE     *int64  `json:"created_at_gte,omitempty"`
-	CreatedAtLTE     *int64  `json:"created_at_lte,omitempty"`
-	Language         string  `json:"language,omitempty"`
-	ShareLink        string  `json:"share_link,omitempty"`
+	Query            string                  `json:"query,omitempty"`
+	Version          searchquery.VersionMode `json:"version,omitempty"`
+	DocumentIDs      []int64                 `json:"document_ids,omitempty"`
+	JDCategoryID     int64                   `json:"jd_category_id,omitempty"`
+	Sensitivity      string                  `json:"sensitivity,omitempty"`
+	TagIDs           []int64                 `json:"tag_ids,omitempty"`
+	CorrespondentIDs []int64                 `json:"correspondent_ids,omitempty"`
+	CreatedAtGTE     *int64                  `json:"created_at_gte,omitempty"`
+	CreatedAtLTE     *int64                  `json:"created_at_lte,omitempty"`
+	Language         string                  `json:"language,omitempty"`
+	ShareLink        string                  `json:"share_link,omitempty"`
 }
 
 type ChatRequest struct {
@@ -302,6 +303,27 @@ func (s *Server) PostChat(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.Scope.Language, err = normalizedScopeLanguage(in.Scope.Language); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_scope", "scope is invalid")
+		return
+	}
+	validationPlan, err := s.compileQuery(r.Context(), in.Scope.Query)
+	if err != nil {
+		if !s.writeQueryError(w, "chat.scope", in.Scope.Query, err) {
+			s.serverErr(w, "chat.scope", err)
+		}
+		return
+	}
+	if len(in.ContextSourceIDs) > 0 &&
+		(in.Scope.Version != "" || validationPlan.VersionExplicit) {
+		s.writeError(w, http.StatusBadRequest, "incompatible_version",
+			"version cannot be combined with explicit research context IDs")
+		return
+	}
+	if _, err := resolveDocumentVersionMode(
+		in.Scope.documentScope(), validationPlan,
+		len(in.Scope.DocumentIDs) > 0 || validationPlan.SelectsTrash,
+	); err != nil {
+		scopeErr := err.(*documentScopeError)
+		s.writeError(w, http.StatusBadRequest, scopeErr.Code, scopeErr.Message)
 		return
 	}
 
@@ -551,16 +573,23 @@ func (s *Server) retrieveChatSources(ctx context.Context, terms []string, contex
 	defer func() { _ = tx.Rollback() }()
 
 	// One read transaction prevents authorization and content snapshots mixing.
-	where, args, err := s.chatSourceWhere(ctx, tx, scope, includeSensitive)
+	where, args, err := s.chatSourceWhere(ctx, tx, scope, includeSensitive, len(scope.DocumentIDs) > 0)
 	if err != nil {
 		return nil, 0, err
+	}
+	exactWhere, exactArgs := where, args
+	if len(contextIDs) > 0 && len(scope.DocumentIDs) == 0 {
+		exactWhere, exactArgs, err = s.chatSourceWhere(ctx, tx, scope, includeSensitive, true)
+		if err != nil {
+			return nil, 0, err
+		}
 	}
 
 	combined := make([]chatSourceMaterial, 0, chatMaxSources)
 	sourcePosition := make(map[int64]int, chatMaxSources)
 	if len(contextIDs) > 0 {
 		contextSources, err := s.queryChatContextSources(
-			ctx, tx, contextIDs, where, args, researchContext.maxSourceRunes)
+			ctx, tx, contextIDs, exactWhere, exactArgs, researchContext.maxSourceRunes)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -578,7 +607,7 @@ func (s *Server) retrieveChatSources(ctx context.Context, terms []string, contex
 		}
 		if len(terms) > 0 && len(authorizedIDs) > 0 {
 			contextMatches, err := s.queryChatFTSSources(
-				ctx, tx, terms, authorizedIDs, where, args, markers,
+				ctx, tx, terms, authorizedIDs, exactWhere, exactArgs, markers,
 				len(authorizedIDs), researchContext.maxSourceRunes)
 			if err != nil {
 				return nil, 0, err
@@ -657,7 +686,7 @@ func (s *Server) retrieveChatSources(ctx context.Context, terms []string, contex
 	return sources, passageCount, nil
 }
 
-func (s *Server) chatSourceWhere(ctx context.Context, q sqlQueryer, scope ChatScope, includeSensitive bool) ([]string, []any, error) {
+func (s *Server) chatSourceWhere(ctx context.Context, q sqlQueryer, scope ChatScope, includeSensitive, exactRows bool) ([]string, []any, error) {
 	p := auth.FromContext(ctx)
 	where := []string{"d.trashed_at IS NULL"}
 	args := []any{}
@@ -675,14 +704,25 @@ func (s *Server) chatSourceWhere(ctx context.Context, q sqlQueryer, scope ChatSc
 	visibility, visibilityArgs := documentVisibilityWhere(ctx, p, groups)
 	where = append(where, visibility)
 	args = append(args, visibilityArgs...)
-	where, args = appendDocumentScopePredicates(ctx, where, args, scope.documentScope(), p)
-	if scope.Query != "" {
-		plan, err := s.compileQueryWith(ctx, q, scope.Query)
-		if err != nil {
-			return nil, nil, err
-		}
-		where, args = appendQueryPredicates(where, args, plan)
+	documentScope := scope.documentScope()
+	where, args = appendDocumentScopePredicates(ctx, where, args, documentScope, p)
+	plan, err := s.compileQueryWith(ctx, q, scope.Query)
+	if err != nil {
+		return nil, nil, err
 	}
+	versionMode, err := resolveDocumentVersionMode(
+		documentScope, plan, exactRows || plan.SelectsTrash,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	where, args = appendDocumentFieldPresence(where, args, p, groups, plan)
+	versionWhere, versionArgs := documentVersionWhere(ctx, p, groups, versionMode)
+	if versionWhere != "" {
+		where = append(where, versionWhere)
+		args = append(args, versionArgs...)
+	}
+	where, args = appendQueryPredicates(where, args, plan)
 	return where, args, nil
 }
 
@@ -707,7 +747,14 @@ func chatPrincipalGroups(ctx context.Context, q sqlQueryer, userID int64) ([]int
 }
 
 func (scope ChatScope) documentScope() documentScope {
-	return documentScope(scope)
+	return documentScope{
+		Query: scope.Query, Version: scope.Version, VersionExplicit: scope.Version != "",
+		DocumentIDs: scope.DocumentIDs, JDCategoryID: scope.JDCategoryID,
+		Sensitivity: scope.Sensitivity,
+		TagIDs:      scope.TagIDs, CorrespondentIDs: scope.CorrespondentIDs,
+		CreatedAtGTE: scope.CreatedAtGTE, CreatedAtLTE: scope.CreatedAtLTE,
+		Language: scope.Language, ShareLink: scope.ShareLink,
+	}
 }
 
 func (s *Server) queryChatFTSSources(ctx context.Context, q sqlQueryer, terms []string, ids []int64,

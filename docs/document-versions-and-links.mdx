@@ -1,0 +1,226 @@
+---
+title: "Document detail, versions, and links"
+description: "How notes, typed metadata, replacement history, and exact document relationships behave across search, permissions, Trash, and purge."
+---
+
+{/* SPDX-License-Identifier: AGPL-3.0-or-later */}
+
+Suchi models a replacement version and a link as different facts:
+
+| Relationship | Meaning | What happens to the other row |
+| --- | --- | --- |
+| Version | “This file supersedes that earlier file.” | Both exact revisions remain addressable. Normal discovery shows the newest visible live revision. |
+| Document link | “This exact document is related to that exact document.” | Both documents remain peers. Neither supersedes the other. |
+| Acquisition source | “These bytes entered the archive here.” | It records provenance only; it creates neither a version nor a link. |
+
+These distinctions keep immutable originals, human metadata, permissions, and
+retrieval behavior explicit.
+
+## Notes on an exact revision
+
+The **Notes** card on Document Detail keeps attributed working context beside one
+exact file revision. A user who can change the document can add a note of up to
+16 KiB. Each row shows its author and created or edited time. The author may edit
+or delete their own note; an administrator may moderate any note.
+
+Notes are deliberately revision-owned. Uploading a replacement starts its Notes
+card empty, while the earlier revision keeps its history. Trash makes the card
+read-only until restore. The API rechecks both document change permission and
+note ownership in the write transaction, and records create, update, and delete
+audit events.
+
+## Replacement versions
+
+Open a live document and use **Upload replacement** to add a newer revision. The
+new upload becomes another document row with its own immutable original, source,
+extracted text, processing state, and direct URL. The version history remains
+available from every visible member of the family.
+
+For example, suppose document 120 is `Lease agreement — signed 2024`. Uploading
+an amended PDF creates document 184 and records 120 as its predecessor:
+
+```text
+120  Lease agreement — signed 2024
+ └─ 184  Lease agreement — amended 2026   Latest
+```
+
+Opening `#/documents/120` still opens the 2024 file. Documents, ranked Search,
+Calendar, and archive research normally return 184 instead because it is the
+newest live revision visible to that caller.
+
+A replacement must extend the current family head. Uploading from an earlier
+revision returns a generic conflict, and only one of two concurrent replacements
+can win. A trashed newest revision still reserves that position until it is
+restored or permanently deleted. These rules keep replacement history linear
+instead of silently creating sibling branches; the conflict never identifies a
+newer revision the caller cannot view.
+
+Use the query language when the task needs a different view:
+
+```text
+version:latest       # explicit form of the default
+version:all          # every visible live revision
+version:older        # only visible revisions superseded for this caller
+```
+
+Currentness is permission-aware. If a caller can view 120 but not 184, 120 is
+still their latest visible revision. A hidden or trashed newer revision never
+suppresses the older visible row or reveals that another revision exists.
+
+### What replacement carries forward
+
+Replacement preserves continuity metadata needed to keep the logical document
+filed and accessible:
+
+- filing system, owner, category, sensitivity, document type, and title;
+- explicit document ACL grants;
+- tags assigned by a person or deterministic rule; and
+- correspondent relationships.
+
+Revision-owned or generated state starts fresh:
+
+- the immutable original and acquisition source;
+- extracted content, detected languages, thumbnails, and processing results;
+- classifier-owned tags and accepted or pending document dates;
+- every custom-field value, including document links;
+- notes and the previous archive number.
+
+This prevents a new file from silently claiming metadata that described only the
+older evidence. Edit the new revision after upload when an exact value still
+applies.
+
+## Exact document links
+
+An administrator first creates a custom field whose type is **Document link** in
+**Settings > Archive configuration > Metadata > Custom fields**. On a document,
+open **Linked documents** and choose **Add link** to select an unused relationship
+type. **Change link** searches documents the current user may view; an exact
+numeric ID or canonical same-instance document URL is also accepted, including
+URL-encoded links and their filing-system context. **Remove link** removes the
+value.
+
+Example: an invoice uses the `Payment receipt` field to point to receipt 312.
+The receipt detail shows the invoice under **Linked documents**:
+
+```text
+Invoice 287 --Payment receipt--> Receipt 312
+```
+
+The value always names revision 312. If receipt 350 later replaces 312, the
+invoice still points to 312 and labels it as an earlier revision. If invoice 401
+replaces 287, the new invoice starts without that link. Suchi never copies,
+promotes, or retargets a link during replacement.
+
+Ordinary custom fields appear in the document metadata card with their declared
+types. **Linked documents** shows assigned outgoing values under **This document
+links to** and keeps unused link types in the **Add link** chooser. Outgoing rows
+use **Change link** and **Remove link**.
+
+
+**Documents linking to this version** is an independently paged projection of
+current values; each row says **Linked here as “link type”**. These rows are
+navigation, not reciprocal metadata stored on the target. A titled document
+omits its raw numeric ID; **Earlier version** identifies a non-current endpoint.
+
+### Deliberate relationship limits
+
+These limits are intentional. They prevent **Versions** and **Linked documents**
+from becoming two overlapping ways to build an ambiguous document graph:
+
+- a document cannot link to itself;
+- one revision cannot link to another revision in its own version family; use
+  **Versions** for that relationship; and
+- replacement never copies or retargets a link.
+
+Distinct documents may still link in both directions or form a cycle when their
+named relationships genuinely require it. Suchi shows only the direct outgoing
+and incoming relationships; it does not recursively expand or treat that cycle
+as a version family.
+
+### Permissions and filing systems
+
+A link write requires permission to change the source and view the live target.
+A cross-system link additionally requires entry to both filing systems. Reads
+repeat authorization at both ends:
+
+- a hidden or trashed target is omitted from the source's fields;
+- a hidden or trashed source is omitted from **Linked documents** counts and pages;
+- no hidden ID, title, address, existence flag, or count is returned; and
+- a pasted remote URL is rejected without fetching it.
+
+Visibility changes are therefore reflected immediately without rewriting the
+stored value.
+
+## Typed custom fields
+
+Administrators define fields under **Settings > Archive configuration >
+Metadata > Custom fields**. Text, URL, number, monetary, date, yes/no, select,
+multi-choice, and Document link values use type-specific editors on Document
+Detail. Select and multi-choice definitions require a non-empty, unique choice
+list. Once a field has values, its type cannot change; an in-use choice cannot
+be removed. Adding choices and renaming the field remain safe.
+
+Filesystem sidecars may set an existing field by its exact name. The watcher
+uses the same server-side type validation as the API and writes metadata in the
+document transaction: an unknown field or invalid value rejects the intake
+instead of leaving a partially described document. Automations expose named
+field pickers and the selected field's real value control.
+
+## Find documents by field presence or value
+
+`has-field:` resolves an exact custom-field name in the selected filing system.
+It works in Documents, ranked Search, saved Views, Calendar, and archive research:
+
+```text
+has-field:"Payment receipt"
+type:invoice -has-field:"Payment receipt"
+```
+
+Use `field:` when the value matters:
+
+```text
+field:"Invoice amount">=100
+field:Status="Needs review"
+field:Approved=yes
+```
+
+Number, monetary, and date fields support comparisons. Text, URL, select, and
+multi-choice fields use equality; equality on multi-choice means membership.
+Document links remain relationship navigation rather than raw-ID search.
+
+For ordinary fields, presence means a value is stored. For a Document link, the
+exact target must also be live and visible to the caller. A hidden, trashed,
+missing, or purged target behaves as an absent value. Renaming or deleting a
+field makes a saved query using its old name fail with the normal query error;
+it never broadens the View.
+
+In **Views**, use **Custom field value** to save either **Has value** or
+**Missing value** for one field. The control writes the same `has-field:` query,
+so opening the View, copying its URL, and using Back/Forward retain one canonical
+filter.
+
+## Trash, restore, and permanent deletion
+
+Trashing a linked target temporarily removes it from outgoing field projection,
+**Linked documents**, and positive `has-field:` matching. The stored value remains,
+so restoring the same target makes the relationship visible again.
+
+Permanent deletion removes every incoming Document link whose exact target is
+the purged row. Restoring is no longer possible. CAS blobs remain governed by
+offline garbage collection, independently of the relationship row.
+
+Trashing one version does not merge or renumber its family. Live discovery picks
+the newest remaining revision visible to the caller; direct Trash recovery stays
+an exact-row operation.
+
+## API entry points
+
+- [`GET /api/documents/{id}`](/api#get-apidocumentsid) — typed fields, notes,
+  the `rendered_layout` API projection, and read-only previous archive number
+- [`POST /api/documents/{id}/notes/`](/api#post-apidocumentsidnotes) — attributed note creation
+- [`PATCH|DELETE /api/documents/{id}/notes/{note}`](/api#patchdelete-apidocumentsidnotesnote) — author/admin note mutation
+- [`GET /api/documents/{id}/versions/`](/api#get-apidocumentsidversions) — paged visible family history
+- [`POST /api/documents/{id}/versions/`](/api#post-apidocumentsidversions) — idempotent replacement upload
+- [`GET /api/documents/{id}/referenced-by/`](/api#get-apidocumentsidreferenced-by) — paged computed backlinks
+- [`PUT|DELETE /api/documents/{id}/custom_fields/{field}`](/api#put-apidocumentsidcustom-fieldsfield) — exact typed-value mutation
+- [Query language](/query-language) — `version:`, `has-field:`, `field:`, and `asn:` selectors

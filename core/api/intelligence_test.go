@@ -124,6 +124,85 @@ func TestIntelligenceListAppliesCapabilityACLAndStatus(t *testing.T) {
 	}
 }
 
+func TestIntelligenceVersionSelectionKeepsReviewQueuesExact(t *testing.T) {
+	s := newIntelligenceTestServer(t)
+	seedChatDoc(t, s, 50, 1, "Older policy", "Renews 2026-09-01", "public", false)
+	seedChatDoc(t, s, 51, 1, "Current policy", "Renews 2027-09-01", "public", false)
+	const family = "v:44444444444444444444444444444444"
+	if _, err := s.DB.Write.Exec(`
+		UPDATE documents
+		SET version_family_key=?,
+		    previous_version_id=CASE id WHEN 51 THEN 50 ELSE previous_version_id END
+		WHERE id IN (50,51)
+	`, family); err != nil {
+		t.Fatal(err)
+	}
+	seedDateIntelligence(t, s, 50, "accepted", "2026-09-01")
+	seedDateIntelligence(t, s, 51, "accepted", "2027-09-01")
+	seedDateIntelligence(t, s, 50, "pending", "2028-09-01")
+
+	read := func(path string) (int, []IntelligenceRow) {
+		t.Helper()
+		rec := doIntelligenceRequest(t, s, http.MethodGet, path, "", adminPrincipal(1))
+		if rec.Code != http.StatusOK {
+			return rec.Code, nil
+		}
+		var envelope struct {
+			Count   int               `json:"count"`
+			Results []IntelligenceRow `json:"results"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+			t.Fatal(err)
+		}
+		return envelope.Count, envelope.Results
+	}
+
+	if count, rows := read("/api/intelligence/?type=date"); count != 1 ||
+		len(rows) != 1 || rows[0].DocumentID != 51 {
+		t.Fatalf("latest accepted count=%d rows=%+v", count, rows)
+	}
+	if count, rows := read("/api/intelligence/?type=date&version=all"); count != 2 || len(rows) != 2 {
+		t.Fatalf("all accepted count=%d rows=%+v", count, rows)
+	}
+	if count, rows := read("/api/intelligence/?type=date&status=pending"); count != 1 ||
+		len(rows) != 1 || rows[0].DocumentID != 50 {
+		t.Fatalf("pending exact count=%d rows=%+v", count, rows)
+	}
+	if count, rows := read("/api/intelligence/?type=date&document_ids=50"); count != 1 ||
+		len(rows) != 1 || rows[0].DocumentID != 50 {
+		t.Fatalf("explicit document count=%d rows=%+v", count, rows)
+	}
+	rec := doIntelligenceRequest(t, s, http.MethodGet,
+		"/api/intelligence/?type=date&document_ids=50&version=latest", "", adminPrincipal(1))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("exact document with version status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestIntelligenceListAppliesFieldPresenceQuery(t *testing.T) {
+	s := newIntelligenceTestServer(t)
+	seedChatDoc(t, s, 52, 1, "Has note", "Renews 2026-09-01", "public", false)
+	seedChatDoc(t, s, 53, 1, "No note", "Renews 2027-09-01", "public", false)
+	seedDateIntelligence(t, s, 52, "accepted", "2026-09-01")
+	seedDateIntelligence(t, s, 53, "accepted", "2027-09-01")
+	if _, err := s.DB.Write.Exec(`
+		INSERT INTO custom_fields(id, system_id, name, data_type, created_at, updated_at)
+		VALUES (9, 1, 'Calendar note', 'text', 0, 0);
+		INSERT INTO document_custom_field_values(document_id, field_id, value_text)
+		VALUES (52, 9, 'present');
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := doIntelligenceRequest(t, s, http.MethodGet,
+		"/api/intelligence/?type=date&q=has-field%3A%22Calendar+note%22", "", adminPrincipal(1))
+	var envelope Envelope[IntelligenceRow]
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil || rec.Code != http.StatusOK ||
+		envelope.Count != 1 || len(envelope.Results) != 1 || envelope.Results[0].DocumentID != 52 {
+		t.Fatalf("field-scoped intelligence: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestDemoCalendarIsReadOnlyAndUsesCorpusVisibility(t *testing.T) {
 	s := newIntelligenceTestServer(t)
 	if _, err := s.DB.Write.Exec(`UPDATE users SET email = ? WHERE id = 1`, authz.DemoCorpusOwnerEmail); err != nil {

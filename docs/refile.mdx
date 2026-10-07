@@ -3,16 +3,16 @@ title: "Refile"
 description: "Re-run document-added automations and rebuild rendered paths after filing changes."
 ---
 
-Refile applies the current filing configuration to existing live documents. Use
-it after changing a filing-tree preset, document-added automations, or the
-rendered storage-path template.
+Refile applies the current filing configuration to existing live documents.
+Use it after changing a filing-tree preset, document-added automations, or a
+folder-layout template.
 
 ## What it does
 
 For each document live in the selected system when the run began, Refile can:
 
 1. rerun enabled `document_added` automations against current metadata
-2. enqueue a durable render job for the current storage-path template
+2. enqueue a durable render job for the document's selected layout
 
 It does not rerun extraction, OCR, local archive matching, or the LLM
 classifier. Use a selected [rescan](/pipeline-versions#explicit-rescans) for

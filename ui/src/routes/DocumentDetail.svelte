@@ -3,12 +3,12 @@
   import { scopedHash as filingHref } from '../lib/systems.svelte.js'
   import { captureScope, scopeCurrent } from '../lib/systems.svelte.js'
   import { onDestroy, untrack } from 'svelte'
-  import { getDocument, patchDocument, deleteDocument, restoreDocument, permanentlyDeleteDocument, documentVersions, createShareLink, listShareLinks, deleteShareLink, previewPath, downloadPath, similarDocs, listGrants, putGrant, deleteGrant, listAllTags, bulkEdit } from '../lib/api.js'
+  import { getDocument, getDocumentIntrinsic, patchDocument, deleteDocument, restoreDocument, permanentlyDeleteDocument, documentVersions, documentBacklinks, uploadDocumentVersion, setDocumentCustomField, clearDocumentCustomField, createDocumentNote, updateDocumentNote, deleteDocumentNote, createShareLink, listShareLinks, deleteShareLink, previewPath, downloadPath, similarDocs, listGrants, putGrant, deleteGrant, listAllTags, listCustomFields, listDocuments, bulkEdit } from '../lib/api.js'
   import { go } from '../lib/router.svelte.js'
   import { SENSITIVITY_OPTIONS, fmtDate, fmtBytes, isHighSensitivity, sensDot, sensitivityLabel } from '../lib/format.js'
   import { session } from '../lib/session.svelte.js'
   import { hasCapability } from '../lib/capabilities.js'
-  import { TAGS_SETTINGS_HASH } from '../lib/configuration.js'
+  import { CUSTOM_FIELDS_SETTINGS_HASH, TAGS_SETTINGS_HASH } from '../lib/configuration.js'
   import Icon from '../lib/Icon.svelte'
   import TagPicker from '../lib/TagPicker.svelte'
   import DocumentUnlockStatus from '../lib/DocumentUnlockStatus.svelte'
@@ -16,11 +16,32 @@
   import { copyText } from '../lib/clipboard.js'
   import LinkQR from '../lib/LinkQR.svelte'
   import DocumentLinkDialog from '../lib/DocumentLinkDialog.svelte'
+  import { markUploaded } from '../lib/upload_bus.svelte.js'
+  import { parseDocumentReference } from '../lib/documentReferences.js'
 
   let { id, notify, jdCategories = [] } = $props()
 
   let doc = $state(null)
-  let versions = $state([])
+  let versionHistory = $state({ count: 0, results: [], head_id: null, can_upload: false, next: null, previous: null })
+  let versionsLoading = $state(false)
+  let versionsError = $state('')
+  let versionsPage = $state(1)
+  let replacementFile = $state(null)
+  let replacementKey = $state('')
+  let replacementBusy = $state(false)
+  let replacementError = $state('')
+  let replacementInput = $state()
+  let customFieldDefinitions = $state([])
+  let customFieldsLoading = $state(false)
+  let customFieldsError = $state('')
+  let backlinks = $state({ count: 0, results: [], next: null, previous: null })
+  let backlinksLoading = $state(false)
+  let backlinksError = $state('')
+  let backlinksPage = $state(1)
+  let referenceEditors = $state({})
+  let customFieldEditors = $state({})
+  let addingReference = $state(false)
+  let newReferenceFieldID = $state('')
   let loading = $state(true)
   let err = $state('')
   let revealed = $state(false)
@@ -40,6 +61,9 @@
   let shareBusy = $state(false)
   let documentLinkOpen = $state(false)
   let similar = $state(null)   // {results, method} | null
+  let similarLoading = $state(false)
+  let similarError = $state('')
+  let relatedTab = $state('similar')
   let access = $state(null)    // owner/admin-only {results, principals}
   let canManageAccess = $state(false)
   let accessDraft = $state({ principal: '', perm_bits: '1' })
@@ -48,6 +72,12 @@
   let trashBusy = $state(false)
   let deleteOpen = $state(false)
   let recoveryBusy = $state(false)
+  let noteDraft = $state('')
+  let noteEditID = $state(null)
+  let noteEditDraft = $state('')
+  let noteBusy = $state(false)
+  let noteError = $state('')
+  let notePendingDelete = $state(null)
   let loadVersion = 0
   let tagRefreshVersion = 0
   let loadedID
@@ -60,6 +90,35 @@
     ['7', 'Full control'],
   ]
 
+  const RELATED_TABS = [
+    { id: 'similar', label: 'Similar documents', shortLabel: 'Similar' },
+    { id: 'backlinks', label: 'Linked documents', shortLabel: 'Linked' },
+    { id: 'versions', label: 'Versions', shortLabel: 'Versions' },
+    { id: 'notes', label: 'Notes', shortLabel: 'Notes' },
+  ]
+
+  function relatedTabCount(tab) {
+    if (tab === 'backlinks') return linkedDocumentCount
+    if (tab === 'notes') return doc?.notes?.length || 0
+    return Math.max(0, versionHistory.count - 1)
+  }
+
+  function selectRelatedTab(tab) {
+    relatedTab = tab
+  }
+
+  function handleRelatedTabKey(event) {
+    const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End']
+    if (!keys.includes(event.key)) return
+    event.preventDefault()
+    const tabs = [...event.currentTarget.parentElement.querySelectorAll('[role="tab"]')]
+    const current = visibleRelatedTabs.findIndex(tab => tab.id === relatedTab)
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? visibleRelatedTabs.length - 1
+      : (current + (event.key === 'ArrowRight' ? 1 : -1) + visibleRelatedTabs.length) % visibleRelatedTabs.length
+    relatedTab = visibleRelatedTabs[next].id
+    tabs[next]?.focus()
+  }
+
   const highSensitivity = $derived(isHighSensitivity(doc?.sensitivity))
   const blurred = $derived(highSensitivity && !revealed)
   const trashed = $derived(doc?.trashed_at != null)
@@ -67,6 +126,47 @@
   const canRestore = $derived(canManageTrash && doc?.deletes_at > Math.floor(Date.now() / 1000))
   const canReadFile = $derived(!trashed || canManageTrash)
   const canShareLinks = $derived(!trashed && hasCapability(session.user, 'share_links'))
+  const visibleRelatedTabs = $derived(trashed ? RELATED_TABS.filter(tab => tab.id === 'notes') : RELATED_TABS)
+  const ordinaryCustomFields = $derived.by(() => {
+    const fields = new Map()
+    for (const definition of customFieldDefinitions) {
+      if (definition.data_type === 'documentlink') continue
+      fields.set(Number(definition.id), {
+        field_id: definition.id,
+        name: definition.name,
+        data_type: definition.data_type,
+        extra_data: parseCustomFieldExtra(definition.extra_data),
+        value: null,
+        display_value: '',
+        is_set: false,
+      })
+    }
+    for (const value of doc?.custom_fields || []) {
+      if (value.data_type === 'documentlink') continue
+      fields.set(Number(value.field_id), {
+        ...(fields.get(Number(value.field_id)) || {}),
+        ...value,
+        extra_data: parseCustomFieldExtra(value.extra_data),
+        is_set: true,
+      })
+    }
+    return [...fields.values()].sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
+  })
+  const documentLinkFields = $derived.by(() => {
+    const fields = new Map()
+    for (const field of customFieldDefinitions) {
+      if (field.data_type === 'documentlink') fields.set(Number(field.id), { ...field })
+    }
+    for (const value of doc?.custom_fields || []) {
+      if (value.data_type !== 'documentlink') continue
+      fields.set(Number(value.field_id), { ...(fields.get(Number(value.field_id)) || {}), id: value.field_id, name: value.name })
+    }
+    return [...fields.values()].sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
+  })
+  const outgoingDocumentLinkFields = $derived(documentLinkFields.filter(field => documentLinkValue(field.id)?.value))
+  const availableDocumentLinkFields = $derived(documentLinkFields.filter(field => !documentLinkValue(field.id)?.value))
+  const selectedNewReferenceField = $derived(documentLinkFields.find(field => Number(field.id) === Number(newReferenceFieldID)))
+  const linkedDocumentCount = $derived(backlinks.count + outgoingDocumentLinkFields.length)
   // Inline-previewable formats: archive_blob is always PDF, browsers render
   // common media natively, and the server turns stored email bodies into a
   // sandboxed HTML preview. Other formats swap the iframe for a download panel.
@@ -92,8 +192,10 @@
     return [...m.values()].sort((a, b) => a.lo - b.lo)
   })
 
-  async function load() {
+  async function load(preserveRelatedTab = false) {
+    const selectedRelatedTab = preserveRelatedTab ? relatedTab : 'similar'
     const version = ++loadVersion
+    const scope = captureScope()
     tagRefreshVersion++
     const documentID = id
     loading = true
@@ -102,8 +204,29 @@
     fullText = false
     textCopyFallback = false
     textCopyStatus = ''
-    versions = []
+    versionHistory = { count: 0, results: [], head_id: null, can_upload: false, next: null, previous: null }
+    versionsLoading = false
+    versionsError = ''
+    versionsPage = 1
+    replacementFile = null
+    replacementKey = ''
+    replacementBusy = false
+    replacementError = ''
+    customFieldDefinitions = []
+    customFieldsLoading = false
+    customFieldsError = ''
+    backlinks = { count: 0, results: [], next: null, previous: null }
+    backlinksLoading = false
+    backlinksError = ''
+    backlinksPage = 1
+    referenceEditors = {}
+    customFieldEditors = {}
     similar = null
+    addingReference = false
+    newReferenceFieldID = ''
+    similarLoading = false
+    similarError = ''
+    relatedTab = selectedRelatedTab
     access = null
     canManageAccess = false
     editingTitle = false
@@ -121,34 +244,121 @@
     trashBusy = false
     deleteOpen = false
     recoveryBusy = false
+    noteDraft = ''
+    noteEditID = null
+    noteEditDraft = ''
+    noteBusy = false
+    noteError = ''
+    notePendingDelete = null
     try {
       const loaded = await getDocument(documentID)
-      if (version !== loadVersion) return
+      if (version !== loadVersion || !scopeCurrent(scope)) return
       doc = loaded
       titleDraft = loaded.title
-      if (loaded.trashed_at != null) return
-      documentVersions(documentID)
-        .then((result) => { if (version === loadVersion) versions = result?.results || result || [] })
-        .catch(() => {})
-      similarDocs(documentID)
-        .then((result) => { if (version === loadVersion) similar = result })
-        .catch(() => { if (version === loadVersion) similar = null })
-      loadAccess(documentID, version)
+      if (loaded.trashed_at != null) {
+        relatedTab = 'notes'
+        return
+      }
+      void loadVersions(documentID, 1, version, scope)
+      void loadBacklinks(documentID, 1, version, scope)
+      void loadCustomFieldDefinitions(version, scope)
+      void loadSimilarDocuments(documentID, version, scope)
+      void loadAccess(documentID, version, scope)
     } catch (ex) {
-      if (version === loadVersion) err = ex.message || 'Could not load this document.'
+      if (version === loadVersion && scopeCurrent(scope)) err = ex.message || 'Could not load this document.'
     } finally {
-      if (version === loadVersion) loading = false
+      if (version === loadVersion && scopeCurrent(scope)) loading = false
     }
   }
 
-  async function loadAccess(documentID = id, version = loadVersion) {
+  async function loadSimilarDocuments(documentID = id, version = loadVersion, scope = captureScope()) {
+    similarLoading = true
+    similarError = ''
+    try {
+      const result = await similarDocs(documentID)
+      if (disposed || version !== loadVersion || !scopeCurrent(scope)) return
+      similar = result
+    } catch (ex) {
+      if (!disposed && version === loadVersion && scopeCurrent(scope)) {
+        similar = null
+        similarError = ex.message || 'Could not load similar documents.'
+      }
+    } finally {
+      if (!disposed && version === loadVersion && scopeCurrent(scope)) similarLoading = false
+    }
+  }
+
+  async function loadVersions(documentID = id, page = 1, version = loadVersion, scope = captureScope()) {
+    versionsLoading = true
+    versionsError = ''
+    try {
+      const result = await documentVersions(documentID, { page, page_size: 50 })
+      if (disposed || version !== loadVersion || !scopeCurrent(scope)) return
+      versionHistory = {
+        count: result?.count || 0,
+        results: result?.results || [],
+        head_id: result?.head_id ?? null,
+        can_upload: Boolean(result?.can_upload),
+        next: result?.next || null,
+        previous: result?.previous || null,
+      }
+      versionsPage = page
+    } catch (ex) {
+      if (!disposed && version === loadVersion && scopeCurrent(scope)) {
+        versionsError = ex.message || 'Could not load version history.'
+      }
+    } finally {
+      if (!disposed && version === loadVersion && scopeCurrent(scope)) versionsLoading = false
+    }
+  }
+
+  async function loadBacklinks(documentID = id, page = 1, version = loadVersion, scope = captureScope()) {
+    backlinksLoading = true
+    backlinksError = ''
+    try {
+      const result = await documentBacklinks(documentID, { page, page_size: 50 })
+      if (disposed || version !== loadVersion || !scopeCurrent(scope)) return
+      backlinks = {
+        count: result?.count || 0,
+        results: result?.results || [],
+        next: result?.next || null,
+        previous: result?.previous || null,
+      }
+      backlinksPage = page
+    } catch (ex) {
+      if (!disposed && version === loadVersion && scopeCurrent(scope)) {
+        backlinksError = ex.message || 'Could not load backlinks.'
+      }
+    } finally {
+      if (!disposed && version === loadVersion && scopeCurrent(scope)) backlinksLoading = false
+    }
+  }
+
+  async function loadCustomFieldDefinitions(version = loadVersion, scope = captureScope()) {
+    customFieldsLoading = true
+    customFieldsError = ''
+    try {
+      const result = await listCustomFields()
+      if (disposed || version !== loadVersion || !scopeCurrent(scope)) return
+      customFieldDefinitions = result?.results || result || []
+    } catch (ex) {
+      if (!disposed && version === loadVersion && scopeCurrent(scope)) {
+        customFieldsError = ex.message || 'Could not load reference fields.'
+      }
+    } finally {
+      if (!disposed && version === loadVersion && scopeCurrent(scope)) customFieldsLoading = false
+    }
+  }
+
+
+  async function loadAccess(documentID = id, version = loadVersion, scope = captureScope()) {
     try {
       const result = await listGrants('document', documentID)
-      if (version !== loadVersion) return
+      if (version !== loadVersion || !scopeCurrent(scope)) return
       access = result
       canManageAccess = true
     } catch (ex) {
-      if (version !== loadVersion) return
+      if (version !== loadVersion || !scopeCurrent(scope)) return
       access = null
       canManageAccess = false
       if (ex.status !== 403) notify?.(ex.message || 'Could not load document access')
@@ -191,6 +401,286 @@
     if (detail === label) return ''
     const repeatedPrefix = `${label} / `
     return detail.startsWith(repeatedPrefix) ? detail.slice(repeatedPrefix.length) : detail
+  }
+
+  function documentLinkValue(fieldID) {
+    return (doc?.custom_fields || []).find(value =>
+      Number(value.field_id) === Number(fieldID) && value.data_type === 'documentlink')
+  }
+
+  function parseCustomFieldExtra(extra) {
+    if (extra && typeof extra === 'object') return extra
+    try {
+      return JSON.parse(extra || '{}')
+    } catch {
+      return {}
+    }
+  }
+
+  function customFieldDisplay(field) {
+    if (field.display_value) return field.display_value
+    if (field.data_type === 'bool' && field.is_set) return field.value ? 'Yes' : 'No'
+    if (field.data_type === 'date' && field.value) return fmtDate(field.value)
+    if (field.data_type === 'multi') return Array.isArray(field.value) ? field.value.join(', ') : ''
+    return String(field.value ?? '')
+  }
+
+  function customFieldInitialValue(field) {
+    if (field.data_type === 'multi') return Array.isArray(field.value) ? [...field.value] : []
+    if (field.data_type === 'bool') return field.value ? 'true' : 'false'
+    if (field.data_type === 'date' && field.value) return new Date(Number(field.value) * 1000).toISOString().slice(0, 10)
+    return String(field.value ?? '')
+  }
+
+  function updateCustomFieldEditor(fieldID, patch) {
+    customFieldEditors = {
+      ...customFieldEditors,
+      [fieldID]: { ...(customFieldEditors[fieldID] || {}), ...patch },
+    }
+  }
+
+  function startCustomFieldEdit(field) {
+    updateCustomFieldEditor(field.field_id, {
+      open: true,
+      value: customFieldInitialValue(field),
+      busy: false,
+      error: '',
+    })
+  }
+
+  function customFieldValueReady(field, editor) {
+    if (!editor) return false
+    if (field.data_type === 'bool') return true
+    if (field.data_type === 'multi') return Array.isArray(editor.value) && editor.value.length > 0
+    return String(editor.value ?? '').trim() !== ''
+  }
+
+  async function saveCustomField(event, field) {
+    event.preventDefault()
+    const editor = customFieldEditors[field.field_id]
+    if (!customFieldValueReady(field, editor) || editor.busy || trashed) return
+    const version = loadVersion
+    const documentID = id
+    const scope = captureScope()
+    updateCustomFieldEditor(field.field_id, { busy: true, error: '' })
+    let value = editor.value
+    if (field.data_type === 'number' || field.data_type === 'monetary') value = Number(value)
+    else if (field.data_type === 'bool') value = value === 'true'
+    else if (field.data_type !== 'multi') value = String(value).trim()
+    try {
+      await setDocumentCustomField(documentID, field.field_id, value)
+      const loaded = await getDocument(documentID)
+      if (disposed || version !== loadVersion || id !== documentID || !scopeCurrent(scope)) return
+      doc = loaded
+      const next = { ...customFieldEditors }
+      delete next[field.field_id]
+      customFieldEditors = next
+      notify?.(`${field.name} saved`)
+    } catch (ex) {
+      if (!disposed && version === loadVersion && id === documentID && scopeCurrent(scope)) {
+        updateCustomFieldEditor(field.field_id, { busy: false, error: ex.message || `Could not save ${field.name}.` })
+      }
+    }
+  }
+
+  async function clearOrdinaryCustomField(field) {
+    const editor = customFieldEditors[field.field_id]
+    if (editor?.busy || trashed) return
+    const version = loadVersion
+    const documentID = id
+    const scope = captureScope()
+    updateCustomFieldEditor(field.field_id, { busy: true, error: '' })
+    try {
+      await clearDocumentCustomField(documentID, field.field_id)
+      if (disposed || version !== loadVersion || id !== documentID || !scopeCurrent(scope)) return
+      doc = { ...doc, custom_fields: (doc.custom_fields || []).filter(value => Number(value.field_id) !== Number(field.field_id)) }
+      const next = { ...customFieldEditors }
+      delete next[field.field_id]
+      customFieldEditors = next
+      notify?.(`${field.name} cleared`)
+    } catch (ex) {
+      if (!disposed && version === loadVersion && id === documentID && scopeCurrent(scope)) {
+        updateCustomFieldEditor(field.field_id, { busy: false, error: ex.message || `Could not clear ${field.name}.` })
+      }
+    }
+  }
+
+  function chooseReplacement(event) {
+    const file = event.currentTarget.files?.[0]
+    if (!file) return
+    replacementFile = file
+    replacementKey = crypto.randomUUID()
+    replacementError = ''
+  }
+
+  function cancelReplacement() {
+    if (replacementBusy) return
+    replacementFile = null
+    replacementKey = ''
+    replacementError = ''
+    if (replacementInput) replacementInput.value = ''
+  }
+
+  function replacementFailure(error) {
+    if (error?.code === 'duplicate_version_blob') {
+      const existing = error.data?.existing_id
+      return existing
+        ? `These bytes already belong to live document #${existing}. Choose a different file.`
+        : 'These bytes already belong to a live document. Choose a different file.'
+    }
+    if (error?.status === 413) return 'This file is larger than the configured upload limit.'
+    if (error?.status === 403) return 'You no longer have permission to upload a replacement.'
+    if (error?.status === 404) return 'This revision is no longer available for replacement.'
+    if (error?.status === 409) return error.message || 'The replacement conflicts with a newer server state.'
+    return error?.message || 'The replacement could not be uploaded. Retry keeps the same request key.'
+  }
+
+  async function uploadReplacement() {
+    if (!replacementFile || !replacementKey || replacementBusy) return
+    const version = loadVersion
+    const documentID = id
+    const scope = captureScope()
+    const file = replacementFile
+    const key = replacementKey
+    replacementBusy = true
+    replacementError = ''
+    try {
+      const result = await uploadDocumentVersion(documentID, file, key)
+      if (disposed || version !== loadVersion || id !== documentID || !scopeCurrent(scope)) return
+      markUploaded(scope)
+      notify?.('Replacement uploaded. File processing continues in the background.')
+      go(`#/doc/${result.id}`)
+    } catch (ex) {
+      if (!disposed && version === loadVersion && id === documentID && scopeCurrent(scope)) {
+        replacementError = replacementFailure(ex)
+      }
+    } finally {
+      if (!disposed && version === loadVersion && id === documentID && scopeCurrent(scope) &&
+          replacementFile === file && replacementKey === key) {
+        replacementBusy = false
+      }
+    }
+  }
+
+  function referenceEditor(fieldID) {
+    return referenceEditors[fieldID] || { open: false, query: '', results: [], selected: null, busy: false, error: '' }
+  }
+
+  function updateReferenceEditor(fieldID, patch) {
+    referenceEditors = {
+      ...referenceEditors,
+      [fieldID]: { ...referenceEditor(fieldID), ...patch },
+    }
+  }
+
+  function toggleReferenceEditor(field) {
+    const open = !referenceEditor(field.id).open
+    addingReference = false
+    newReferenceFieldID = ''
+    referenceEditors = open
+      ? { [field.id]: { ...referenceEditor(field.id), open: true, error: '' } }
+      : {}
+  }
+
+  function startNewReference() {
+    addingReference = true
+    const field = availableDocumentLinkFields.length === 1 ? availableDocumentLinkFields[0] : null
+    newReferenceFieldID = field?.id || ''
+    referenceEditors = field
+      ? { [field.id]: { ...referenceEditor(field.id), open: true, error: '' } }
+      : {}
+  }
+
+  function selectNewReferenceField(event) {
+    const fieldID = Number(event.currentTarget.value) || ''
+    newReferenceFieldID = fieldID
+    referenceEditors = fieldID
+      ? { [fieldID]: { ...referenceEditor(fieldID), open: true, error: '' } }
+      : {}
+  }
+
+  function cancelNewReference() {
+    addingReference = false
+    newReferenceFieldID = ''
+    referenceEditors = {}
+  }
+
+  async function findReferenceTargets(field) {
+    const editor = referenceEditor(field.id)
+    const query = editor.query.trim()
+    if (!query || editor.busy) return
+    const exact = parseDocumentReference(query, location.origin, location.pathname)
+    if (exact?.error) {
+      updateReferenceEditor(field.id, { results: [], selected: null, error: exact.error })
+      return
+    }
+    const version = loadVersion
+    const documentID = id
+    const scope = captureScope()
+    updateReferenceEditor(field.id, { busy: true, error: '', results: [], selected: null })
+    try {
+      let results
+      if (exact?.id) {
+        const target = await getDocumentIntrinsic(exact.id)
+        if (target.trashed_at != null) throw new Error('That document is in Trash.')
+        results = [target]
+      } else {
+        const result = await listDocuments({ q: query, page_size: 8 })
+        results = result?.results || []
+      }
+      if (disposed || version !== loadVersion || id !== documentID || !scopeCurrent(scope)) return
+      updateReferenceEditor(field.id, {
+        busy: false,
+        results,
+        selected: results.length === 1 ? results[0] : null,
+        error: results.length ? '' : 'No matching documents found.',
+      })
+    } catch (ex) {
+      if (!disposed && version === loadVersion && id === documentID && scopeCurrent(scope)) {
+        updateReferenceEditor(field.id, {
+          busy: false,
+          results: [],
+          selected: null,
+          error: ex.message || 'Could not find that document.',
+        })
+      }
+    }
+  }
+
+  async function saveReference(field) {
+    const editor = referenceEditor(field.id)
+    if (!editor.selected || editor.busy) return
+    const version = loadVersion
+    const documentID = id
+    const scope = captureScope()
+    updateReferenceEditor(field.id, { busy: true, error: '' })
+    try {
+      await setDocumentCustomField(documentID, field.id, editor.selected.id)
+      if (disposed || version !== loadVersion || id !== documentID || !scopeCurrent(scope)) return
+      notify?.(`${field.name} updated`)
+      await load(true)
+    } catch (ex) {
+      if (!disposed && version === loadVersion && id === documentID && scopeCurrent(scope)) {
+        updateReferenceEditor(field.id, { busy: false, error: ex.message || 'Could not update this reference.' })
+      }
+    }
+  }
+
+  async function clearReference(field) {
+    const version = loadVersion
+    const documentID = id
+    const scope = captureScope()
+    updateReferenceEditor(field.id, { busy: true, error: '' })
+    try {
+      await clearDocumentCustomField(documentID, field.id)
+      if (disposed || version !== loadVersion || id !== documentID || !scopeCurrent(scope)) return
+      notify?.(`${field.name} cleared`)
+      await load(true)
+    } catch (ex) {
+      if (!disposed && version === loadVersion && id === documentID && scopeCurrent(scope)) {
+        updateReferenceEditor(field.id, { busy: false, error: ex.message || 'Could not clear this reference.' })
+      }
+    }
   }
 
   async function grantAccess(e) {
@@ -318,6 +808,91 @@
     const trimmed = languagesDraft.trim()
     editingLanguages = false
     return save({ languages: trimmed }, trimmed ? 'Languages updated' : 'Languages cleared')
+  }
+
+  async function addNote(event) {
+    event.preventDefault()
+    const note = noteDraft.trim()
+    if (!note || noteBusy || trashed) return
+    const version = loadVersion
+    const documentID = id
+    const scope = captureScope()
+    noteBusy = true
+    noteError = ''
+    try {
+      const created = await createDocumentNote(documentID, note)
+      if (disposed || version !== loadVersion || id !== documentID || !scopeCurrent(scope)) return
+      doc = { ...doc, notes: [...(doc.notes || []), created] }
+      noteDraft = ''
+      notify?.('Note added')
+    } catch (ex) {
+      if (!disposed && version === loadVersion && id === documentID && scopeCurrent(scope)) {
+        noteError = ex.message || 'Could not add this note.'
+      }
+    } finally {
+      if (!disposed && version === loadVersion && id === documentID && scopeCurrent(scope)) noteBusy = false
+    }
+  }
+
+  function startNoteEdit(note) {
+    noteEditID = note.id
+    noteEditDraft = note.note
+    noteError = ''
+  }
+
+  async function saveNoteEdit(event, note) {
+    event.preventDefault()
+    const next = noteEditDraft.trim()
+    if (!next || noteBusy || trashed) return
+    const version = loadVersion
+    const documentID = id
+    const scope = captureScope()
+    noteBusy = true
+    noteError = ''
+    try {
+      const result = await updateDocumentNote(documentID, note.id, next)
+      if (disposed || version !== loadVersion || id !== documentID || !scopeCurrent(scope)) return
+      doc = {
+        ...doc,
+        notes: (doc.notes || []).map(item => item.id === note.id
+          ? { ...item, note: next, updated_at: result.updated_at }
+          : item),
+      }
+      noteEditID = null
+      noteEditDraft = ''
+      notify?.('Note updated')
+    } catch (ex) {
+      if (!disposed && version === loadVersion && id === documentID && scopeCurrent(scope)) {
+        noteError = ex.message || 'Could not update this note.'
+      }
+    } finally {
+      if (!disposed && version === loadVersion && id === documentID && scopeCurrent(scope)) noteBusy = false
+    }
+  }
+
+  async function removeNote() {
+    const note = notePendingDelete
+    if (!note || noteBusy) return
+    const version = loadVersion
+    const documentID = id
+    const scope = captureScope()
+    noteBusy = true
+    noteError = ''
+    try {
+      await deleteDocumentNote(documentID, note.id)
+      if (disposed || version !== loadVersion || id !== documentID || !scopeCurrent(scope)) return
+      doc = { ...doc, notes: (doc.notes || []).filter(item => item.id !== note.id) }
+      notePendingDelete = null
+      if (noteEditID === note.id) noteEditID = null
+      notify?.('Note deleted')
+    } catch (ex) {
+      if (!disposed && version === loadVersion && id === documentID && scopeCurrent(scope)) {
+        noteError = ex.message || 'Could not delete this note.'
+        notePendingDelete = null
+      }
+    } finally {
+      if (!disposed && version === loadVersion && id === documentID && scopeCurrent(scope)) noteBusy = false
+    }
   }
 
   // ---- share dialog: expiry + optional password + existing links ----
@@ -460,6 +1035,36 @@
   })
 </script>
 
+{#snippet referenceSearch(field, editor, adding = false)}
+  <form class="reference-editor" onsubmit={(event) => { event.preventDefault(); findReferenceTargets(field) }}>
+    <input class="input" aria-label={`${field.name} document`}
+           placeholder="Search title, exact ID, or this archive's document URL"
+           value={editor.query}
+           oninput={(event) => updateReferenceEditor(field.id, { query: event.currentTarget.value, results: [], selected: null, error: '' })} />
+    <button class="btn sm" disabled={editor.busy || !editor.query.trim()}>{editor.busy ? 'Searching…' : 'Search'}</button>
+  </form>
+  {#if editor.error}<p class="err" role="alert">{editor.error}</p>{/if}
+  {#if editor.results.length}
+    <div class="reference-results">
+      {#each editor.results as target (target.id)}
+        <button class="reference-choice" class:selected={Number(editor.selected?.id) === Number(target.id)}
+                type="button" onclick={() => updateReferenceEditor(field.id, { selected: target, error: '' })}>
+          <span>{target.title || `Document #${target.id}`}</span>
+          <small>{target.jd_address || `#${target.id}`}{target.system_code ? ` · ${target.system_code}` : ''}</small>
+        </button>
+      {/each}
+    </div>
+  {/if}
+  {#if editor.selected}
+    <div class="reference-actions">
+      <button class="btn primary sm" disabled={editor.busy} onclick={() => saveReference(field)}>Use selected document</button>
+      <button class="btn sm" disabled={editor.busy}
+              onclick={() => adding ? cancelNewReference() : updateReferenceEditor(field.id, { open: false, selected: null, results: [], error: '' })}>
+        Cancel
+      </button>
+    </div>
+  {/if}
+{/snippet}
 <div class="document-view">
 <div class="toolbar">
   <a class="btn sm" href={filingHref(trashed ? '#/trash' : '#/documents')}><Icon name="left" size={13} /> {trashed ? 'Back to Trash' : 'All documents'}</a>
@@ -615,6 +1220,10 @@
             <dt title="Date carried from the source at ingest">Source date</dt>
             <dd>{fmtDate(doc.source_mtime || doc.created_at)}</dd>
           {/if}
+          {#if doc.archive_serial_number != null}
+            <dt title="Read-only compatibility metadata retained from the previous archive">Previous archive number</dt>
+            <dd><span class="mono">#{doc.archive_serial_number}</span> <span class="sub" title="Kept for old references and imported layouts">· read-only</span></dd>
+          {/if}
           <dt>Original</dt><dd>{doc.mime_type} · {fmtBytes(doc.original_size)}</dd>
           {#if doc.archive_blob}
             <dt>Archive</dt>
@@ -624,18 +1233,23 @@
           {/if}
           <dt>Tags</dt>
           <dd class="document-tags">
-            <div class="tag-pills">
-              {#each doc.tags || [] as slug}
-                <span class="pill">{slug}
-                  {#if editingTags}
-                    <button class="tag-remove" type="button" aria-label={`Remove tag ${slug}`}
-                            disabled={tagsBusy || !tagOptions.some(tag => tag.slug === slug)}
-                            onclick={() => changeTag(tagOptions.find(tag => tag.slug === slug), 'remove_tag')}><Icon name="x" size={12} /></button>
-                  {/if}
-                </span>
-              {:else}<span class="sub">No tags</span>{/each}
-              {#if !trashed && !editingTags}<button class="btn sm" aria-label="Edit tags" type="button" onclick={startEditTags}>Edit</button>{/if}
-              {#if session.user?.role === 'admin'}<a class="btn sm" href={filingHref(TAGS_SETTINGS_HASH)}>Manage tags</a>{/if}
+            <div class="metadata-display">
+              <div class="metadata-value tag-pills">
+                {#each doc.tags || [] as slug}
+                  <span class="pill">{slug}
+                    {#if editingTags}
+                      <button class="tag-remove" type="button" aria-label={`Remove tag ${slug}`}
+                              disabled={tagsBusy || !tagOptions.some(tag => tag.slug === slug)}
+                              onclick={() => changeTag(tagOptions.find(tag => tag.slug === slug), 'remove_tag')}><Icon name="x" size={12} /></button>
+                    {/if}
+                  </span>
+                {:else}<span class="sub">No tags</span>{/each}
+              </div>
+              {#if !trashed && !editingTags}
+                <div class="metadata-actions"><button class="btn sm" aria-label="Edit tags" type="button" onclick={startEditTags}>Edit</button></div>
+              {:else if editingTags && session.user?.role === 'admin'}
+                <div class="metadata-actions"><a class="btn sm" href={filingHref(TAGS_SETTINGS_HASH)}>Manage tags</a></div>
+              {/if}
             </div>
             {#if editingTags}
               <div class="tag-actions">
@@ -659,6 +1273,69 @@
             <dt>Correspondents</dt>
             <dd>{#each doc.correspondents as c}<span class="pill" style="margin-right:5px">{c.name} · {c.role}</span>{/each}</dd>
           {/if}
+          {#each ordinaryCustomFields as field (field.field_id)}
+            {@const editor = customFieldEditors[field.field_id]}
+            <dt>{field.name}</dt>
+            <dd class="custom-field-value">
+              {#if editor?.open}
+                <form class="custom-field-editor" onsubmit={(event) => saveCustomField(event, field)}>
+                  {#if field.data_type === 'bool'}
+                    <select class="input" aria-label={field.name} value={editor.value}
+                            onchange={(event) => updateCustomFieldEditor(field.field_id, { value: event.currentTarget.value })}>
+                      <option value="true">Yes</option>
+                      <option value="false">No</option>
+                    </select>
+                  {:else if field.data_type === 'select'}
+                    <select class="input" aria-label={field.name} value={editor.value}
+                            onchange={(event) => updateCustomFieldEditor(field.field_id, { value: event.currentTarget.value })}>
+                      <option value="">Select a choice</option>
+                      {#each field.extra_data?.choices || [] as choice}<option value={choice}>{choice}</option>{/each}
+                    </select>
+                  {:else if field.data_type === 'multi'}
+                    <div class="custom-field-choices" aria-label={field.name}>
+                      {#each field.extra_data?.choices || [] as choice}
+                        <label>
+                          <input type="checkbox" value={choice} checked={editor.value?.includes(choice)}
+                                 onchange={(event) => updateCustomFieldEditor(field.field_id, {
+                                   value: event.currentTarget.checked
+                                     ? [...new Set([...(editor.value || []), choice])]
+                                     : (editor.value || []).filter(value => value !== choice),
+                                 })} />
+                          {choice}
+                        </label>
+                      {/each}
+                    </div>
+                  {:else}
+                    <input class="input" aria-label={field.name}
+                           type={field.data_type === 'date' ? 'date' : field.data_type === 'url' ? 'url' : field.data_type === 'number' || field.data_type === 'monetary' ? 'number' : 'text'}
+                           step={field.data_type === 'monetary' ? '0.01' : field.data_type === 'number' ? 'any' : undefined}
+                           value={editor.value}
+                           oninput={(event) => updateCustomFieldEditor(field.field_id, { value: event.currentTarget.value })} />
+                  {/if}
+                  <div class="custom-field-actions">
+                    <button class="btn primary sm" disabled={editor.busy || !customFieldValueReady(field, editor)}>{editor.busy ? 'Saving…' : 'Save'}</button>
+                    <button class="btn sm" type="button" disabled={editor.busy}
+                            onclick={() => { const next = { ...customFieldEditors }; delete next[field.field_id]; customFieldEditors = next }}>Cancel</button>
+                    {#if field.is_set}
+                      <button class="btn danger sm" type="button" disabled={editor.busy} onclick={() => clearOrdinaryCustomField(field)}>Clear</button>
+                    {/if}
+                  </div>
+                  {#if editor.error}<p class="err" role="alert">{editor.error}</p>{/if}
+                </form>
+              {:else}
+                <div class="metadata-display">
+                  <span class="metadata-value" class:sub={!field.is_set}>
+                    {#if field.data_type === 'url' && field.value}
+                      <a href={field.value} target="_blank" rel="noreferrer">{customFieldDisplay(field)}</a>
+                    {:else}
+                      {field.is_set ? customFieldDisplay(field) : 'Not set'}
+                    {/if}
+                  </span>
+                  {#if !trashed}<div class="metadata-actions"><button class="btn sm" type="button" onclick={() => startCustomFieldEdit(field)}>{field.is_set ? 'Edit' : 'Add'}</button></div>{/if}
+                </div>
+              {/if}
+            </dd>
+          {/each}
           <dt>Languages</dt>
           <dd>
             {#if editingLanguages}
@@ -670,15 +1347,19 @@
                 <span class="sub" style="width:100%">Comma-separated ISO codes. Empty clears &amp; unlocks.</span>
               </form>
             {:else}
-              {#if doc.languages}
-                {#each doc.languages.split(',') as code}
-                  <span class="pill" style="margin-right:5px">{code.trim()}</span>
-                {/each}
-                {#if doc.languages_locked}<span class="sub" title="Set by user; automatic detection won't overwrite">· locked</span>{/if}
-              {:else}
-                <span class="sub">not detected</span>
-              {/if}
-              {#if !trashed}<button class="btn sm" style="margin-left:8px" onclick={startEditLanguages} type="button">Edit</button>{/if}
+              <div class="metadata-display">
+                <div class="metadata-value">
+                  {#if doc.languages}
+                    {#each doc.languages.split(',') as code}
+                      <span class="pill">{code.trim()}</span>
+                    {/each}
+                    {#if doc.languages_locked}<span class="sub" title="Set by user; automatic detection won't overwrite">· locked</span>{/if}
+                  {:else}
+                    <span class="sub">not detected</span>
+                  {/if}
+                </div>
+                {#if !trashed}<div class="metadata-actions"><button class="btn sm" onclick={startEditLanguages} type="button">Edit</button></div>{/if}
+              </div>
             {/if}
           </dd>
         </dl>
@@ -691,53 +1372,305 @@
         {/if}
       </div>
 
-      {#if versions.length > 1}
-        <div class="card">
-          <h3>Versions</h3>
-          <div class="index" style="border:0">
-            {#each versions as v}
-              <a class="irow" href={filingHref(`#/doc/${v.id}`)} style="padding:8px 4px">
-                <span class="dot" class:accent={String(v.id) === String(id)}></span>
-                <span class="title grow">#{v.id} {v.title || ''}</span>
-                <span class="sub">{fmtDate(v.created_at)}</span>
-              </a>
+
+
+      <section class="card related-card" aria-label="Document context">
+        <div class="related-tabs" role="tablist" aria-label="Document context">
+            {#each visibleRelatedTabs as tab}
+              <button id={`related-tab-${tab.id}`} type="button" role="tab"
+                      aria-selected={relatedTab === tab.id}
+                      aria-label={tab.id === 'similar' ? tab.label : `${tab.label} ${relatedTabCount(tab.id)}`}
+                      aria-controls={`related-panel-${tab.id}`}
+                      tabindex={relatedTab === tab.id ? 0 : -1}
+                      class:on={relatedTab === tab.id}
+                      onclick={() => selectRelatedTab(tab.id)}
+                      onkeydown={handleRelatedTabKey}>
+                {tab.shortLabel}
+                {#if tab.id !== 'similar'}<span class="pill">{relatedTabCount(tab.id)}</span>{/if}
+              </button>
             {/each}
           </div>
-        </div>
-      {/if}
 
-      {#if similar}
-        <div class="card">
-          <h3 style="display:flex;align-items:center;gap:8px">Similar documents
-            <span class="pill" title={similar.method === 'fts' ? 'lexical (FTS5 more-like-this)' : 'semantic'}>{similar.method}</span>
-            {#if similar.matched_on_title_only && similar.results?.length}
-              <span class="pill warn"
-                    title="This document has no extracted text; matches are based on title alone and may be noisy.">
-                title-only match
-              </span>
-            {/if}
-          </h3>
-          {#if similar.results?.length}
-            <div class="index" style="border:0">
-              {#each similar.results.slice(0, 6) as sd (sd.id)}
-                <a class="irow" href={filingHref(`#/doc/${sd.id}`)} style="padding:8px 4px">
-                  <span class="dot"></span>
-                  <span class="title grow">{sd.title || `Document #${sd.id}`}</span>
-                  <span class="sub">{fmtDate(sd.created_at)}</span>
-                </a>
-              {/each}
+          {#if relatedTab === 'similar'}
+            <div id="related-panel-similar" class="related-panel" role="tabpanel"
+                 aria-labelledby="related-tab-similar" tabindex="0">
+              {#if similarLoading}
+                <p class="sub">Finding similar documents…</p>
+              {:else if similarError}
+                <div class="inline-state err" role="alert">
+                  <span>{similarError}</span>
+                  <button class="btn sm" onclick={() => loadSimilarDocuments()}>Retry</button>
+                </div>
+              {:else if similar?.results?.length}
+                {#if similar.matched_on_title_only}
+                  <div class="related-meta">
+                    <span class="pill warn"
+                          title="Only the title was available when finding similar documents.">
+                      Title only
+                    </span>
+                  </div>
+                {/if}
+                <div class="index" style="border:0">
+                  {#each similar.results.slice(0, 6) as sd (sd.id)}
+                    <a class="irow" href={filingHref(`#/doc/${sd.id}`)} style="padding:8px 4px">
+                      <span class="dot"></span>
+                      <span class="title grow">{sd.title || `Document #${sd.id}`}</span>
+                      <span class="sub">{fmtDate(sd.created_at)}</span>
+                    </a>
+                  {/each}
+                </div>
+              {:else}
+                <p class="sub related-empty">
+                  {#if similar?.matched_on_title_only}
+                    No similar documents found from the title.
+                  {:else}
+                    No similar documents found.
+                  {/if}
+                </p>
+              {/if}
+            </div>
+          {:else if relatedTab === 'backlinks'}
+            <div id="related-panel-backlinks" class="related-panel" role="tabpanel"
+                 aria-labelledby="related-tab-backlinks" tabindex="0">
+              <div class="linked-sections">
+                <section class="linked-section" aria-label="This document links to">
+                  <div class="linked-section-head">
+                    <div>
+                      <strong>This document links to</strong>
+                    </div>
+                    {#if availableDocumentLinkFields.length && !addingReference}
+                      <button class="btn sm" onclick={startNewReference}>Add link</button>
+                    {/if}
+                  </div>
+
+                  {#if customFieldsLoading && !documentLinkFields.length}
+                    <p class="sub">Loading link types…</p>
+                  {:else if customFieldsError && !documentLinkFields.length}
+                    <div class="inline-state err" role="alert">
+                      <span>{customFieldsError}</span>
+                      <button class="btn sm" onclick={() => loadCustomFieldDefinitions()}>Retry</button>
+                    </div>
+                  {:else}
+                    {#if outgoingDocumentLinkFields.length}
+                      <div class="reference-list">
+                        {#each outgoingDocumentLinkFields as field (field.id)}
+                          {@const current = documentLinkValue(field.id)}
+                          {@const editor = referenceEditor(field.id)}
+                          <div class="reference-row">
+                            <div class="reference-head">
+                              <div class="grow">
+                                <strong>{field.name}</strong>
+                                <a class="reference-target" href={filingHref(`#/doc/${current.value.id}`, current.value.system_code)}>
+                                  {current.value.title || `Document #${current.value.id}`}
+                                </a>
+                                {#if current.value.jd_address}<span class="sub">{current.value.jd_address}</span>{/if}
+                                {#if !current.value.is_latest}<span class="pill warn">Earlier version</span>{/if}
+                              </div>
+                              <div class="reference-actions">
+                                <button class="btn sm" onclick={() => toggleReferenceEditor(field)}>Change link</button>
+                                <button class="btn sm" disabled={editor.busy} onclick={() => clearReference(field)}>Remove link</button>
+                              </div>
+                            </div>
+                            {#if editor.open}
+                              {@render referenceSearch(field, editor)}
+                            {/if}
+                          </div>
+                        {/each}
+                      </div>
+                    {:else if !documentLinkFields.length}
+                      {#if session.user?.role === 'admin'}
+                        <a role="button" class="btn sm" href={filingHref(CUSTOM_FIELDS_SETTINGS_HASH)}>Create Document link field</a>
+                      {:else}
+                        <p class="sub related-empty">No link types are configured. Ask an administrator to create one.</p>
+                      {/if}
+                    {:else}
+                      <p class="sub related-empty">This document does not link to another document yet.</p>
+                    {/if}
+
+                    {#if addingReference}
+                      <div class="reference-add">
+                        <div class="reference-add-head">
+                          <label for="new-document-link-field">Link type</label>
+                          <select id="new-document-link-field" class="input" value={newReferenceFieldID}
+                                  onchange={selectNewReferenceField}>
+                            <option value="">Choose a link type</option>
+                            {#each availableDocumentLinkFields as field (field.id)}
+                              <option value={field.id}>{field.name}</option>
+                            {/each}
+                          </select>
+                          <button class="btn sm" onclick={cancelNewReference}>Cancel</button>
+                        </div>
+                        {#if selectedNewReferenceField}
+                          {@render referenceSearch(selectedNewReferenceField, referenceEditor(selectedNewReferenceField.id), true)}
+                        {:else}
+                          <p class="sub">Choose how this document is linked.</p>
+                        {/if}
+                      </div>
+                    {/if}
+                  {/if}
+                </section>
+
+                <section class="linked-section" aria-label="Documents linking to this version">
+                  <div class="linked-section-head">
+                    <div>
+                      <strong>Documents linking to this version</strong>
+                    </div>
+                    <span class="pill">{backlinks.count}</span>
+                  </div>
+                  {#if backlinksLoading}
+                    <p class="sub">Loading documents linking here…</p>
+                  {:else if backlinksError}
+                    <div class="inline-state err" role="alert">
+                      <span>{backlinksError}</span>
+                      <button class="btn sm" onclick={() => loadBacklinks(id, backlinksPage)}>Retry</button>
+                    </div>
+                  {:else if backlinks.results.length}
+                    <div class="index" style="border:0">
+                      {#each backlinks.results as source (`${source.id}:${source.field_id}`)}
+                        <a class="irow" href={filingHref(`#/doc/${source.id}`, source.system_code)} style="padding:8px 4px">
+                          <span class="dot" class:warn={!source.is_latest}></span>
+                          <span class="grow">
+                            <span class="title">{source.title || `Document #${source.id}`}</span>
+                            <span class="sub" style="display:block">Linked here as “{source.field_name}”</span>
+                          </span>
+                          {#if !source.is_latest}<span class="pill warn">Earlier version</span>{/if}
+                          {#if source.jd_address}<span class="sub">{source.jd_address}</span>{/if}
+                        </a>
+                      {/each}
+                    </div>
+                    {#if backlinks.previous || backlinks.next}
+                      <div class="pager">
+                        <button class="btn sm" disabled={!backlinks.previous || backlinksLoading} onclick={() => loadBacklinks(id, backlinksPage - 1)}>Previous</button>
+                        <span class="sub">Page {backlinksPage}</span>
+                        <button class="btn sm" disabled={!backlinks.next || backlinksLoading} onclick={() => loadBacklinks(id, backlinksPage + 1)}>Next</button>
+                      </div>
+                    {/if}
+                  {:else}
+                    <p class="sub related-empty">No documents link to this version.</p>
+                  {/if}
+                </section>
+              </div>
+            </div>
+          {:else if relatedTab === 'versions'}
+            <div id="related-panel-versions" class="related-panel" role="tabpanel"
+                 aria-labelledby="related-tab-versions" tabindex="0">
+              {#if versionHistory.head_id && String(versionHistory.head_id) !== String(id)}
+                <div class="version-notice">
+                  You are viewing an earlier revision.
+                  <a href={filingHref(`#/doc/${versionHistory.head_id}`)}>Open the latest visible revision</a>
+                </div>
+              {/if}
+              {#if versionHistory.can_upload}
+                <div class="replacement">
+                  <input bind:this={replacementInput} type="file" hidden onchange={chooseReplacement} />
+                  {#if replacementFile}
+                    <div class="replacement-file">
+                      <span class="grow"><strong>{replacementFile.name}</strong><small>{fmtBytes(replacementFile.size)}</small></span>
+                      <button class="btn primary sm" disabled={replacementBusy} onclick={uploadReplacement}>{replacementBusy ? 'Uploading…' : replacementError ? 'Retry upload' : 'Upload replacement'}</button>
+                      <button class="btn sm" disabled={replacementBusy} onclick={cancelReplacement}>Cancel</button>
+                    </div>
+                  {:else}
+                    <button class="btn sm" onclick={() => replacementInput?.click()}>Upload replacement</button>
+                  {/if}
+                  {#if replacementError}<p class="err" role="alert">{replacementError}</p>{/if}
+                </div>
+              {/if}
+              {#if versionsLoading}
+                <p class="sub">Loading version history…</p>
+              {:else if versionsError}
+                <div class="inline-state err" role="alert">
+                  <span>{versionsError}</span>
+                  <button class="btn sm" onclick={() => loadVersions(id, versionsPage)}>Retry</button>
+                </div>
+              {:else}
+                <div class="index" style="border:0">
+                  {#each versionHistory.results as v (v.id)}
+                    <a class="irow" href={filingHref(`#/doc/${v.id}`)} style="padding:8px 4px">
+                      <span class="dot" class:accent={String(v.id) === String(id)}></span>
+                      <span class="title grow">#{v.id} {v.title || ''}</span>
+                      {#if v.is_head}<span class="pill accent">Latest</span>{/if}
+                      {#if String(v.id) === String(id)}<span class="pill">Viewing</span>{/if}
+                      {#if !v.is_head}<span class="pill warn">Earlier</span>{/if}
+                      <span class="sub">{fmtDate(v.created_at)}</span>
+                    </a>
+                  {/each}
+                </div>
+                {#if versionHistory.previous || versionHistory.next}
+                  <div class="pager">
+                    <button class="btn sm" disabled={!versionHistory.previous || versionsLoading} onclick={() => loadVersions(id, versionsPage - 1)}>Previous</button>
+                    <span class="sub">Page {versionsPage}</span>
+                    <button class="btn sm" disabled={!versionHistory.next || versionsLoading} onclick={() => loadVersions(id, versionsPage + 1)}>Next</button>
+                  </div>
+                {/if}
+              {/if}
             </div>
           {:else}
-            <p class="sub" style="margin:8px 4px 0;font-style:italic;opacity:.75;font-size:.8rem">
-              {#if similar.matched_on_title_only}
-                Nothing overlaps the title strongly enough. Reingesting this document so its text is extracted will usually surface more.
-              {:else}
-                Nothing in the archive overlaps this document's vocabulary yet.
-              {/if}
-            </p>
+            <div id="related-panel-notes" class="related-panel" role="tabpanel"
+                 aria-labelledby="related-tab-notes" tabindex="0">
+              <section class="notes-panel" aria-label="Document notes">
+                <div class="notes-heading">
+                  <div>
+                    <h3>Notes</h3>
+                    <p class="sub">Context kept with this exact document revision.</p>
+                  </div>
+                </div>
+
+                {#if !trashed}
+                  <form class="note-composer" onsubmit={addNote}>
+                    <label for="new-document-note">Add a note</label>
+                    <textarea id="new-document-note" class="input" rows="3" maxlength="16384"
+                              placeholder="Add context, a decision, or a follow-up…"
+                              bind:value={noteDraft} disabled={noteBusy}></textarea>
+                    <div class="note-composer-actions">
+                      <span class="sub">Visible to people who can open this document.</span>
+                      <button class="btn primary sm" disabled={noteBusy || !noteDraft.trim()}>
+                        {noteBusy && noteEditID == null && notePendingDelete == null ? 'Adding…' : 'Add note'}
+                      </button>
+                    </div>
+                  </form>
+                {/if}
+
+                {#if noteError}<p class="err" role="alert">{noteError}</p>{/if}
+                <div class="note-list">
+                  {#each doc.notes || [] as note (note.id)}
+                    <article class="note-item">
+                      <div class="note-meta">
+                        <strong>{note.author}</strong>
+                        <span class="sub">
+                          {fmtDate(note.updated_at || note.created_at)}
+                          {#if note.updated_at > note.created_at} · edited{/if}
+                        </span>
+                      </div>
+                      {#if noteEditID === note.id}
+                        <form class="note-edit" onsubmit={(event) => saveNoteEdit(event, note)}>
+                          <textarea class="input" rows="4" maxlength="16384" aria-label={`Edit note by ${note.author}`}
+                                    bind:value={noteEditDraft} disabled={noteBusy}></textarea>
+                          <div class="note-actions">
+                            <button class="btn primary sm" disabled={noteBusy || !noteEditDraft.trim()}>
+                              {noteBusy ? 'Saving…' : 'Save'}
+                            </button>
+                            <button class="btn sm" type="button" disabled={noteBusy}
+                                    onclick={() => { noteEditID = null; noteEditDraft = ''; noteError = '' }}>Cancel</button>
+                          </div>
+                        </form>
+                      {:else}
+                        <p class="note-body">{note.note}</p>
+                        {#if note.can_edit && !trashed}
+                          <div class="note-actions">
+                            <button class="btn sm" type="button" disabled={noteBusy} onclick={() => startNoteEdit(note)}>Edit</button>
+                            <button class="btn danger sm" type="button" disabled={noteBusy} onclick={() => (notePendingDelete = note)}>Delete</button>
+                          </div>
+                        {/if}
+                      {/if}
+                    </article>
+                  {:else}
+                    <p class="sub note-empty">{trashed ? 'No notes on this revision.' : 'No notes yet. Add context without changing the original file.'}</p>
+                  {/each}
+                </div>
+              </section>
+            </div>
           {/if}
-        </div>
-      {/if}
+        </section>
 
       {#if doc.content}
         <section class="card" aria-label="Extracted text">
@@ -821,6 +1754,17 @@
       {/if}
     </div>
   </div>
+{/if}
+
+{#if notePendingDelete}
+  <ConfirmDialog
+    title="Delete note?"
+    message={`The note by ${notePendingDelete.author} will be permanently deleted.`}
+    confirmLabel="Delete note"
+    busyLabel="Deleting…"
+    busy={noteBusy}
+    onConfirm={removeNote}
+    onCancel={() => (notePendingDelete = null)} />
 {/if}
 
 {#if trashOpen}
@@ -911,16 +1855,88 @@
     .detail-sidebar { height:100%; min-height:0; overflow-y:auto; overscroll-behavior:contain; scrollbar-gutter:stable; }
   }
   .document-tags { min-width:0 }
+  .metadata-display { display:flex; align-items:flex-start; flex-wrap:wrap; gap:7px; width:100%; min-width:0; }
+  .metadata-value { display:flex; flex:1 1 90px; align-items:center; flex-wrap:wrap; gap:6px; min-width:0; }
+  .metadata-actions { display:flex; flex:0 1 auto; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:6px; margin-left:auto; }
+  .metadata-actions .btn { flex:none; }
   .tag-pills, .tag-actions { display:flex; flex-wrap:wrap; align-items:center; gap:6px }
   .tag-pills .pill { max-width:100%; white-space:normal }
   .tag-remove { display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; padding:0; border:0; background:transparent; color:inherit; cursor:pointer }
   .tag-remove:disabled { cursor:default; opacity:.5 }
   .tag-actions { margin:8px 0 4px }
   .tag-actions :global(.tag-picker) { flex:1 1 140px }
-
+  .inline-state { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .custom-field-value { min-width:0; }
+  .custom-field-editor { display:grid; gap:7px; width:100%; }
+  .custom-field-editor > .input { width:100%; max-width:none; }
+  .custom-field-actions { display:flex; align-items:center; flex-wrap:wrap; gap:6px; }
+  .custom-field-editor .err { margin:0; font-size:.72rem; }
+  .custom-field-choices { display:flex; flex-wrap:wrap; gap:6px 12px; padding:7px 9px; border:1px solid var(--line); border-radius:7px; background:var(--bg); }
+  .custom-field-choices label { display:flex; align-items:center; gap:5px; font-size:.75rem; }
+  .notes-heading, .note-meta, .note-composer-actions, .note-actions { display:flex; align-items:center; gap:8px; }
+  .notes-heading { align-items:flex-start; justify-content:space-between; }
+  .notes-heading h3 { margin:0; font-size:.92rem; }
+  .notes-heading p { margin:3px 0 0; font-size:.74rem; }
+  .note-composer { display:grid; gap:7px; margin-top:13px; padding:11px; border:1px solid var(--line); border-radius:9px; background:var(--bg); }
+  .note-composer label { font-size:.76rem; font-weight:650; }
+  .note-composer textarea, .note-edit textarea { width:100%; max-width:none; min-height:72px; resize:vertical; line-height:1.45; }
+  .note-composer-actions { align-items:flex-start; justify-content:space-between; }
+  .note-composer-actions .sub { max-width:34ch; font-size:.68rem; }
+  .note-list { display:grid; gap:0; margin-top:12px; }
+  .note-item { display:grid; gap:7px; padding:12px 1px; border-top:1px solid var(--line); }
+  .note-meta { justify-content:space-between; }
+  .note-meta strong { min-width:0; overflow:hidden; font-size:.78rem; text-overflow:ellipsis; white-space:nowrap; }
+  .note-meta .sub { flex:none; font-size:.68rem; }
+  .note-body { margin:0; overflow-wrap:anywhere; color:var(--ink); font-size:.82rem; line-height:1.5; white-space:pre-wrap; }
+  .note-edit { display:grid; gap:7px; }
+  .note-actions { justify-content:flex-end; }
+  .note-empty { margin:3px 0 0; padding:13px 0 2px; border-top:1px solid var(--line); font-size:.78rem; }
+  .related-card { container-type:inline-size; overflow:hidden; padding-top:14px; }
+  .related-tabs { display:flex; gap:2px; margin:0 0 14px; border-bottom:1px solid var(--line); overflow-x:auto; }
+  .related-tabs button { display:flex; align-items:center; flex:none; margin-bottom:-1px; padding:8px 7px; border:0; border-bottom:2px solid transparent; background:none; color:var(--muted); font:inherit; font-size:.8rem; font-weight:600; white-space:nowrap; cursor:pointer; }
+  .related-tabs button:hover { color:var(--ink); }
+  .related-tabs button.on { border-color:var(--accent); color:var(--accent); }
+  .related-tabs .pill { margin-left:6px; padding:1px 6px; font-size:.62rem; }
+  .related-panel { min-height:54px; outline:none; }
+  .related-panel:focus-visible { border-radius:6px; outline:2px solid var(--accent); outline-offset:3px; }
+  .related-meta { display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
+  .related-empty { margin:8px 4px 0; font-size:.8rem; font-style:italic; opacity:.75; }
+  .linked-sections { display:grid; gap:16px; }
+  .linked-section + .linked-section { padding-top:16px; border-top:1px solid var(--line); }
+  .linked-section-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:10px; }
+  .linked-section-head > div { display:flex; min-width:0; flex-direction:column; gap:2px; }
+  .linked-section-head strong { font-size:.82rem; }
+  .reference-add { margin-top:10px; padding:11px; border:1px solid var(--line); border-radius:9px; background:var(--bg); }
+  .reference-add-head { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:8px; }
+  .reference-add-head label { color:var(--muted); font-size:.72rem; font-weight:650; }
+  .reference-add > .sub { margin:8px 0 0; }
+  .reference-list { display:grid; gap:10px; }
+  .reference-row { padding:11px; border:1px solid var(--line); border-radius:9px; background:var(--bg); }
+  .reference-head, .reference-actions, .replacement-file, .pager { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
+  .reference-head { align-items:flex-start; }
+  .reference-head .grow { display:flex; min-width:0; flex-direction:column; gap:3px; }
+  .reference-actions { margin-left:auto; }
+  .reference-target { overflow-wrap:anywhere; font-size:.84rem; font-weight:650; }
+  .reference-editor { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:7px; margin-top:10px; }
+  .reference-results { display:grid; gap:5px; margin:8px 0; }
+  .reference-choice { display:flex; align-items:flex-start; flex-direction:column; gap:2px; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:var(--surface); color:inherit; font:inherit; text-align:left; cursor:pointer; }
+  .reference-choice:hover, .reference-choice.selected { border-color:var(--accent); background:var(--tint); }
+  .reference-choice span { font-size:.78rem; font-weight:650; }
+  .reference-choice small, .replacement-file small { display:block; color:var(--muted); font-size:.68rem; }
+  .version-notice { margin-bottom:10px; padding:9px 10px; border:1px solid color-mix(in srgb, var(--accent) 32%, var(--line)); border-radius:8px; background:var(--tint); font-size:.78rem; }
+  .version-notice a { margin-left:4px; font-weight:650; }
+  .replacement { display:grid; gap:7px; margin-bottom:10px; }
+  .replacement-file { padding:9px 10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); }
+  .replacement-file .grow { min-width:120px; }
+  .pager { justify-content:flex-end; margin-top:10px; }
   .extracted { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; font-size: .8rem; color: var(--muted); margin: 0; }
   .extracted.expanded { max-height: 65vh; }
   .extracted-copy { width: 100%; max-width: none; font-size: .8rem; }
+  @container (max-width: 520px) {
+    .related-tabs { gap:0; }
+    .related-tabs button { padding-inline:4px; font-size:.72rem; }
+    .related-tabs .pill { margin-left:3px; padding-inline:4px; font-size:.58rem; }
+  }
   .trash-notice { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 16px; margin-bottom: 18px; background: var(--warn-soft); border: 1px solid var(--line); border-left: 3px solid var(--warn); border-radius: var(--r); }
   .trash-notice h2 { display: flex; align-items: center; gap: 8px; color: var(--warn); font-size: 1rem; }
   .trash-notice .sub { margin: 3px 0 0; color: var(--muted); font-size: .82rem; }
@@ -928,5 +1944,9 @@
   .trash-actions .btn { min-height: 40px; }
   @media (max-width: 700px) {
     .trash-notice { align-items: stretch; flex-direction: column; gap: 12px; }
+    .reference-editor { grid-template-columns:1fr; }
+    .reference-actions { margin-left:0; }
+    .reference-add-head { grid-template-columns:1fr; }
+    .replacement-file { align-items:stretch; flex-direction:column; }
   }
 </style>

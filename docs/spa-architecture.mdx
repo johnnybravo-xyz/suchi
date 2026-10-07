@@ -200,6 +200,41 @@ refresh. Arrival of sidebar categories must not restart reads or discard edits.
 Metadata/language saves check that same document generation before updating local
 state, so an earlier save cannot change the next document's sensitivity or Reveal.
 
+`DocumentDetail.svelte` owns similar-document results, version history,
+replacement upload, attributed exact-revision notes, typed custom fields,
+outgoing references, and backlinks for one route generation. Those reads load
+concurrently and every late response checks the document/account/system
+generation. Notes use optimistic screen-local create/update/delete state only
+after server success. Similar documents, links, versions, and notes share one
+screen-local tab card, with Notes last; Trash skips the first three reads and
+shows Notes read-only. Opening another live document resets selection to the
+first tab. Outgoing custom-field values and the independently paged backlink
+projection remain separate state and operations. [Document detail, versions and
+links](/document-versions-and-links) owns their user-facing vocabulary and
+semantic contract. Ordinary typed custom fields remain in the metadata card.
+
+`api.js:uploadDocumentVersion` uses private multipart assembly so `source_mtime`
+and the caller's idempotency key are preserved. The screen keeps the selected
+file/key after recoverable failures and clears them only after a successful
+response and navigation. The server rejects stale family heads; version history
+exposes upload only on the latest visible revision and an ID-free conflict tells
+the user to reload after a race. Versions and backlinks page independently; late
+responses check document, account, and system scope before changing state. Trash
+skips these reads.
+
+`lib/documentReferences.js` parses only exact numeric IDs or same-instance
+document URLs. It rejects another origin before any lookup. Target search,
+PUT/DELETE, and post-mutation detail/backlink refresh remain screen-owned; the
+browser never infers visibility, currentness, or reciprocal links.
+
+`Views.svelte` exposes one custom-field presence selector. Helpers in
+`lib/documentFilters.js` extract one generated `has-field:` token when reopening
+the editor and serialize it back into the canonical rich query. The saved
+contract remains `filters.q`, so summary chips, Documents navigation, copied
+hashes, and Back/Forward need no second state channel. Verify the combined
+surface with `cd ui && bun run e2e tests/document-versions-references.spec.js`
+and the custom-field presence cases in `tests/setup.spec.js`.
+
 Above the single-column breakpoint, `DocumentDetail.svelte` consumes the
 available content height, fixes the preview and detail sidebar to the same
 bounds, and gives overflow ownership to the sidebar. Narrow layouts retain
@@ -299,8 +334,15 @@ validates a synthetic response without changing application mode.
 
 `PeopleSettings.svelte` owns the separate People and Metadata destinations.
 People contains Users and Groups; Metadata selects among tags, correspondents,
-storage paths, and custom fields. Filing-tree files belong only to
-`FilingTreeSettings.svelte`.
+and custom fields. `FilingTreeSettings.svelte` owns presets, tree construction,
+and taxonomy files. `ArchiveSettings.svelte` places
+`FolderLayoutsSettings.svelte` first under Advanced; its editor calls the server
+preview rather than duplicating template semantics in JavaScript.
+`Automations.svelte` retains action parameter schemas, loads custom fields and
+rendered-layout API rows in the selected system, and presents named/type-aware
+controls using the **Folder layout** label; the persisted action wire shape
+remains unchanged.
+
 `UserCreateForm.svelte` owns user creation in People and submits no hidden member
 capabilities for admins. Self-disable checks use
 `session.user.user_id`; the API owns self-disable, last-admin and capability

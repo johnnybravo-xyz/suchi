@@ -231,7 +231,7 @@ input, select, textarea { font: inherit; color: inherit; }
   display: inline-flex; align-items: center; gap: 7px;
   border: 1px solid var(--line-strong); border-radius: 9px;
   background: var(--surface); padding: 7px 14px;
-  font-weight: 550; font-size: .86rem;
+  font-weight: 550; font-size: .86rem; text-decoration: none;
 }
 .btn:hover { border-color: var(--accent); color: var(--accent); }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }

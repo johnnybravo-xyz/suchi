@@ -99,19 +99,23 @@ Negation applies only to the following clause. There is no grouped negation.
 
 ## Filters
 
-| Filter         | Values and behavior                                                                                                                                  |
-| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `jd:`          | Johnny.Decimal category by visible code or exact category name, for example `jd:22` or `jd:"22 Investments"`. Database row IDs are not query syntax. |
-| `tag:`         | Exact tag name. Multiple positive tag clauses require every tag.                                                                                     |
-| `from:`        | Exact correspondent name. Matches the primary or any linked correspondent.                                                                           |
-| `sensitivity:` | `public`, `internal`, `confidential`, or `restricted`.                                                                                               |
-| `lang:`        | Assigned or detected two- or three-letter language code, such as `en`, `de`, or `hin`.                                                               |
-| `title:`       | Prefix or quoted phrase restricted to title.                                                                                                         |
-| `content:`     | Prefix or quoted phrase restricted to extracted content.                                                                                             |
-| `added:`       | Added date in UTC using `YYYY-MM-DD`. Supports `=`, `>`, `>=`, `<`, and `<=`.                                                                        |
-| `date:`        | Date available to Calendar using `YYYY-MM-DD`. Supports the same comparisons. Pending and rejected dates never match.                                |
-| `date-role:`   | Calendar date role: `issued`, `due`, `start`, `end`, `expiry`, `renewal`, `service`, or `other`.                                                     |
-| `is:`          | `inbox`, `trash`, `encrypted`, or `dated`. `is:dated` requires a date available to Calendar.                                                         |
+| Filter         | Values and behavior                                                                                                                                                                  |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `jd:`          | Johnny.Decimal category by visible code or exact category name, for example `jd:22` or `jd:"22 Investments"`. Database row IDs are not query syntax.                                 |
+| `tag:`         | Exact tag name. Multiple positive tag clauses require every tag.                                                                                                                     |
+| `from:`        | Exact correspondent name. Matches the primary or any linked correspondent.                                                                                                           |
+| `has-field:`   | Exact custom-field name. Matches a stored value; negate it to require that value to be absent.                                                                                       |
+| `field:`       | Typed custom-field value as `field:<name><operator><value>`. Text, URL, select, and multi fields support `=`; number, monetary, and date fields also support comparisons; bool uses yes/no. |
+| `asn:`         | Read-only previous archive number. Accepts an integer with `=`, `>`, `>=`, `<`, or `<=`; `asn:none` finds documents without one.                                                     |
+| `sensitivity:` | `public`, `internal`, `confidential`, or `restricted`.                                                                                                                               |
+| `lang:`        | Assigned or detected two- or three-letter language code, such as `en`, `de`, or `hin`.                                                                                               |
+| `title:`       | Prefix or quoted phrase restricted to title.                                                                                                                                         |
+| `content:`     | Prefix or quoted phrase restricted to extracted content.                                                                                                                             |
+| `added:`       | Added date in UTC using `YYYY-MM-DD`. Supports `=`, `>`, `>=`, `<`, and `<=`.                                                                                                        |
+| `date:`        | Date available to Calendar using `YYYY-MM-DD`. Supports the same comparisons. Pending and rejected dates never match.                                                                |
+| `date-role:`   | Calendar date role: `issued`, `due`, `start`, `end`, `expiry`, `renewal`, `service`, or `other`.                                                                                     |
+| `is:`          | `inbox`, `trash`, `encrypted`, or `dated`. `is:dated` requires a date available to Calendar.                                                                                         |
+| `version:`     | `latest` (default), `all`, or `older`. Selects newest visible revisions, every visible revision, or only superseded visible revisions.                                               |
 
 See [Document dates](/document-dates) for extraction, confidence, review, and
 Calendar behavior.
@@ -121,14 +125,48 @@ Examples:
 ```text
 added:>=2026-01-01 added:<2027-01-01
 date:2026-09-14 date-role:renewal
+type:invoice -has-field:"Payment receipt"
+field:"Invoice amount">=100 field:Status="Needs review"
+asn:>400 asn:<500
+version:all
 is:inbox -is:encrypted
 ```
 
-Only `added:` and `date:` accept comparison operators. `tag:>=tax` is rejected.
+Comparisons are accepted only by date filters, numeric/date custom fields, and `asn:`.
+`tag:>=tax`, `has-field:>Receipt`, and `field:Status>Open` are rejected.
+`version:` cannot be negated or repeated.
 All positive `date:` comparisons and `date-role:` clauses must match the same
 Calendar date. Negated date clauses remain independent `NOT EXISTS`
 conditions. Dates available to Calendar are readable document metadata, so
 these predicates require `documents:read`, not `archive_intelligence`.
+
+An ordinary `has-field:` clause means that the document has a stored value row.
+For a `documentlink`, the exact linked target must also be live and visible to
+the caller. A hidden, trashed, missing, or permanently deleted target therefore
+behaves as absent, including for `-has-field:`. Target visibility is evaluated
+inside the presence predicate before counts and pagination. Field names resolve
+in the selected filing system before execution; renaming or deleting a field
+makes a saved query using the old name fail normally rather than broadening it.
+
+`field:` resolves the exact field name before applying its declared type.
+Equality on a multi-choice field means membership in the stored list. Document
+links are intentionally excluded: use **Linked documents** to follow exact
+relationships and `has-field:` to test whether a visible live target exists.
+Field-value predicates retain the same source-document ACL and caller-relative
+version rules as every other discovery filter.
+
+`archive_serial_number` is compatibility metadata retained on imported rows.
+The API and web app expose it as **Previous archive number**, never as editable
+filing metadata. `asn:none` tests for a null value; source saved views with exact,
+missing, greater-than, or less-than archive-number rules import into these
+selectors.
+
+Version currentness is caller-relative. Discovery surfaces use the greatest
+live document ID the caller can see in each version family; a hidden or trashed
+newer revision does not suppress an older visible one. Direct detail URLs,
+exact document snapshots, and Trash are exact-row operations and do not apply
+this default.
+
 Metadata names are resolved before execution. Unknown values return errors;
 ambiguous values return suggestions.
 
@@ -185,8 +223,9 @@ One query remains an AND-composed set of independently negatable clauses.
 
 The Search and Documents query fields recognize an incomplete final qualifier.
 Suggestions cover filter names, Johnny.Decimal categories, tags,
-correspondents, sensitivity values, date roles, and `is:` states. Selecting
-one replaces the active token but does not run the search.
+correspondents, custom fields, sensitivity values, date roles, version modes,
+and `is:` states. Selecting one replaces the active token but does not run the
+search.
 
 ## Limits
 

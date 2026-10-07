@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/customfield"
+	renderpaths "github.com/johnnybravo-xyz/suchi/core/render/paths"
+	"github.com/johnnybravo-xyz/suchi/core/render/view"
 	"github.com/johnnybravo-xyz/suchi/core/taxonomy"
 )
 
@@ -104,9 +106,26 @@ func BuiltinActions() []ActionDefinition {
 				if id == 0 {
 					return errors.New("assign_storage_path: storage_path_id required")
 				}
-				_, err := tx.ExecContext(ctx,
-					`UPDATE documents SET storage_path_id = ? WHERE id = ?`, id, target.DocID)
-				return err
+				var (
+					template string
+					asn      sql.NullInt64
+				)
+				if err := tx.QueryRowContext(ctx, `
+					SELECT sp.path, d.archive_serial_number
+					FROM storage_paths sp
+					JOIN documents d ON d.system_id = sp.system_id
+					WHERE sp.id = ? AND d.id = ?
+				`, id, target.DocID).Scan(&template, &asn); err != nil {
+					return fmt.Errorf("assign_storage_path: unavailable folder layout: %w", err)
+				}
+				if renderpaths.UsesVariable(template, "asn") && !asn.Valid {
+					return errors.New("assign_storage_path: folder layout requires a previous archive number")
+				}
+				if _, err := tx.ExecContext(ctx,
+					`UPDATE documents SET storage_path_id = ? WHERE id = ?`, id, target.DocID); err != nil {
+					return err
+				}
+				return view.EnqueueMove(ctx, tx, target.DocID)
 			},
 		},
 		{Kind: "assign_owner",
@@ -153,9 +172,11 @@ func BuiltinActions() []ActionDefinition {
 				return nil
 			},
 			Execute: func(ctx context.Context, tx *sql.Tx, target ActionTarget, params map[string]any) error {
-				_, err := tx.ExecContext(ctx,
-					`UPDATE documents SET storage_path_id = NULL WHERE id = ?`, target.DocID)
-				return err
+				if _, err := tx.ExecContext(ctx,
+					`UPDATE documents SET storage_path_id = NULL WHERE id = ?`, target.DocID); err != nil {
+					return err
+				}
+				return view.EnqueueMove(ctx, tx, target.DocID)
 			},
 		},
 		{Kind: "remove_correspondents",

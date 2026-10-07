@@ -3,8 +3,40 @@
 Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
+### Added
+
+- Add linear document replacement history with current-head uploads, exact
+  historical URLs, idempotent retries, caller-relative latest discovery,
+  explicit metadata inheritance boundaries, and a badge that counts only other
+  versions.
+- Show typed custom-field values and exact named document links. **Linked
+  documents** separates editable links from paged incoming links in plain
+  language, accepts only canonical same-instance URL forms, offers administrators
+  direct link-type setup, rejects self and same-family targets, redacts hidden or
+  trashed endpoints, and removes incoming values on permanent deletion.
+- Add `version:`, `has-field:`, typed `field:`, and read-only `asn:` query
+  qualifiers across Documents, Search, saved Views, Calendar, and archive
+  research, plus a saved-view control for documents with or without a named
+  custom-field value. Imported archive-number view rules retain exact, missing,
+  greater-than, and less-than retrieval.
+- Add attributed, editable notes to Document Detail. Notes are exact-revision
+  metadata, remain read-only in Trash, enforce author/admin mutation, and are
+  accepted atomically from watched-folder sidecars.
+- Add complete typed custom-field workflows: validated select choices, protected
+  in-use definitions, type-aware Document Detail and automation controls,
+  formatted API values, atomic sidecar ingestion, and value retrieval with
+  `field:` comparisons.
+- Add **Folder layouts** under Archive configuration > Advanced, with
+  server-validated sample previews, named automation controls, transactional
+  rerenders, and compatibility guards for layouts that use read-only previous
+  archive numbers.
+
 ### Fixed
 
+- Give Metadata its own tag icon so it is visually distinct from the Archive
+  configuration overview.
+- Right-align Document Detail metadata actions, revealing **Manage tags** only
+  while editing tags, while keeping values readable at narrow widths.
 - Repair rendered links created by beta.1 and beta.2 when a stable-v1 refile
   verifies that the linked blob belongs to the document.
 - Keep operational dead-job details and the Retry/Dismiss recovery controls out
@@ -22,11 +54,11 @@ Notable user-visible changes to Suchi are recorded here.
 - Generate, verify, and embed the web application during production builds
   instead of storing compiled frontend bundles in the source tree.
 
-- Replace the Paperless-derived document-type vocabulary with ordinary
+- Replace the source-archive-derived document-type vocabulary with ordinary
   `type:<name>` tags. The stable schema upgrade migrates assignments, ACLs,
   saved-view filters, automation filters/actions, and title/storage templates;
   automations whose tag-and-type AND predicate cannot be represented are
-  suspended, and pending type-change reviews are cancelled. Paperless bundle
+  suspended, and pending type-change reviews are cancelled. Source bundle
   imports preserve source types through the same tags and report unsupported
   template expressions.
 - Replace the combined type/share selector in Documents with a dedicated
@@ -36,7 +68,6 @@ Notable user-visible changes to Suchi are recorded here.
   collapsed plain-language source explanations, and no producer score details.
 - Streamline Classification with concise helper copy and a contained **Similar
   documents** switch that exposes standard switch semantics.
-
 
 ## [0.1.0] - 2026-09-28
 
@@ -75,7 +106,7 @@ Notable user-visible changes to Suchi are recorded here.
   preserved live session for explicit provider binding.
 - Keep watched-folder ownership attached to a durable user ID across account
   email changes. Identity changes no longer rewrite or reload watcher settings;
-  owner-based custom storage paths rerender in the identity transaction.
+  owner-based folder layouts rerender in the identity transaction.
 - Treat all correspondent reads and writes as ordered, role-bearing relations.
   Singular sender edits promote or clear only the sender role, while explicit
   multi-party edits retain recipients, CCs and other relations.

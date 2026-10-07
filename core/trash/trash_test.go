@@ -169,6 +169,10 @@ func TestPurgeRemovesOwnedStateAndRenderedFilesButRetainsBlobs(t *testing.T) {
 		VALUES (1, 1, 'purge-link', '[10,11]', 1, 'shared docs', 1);
 		INSERT INTO audit_events(system_id, id, ts, actor_kind, actor_id, action, object_kind, object_id, after_json)
 		VALUES (1, 1, 1, 'user', 1, 'document.update', 'document', 10, '{"title":"private"}');
+		INSERT INTO custom_fields(system_id,id,name,data_type,created_at,updated_at)
+		VALUES (1,1,'Related','documentlink',1,1);
+		INSERT INTO document_custom_field_values(document_id,field_id,value_int)
+		VALUES (11,1,10);
 	`, archiveHash, decryptedHash, avatarHash); err != nil {
 		t.Fatal(err)
 	}
@@ -216,6 +220,14 @@ func TestPurgeRemovesOwnedStateAndRenderedFilesButRetainsBlobs(t *testing.T) {
 		if count != 0 {
 			t.Fatalf("%s count=%d, want 0", table, count)
 		}
+	}
+	var incomingReferences int
+	if err := database.Read.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM document_custom_field_values WHERE value_int = 10`).Scan(&incomingReferences); err != nil {
+		t.Fatal(err)
+	}
+	if incomingReferences != 0 {
+		t.Fatalf("incoming document links count=%d, want 0", incomingReferences)
 	}
 	var lastUsed sql.NullInt64
 	if err := database.Read.QueryRowContext(context.Background(),

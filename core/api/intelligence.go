@@ -124,8 +124,8 @@ func (s *Server) ListIntelligence(w http.ResponseWriter, r *http.Request) {
 	}
 	scope := documentScope{Query: strings.TrimSpace(q.Get("q"))}
 	if viewID > 0 {
-		if scope.Query != "" || q.Get("document_ids") != "" {
-			s.writeError(w, http.StatusBadRequest, "ambiguous_scope", "view_id cannot be combined with q or document_ids")
+		if scope.Query != "" || q.Get("document_ids") != "" || q.Get("version") != "" {
+			s.writeError(w, http.StatusBadRequest, "ambiguous_scope", "view_id cannot be combined with q, document_ids, or version")
 			return
 		}
 		scope, err = s.loadSavedViewScope(r.Context(), p, viewID)
@@ -138,6 +138,15 @@ func (s *Server) ListIntelligence(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
+		rawVersion := strings.TrimSpace(q.Get("version"))
+		if rawVersion != "" {
+			scope.Version, err = parseVersionMode(rawVersion)
+			if err != nil {
+				s.writeError(w, http.StatusBadRequest, "bad_version", "version must be latest, all, or older")
+				return
+			}
+			scope.VersionExplicit = true
+		}
 		rawDocumentIDs := q.Get("document_ids")
 		scope.DocumentIDs, err = parseBoundedCSVIDs(rawDocumentIDs, bulkEditMaxDocuments)
 		if err != nil || (rawDocumentIDs != "" && len(scope.DocumentIDs) == 0) {
@@ -158,6 +167,15 @@ func (s *Server) ListIntelligence(w http.ResponseWriter, r *http.Request) {
 	}
 	if !intelligenceStatuses[status] {
 		s.writeError(w, http.StatusBadRequest, "bad_status", "status must be pending, accepted, or rejected")
+		return
+	}
+	versionMode, err := resolveDocumentVersionMode(
+		scope, queryPlan,
+		len(scope.DocumentIDs) > 0 || status != "accepted" || queryPlan.SelectsTrash,
+	)
+	if err != nil {
+		scopeErr := err.(*documentScopeError)
+		s.writeError(w, http.StatusBadRequest, scopeErr.Code, scopeErr.Message)
 		return
 	}
 	if isDemoCorpusKind(p.Kind) && status != "accepted" {
@@ -227,13 +245,19 @@ func (s *Server) ListIntelligence(w http.ResponseWriter, r *http.Request) {
 		args = append(args, sortTo)
 	}
 	where, args = appendDocumentScopePredicates(r.Context(), where, args, scope, p)
-	visibility, visibilityArgs, err := s.collectionVisibility(r.Context(), p)
+	visibility, visibilityArgs, groups, err := s.collectionVisibilityWithGroups(r.Context(), p)
 	if err != nil {
 		s.serverErr(w, "intelligence.visibility", err)
 		return
 	}
 	where = append(where, visibility)
 	args = append(args, visibilityArgs...)
+	where, args = appendDocumentFieldPresence(where, args, p, groups, queryPlan)
+	versionWhere, versionArgs := documentVersionWhere(r.Context(), p, groups, versionMode)
+	if versionWhere != "" {
+		where = append(where, versionWhere)
+		args = append(args, versionArgs...)
+	}
 	where, args = appendFTSDrivenQueryPredicates(where, args, queryPlan)
 	whereSQL := strings.Join(where, " AND ")
 	fromSQL := `document_intelligence di

@@ -54,25 +54,29 @@ Only the current pre-1.0 release is supported.
 This section is the release authority for accepted core database states. The
 signed beta.1–beta.3 SQL, tags and release artifacts remain byte-identical.
 Stable v0.1.0 embeds frozen compatibility SQL in
-`core/db/compatibility/0002`–`0005`; the active catalog still contains only the
-declarative `0001_baseline.sql` and identifies the stable epoch as
-`user_version = 1`, lineage `stable-v1`.
+`core/db/compatibility/0002`–`0005`; its declarative baseline is active migration
+`0001_baseline.sql`, `user_version = 1`, lineage `stable-v1`. The current
+checkout adds active `0002_metadata_cleanup.sql` and targets `user_version = 2`
+without changing that lineage.
 
-The final stable-v1 normalized core fingerprint is
-`cb74332fa9ea8b6b2496440a3ddb5fe5ef5592287bc4cfbd26e7c25fcb9abee5`.
-The one admitted pre-identity schema-4 boundary is
+The exact stable schema-1 fingerprint is
+`9d2a6320eae1582b0f294caa6ed518b5a73ab3dbe6597c9ca1a36cc563e03240`.
+The current schema-2 fingerprint is
+`645e7798d663fff83d120182f661e7148fbd68d263517de9d44783d80aaebae3`.
+The one admitted pre-identity schema-4 boundary remains
 `5d6ac98308eb644b030092178792a46f36e6f8f5041411f020ed2dcf216f46c2`.
 Startup admits only these exact states:
 
-| Source database | Required identity | Stable-v1 startup action |
+| Source database | Required identity | Current startup action |
 | --- | --- | --- |
-| Empty | `user_version = 0`, no core objects or lineage | Apply the declarative baseline |
-| v0.1.0-beta.1 | Canonical beta.1 schema 1, no lineage table | Snapshot, apply frozen 0002–0005, adopt stable lineage |
-| v0.1.0-beta.2 | Canonical beta.2 schema 2, no lineage table | Snapshot, apply frozen 0003–0005, adopt stable lineage |
-| v0.1.0-beta.3 | Canonical schema 3 with `final-beta-schema-3` | Snapshot, apply frozen 0004–0005, adopt stable lineage |
-| Historical schema 3 | Known pre-beta mutable-baseline fingerprint with `final-beta-schema-3`; obsolete `agent_webhooks` table must be empty | Snapshot, remove the empty obsolete table, apply 0004–0005, adopt stable lineage |
-| Pre-identity schema 4 | Exact pre-identity fingerprint above with `final-beta-schema-3` | Snapshot, apply 0005, adopt stable lineage |
-| Stable v1 | Exact final fingerprint above with `stable-v1` | No-op |
+| Empty | `user_version = 0`, no core objects or lineage | Apply active migrations 0001 and 0002 |
+| v0.1.0-beta.1 | Canonical beta.1 schema 1, no lineage table | Snapshot, apply frozen 0002–0005 plus active 0002, adopt stable lineage/schema 2 |
+| v0.1.0-beta.2 | Canonical beta.2 schema 2, no lineage table | Snapshot, apply frozen 0003–0005 plus active 0002, adopt stable lineage/schema 2 |
+| v0.1.0-beta.3 | Canonical schema 3 with `final-beta-schema-3` | Snapshot, apply frozen 0004–0005 plus active 0002, adopt stable lineage/schema 2 |
+| Historical schema 3 | Known pre-beta mutable-baseline fingerprint with `final-beta-schema-3`; obsolete `agent_webhooks` table must be empty | Snapshot, remove the empty obsolete table, apply frozen 0004–0005 plus active 0002, adopt stable lineage/schema 2 |
+| Pre-identity schema 4 | Exact pre-identity fingerprint above with `final-beta-schema-3` | Snapshot, apply frozen 0005 plus active 0002, adopt stable lineage/schema 2 |
+| Stable schema 1 | Exact stable schema-1 fingerprint above with `stable-v1` | Check integrity/foreign keys, apply active 0002, require schema-2 manifest |
+| Stable schema 2 | Exact current fingerprint above with `stable-v1` | No-op |
 
 “Canonical” means the complete normalized core `sqlite_schema` fingerprint, not
 only the integer version or a claimed lineage row. Intermediate, partial,
@@ -82,24 +86,30 @@ an adoption snapshot. Extension objects created after
 rebuilt during adoption remain part of it regardless of their replacement
 rowids.
 
-Compatibility migration 0005 rebuilds `users` with nullable issuer/subject and
-rebuilds `audit_events` with retained-event metadata. It copies numeric user and
-audit IDs exactly, so foreign-key and logical owner references stay stable.
-All accepted pre-stable paths reach the same fresh-schema fingerprint.
+Frozen compatibility migration 0005 rebuilds `users` with nullable
+issuer/subject and rebuilds `audit_events` with retained-event metadata. It
+copies numeric user and audit IDs exactly, so foreign-key and logical owner
+references stay stable. Active migration 0002 adds version-family storage and
+indexes, validates the predecessor graph, assigns deterministic family keys only
+to existing multi-row histories, and leaves standalone documents without a
+family key. All accepted paths reach the same fresh schema-2 fingerprint.
 
 Every admitted pre-stable database passes integrity and foreign-key checks, gets
 an exclusive mode-0600 SQLite snapshot beside the live database, and applies
-the remaining compatibility steps, stable lineage and stable version in one
-immediate writer transaction. Startup then checks integrity, foreign keys and
-equality with the fresh stable schema manifest. Failure rolls back the
-transaction and retains the snapshot. Fresh and already-stable databases do not
-create adoption snapshots.
+the remaining compatibility steps, active migration 0002, stable lineage and
+schema version 2 in one immediate writer transaction. Startup then checks
+integrity, foreign keys and equality with the fresh schema-2 manifest. Failure
+rolls back the transaction and retains the snapshot. Fresh and already-current
+databases do not create adoption snapshots. Stable schema-1 upgrades also do not
+create an adoption snapshot; keep the operator's complete backup before
+upgrading.
 
 Before release, verify fresh initialization and restart, all five pre-stable
-paths, data/ID preservation, snapshot creation and failure, fault-injected
-rollback, foreign-key restoration, invalid-state rejection without writes, and
-final manifest equality. Keep the operator's complete backup containing SQLite,
-blobs, the credential key and configuration; the adoption snapshot is
+paths, the stable schema-1 forward upgrade, data/ID/family preservation, snapshot
+creation and failure, fault-injected rollback, foreign-key restoration,
+cycle rejection without a version bump, invalid-state rejection without writes,
+and final manifest equality. Keep the operator's complete backup containing
+SQLite, blobs, the credential key and configuration; an adoption snapshot is
 database-only. See [Architecture](/architecture#storage-and-transaction-invariants)
 for runtime invariants and [Backup and restore](/backup-restore#upgrade-and-rollback)
 for operator procedure.
@@ -122,12 +132,14 @@ Use only the reviewed manual path:
    verified storage outside `DATA_DIR`; keep the old binary/config. A normal
    live database copy is not rollback.
 4. Apply the exact 0005 SQL through the table-rebuild transaction, restore
-   `user_version = 1` and `stable-v1`, then require the final fingerprint,
-   integrity, foreign keys, stable user IDs, and expected counts before starting
-   any writer.
-5. Start the final binary. From the preserved session, use **Sync from identity
-   provider** and verify the same user ID gains issuer/subject, a retained
-   `user.oidc_bound` row, a replacement cookie, and unchanged ownership.
+   `user_version = 1` and `stable-v1`, then require the exact stable schema-1
+   fingerprint, integrity, foreign keys, stable user IDs, and expected counts
+   before starting any writer.
+5. Start the current binary. It admits that exact schema-1 state, applies active
+   migration 0002, and requires the schema-2 manifest. From the preserved
+   session, use **Sync from identity provider** and verify the same user ID gains
+   issuer/subject, a retained `user.oidc_bound` row, a replacement cookie, and
+   unchanged ownership.
 
 For beta adoption, keep both the automatic database snapshot and a complete
 operator backup. If no live session survives to bind an occupied unbound OIDC

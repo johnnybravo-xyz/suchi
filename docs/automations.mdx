@@ -32,7 +32,10 @@ automation use OR.
 ## Actions
 
 The visual builder exposes title, tag, correspondent, Johnny.Decimal category,
-storage path, owner, and custom-field assignment.
+folder-layout, owner, and custom-field assignment. Folder layouts and custom
+fields use named pickers; the value editor follows the selected custom field's
+declared type. A layout that uses the previous archive number fails atomically
+for a document without that compatibility value.
 The JSON view remains available for inspecting the complete automation.
 
 The server exposes the current builder vocabulary and parameter schemas at
@@ -74,7 +77,8 @@ Example:
 
 Title templates support `{{title}}`, `{{correspondent}}`, `{{tags}}`, and
 `{{date}}`. Unknown placeholders remain visible so a typo does not silently
-erase text. Use IDs, not display names, in action parameters.
+erase text. The visual builder resolves names to IDs; direct JSON action
+parameters continue to use IDs.
 
 ## Classification order
 
