@@ -1346,6 +1346,7 @@ func TestAutomationAnswersAreCanonicalGroundedAndUnique(t *testing.T) {
 		{AutomationID: 1, AllowedAnswers: []string{"yes", "no", "unknown"}},
 		{AutomationID: 2, AllowedAnswers: []string{"Keep", "Discard", "unknown"}},
 		{AutomationID: 3, AllowedAnswers: []string{"yes", "no", "unknown"}},
+		{AutomationID: 4, AllowedAnswers: []string{"yes", "no", "unknown"}},
 	}
 	got := p.validAutomationAnswers([]AutomationAnswer{
 		{AutomationID: 1, Answer: "yes", Confidence: 0.9, Evidence: "serial 42"},
@@ -1353,6 +1354,7 @@ func TestAutomationAnswersAreCanonicalGroundedAndUnique(t *testing.T) {
 		{AutomationID: 2, Answer: " KEEP ", Confidence: 0.8, Evidence: "serial   42"},
 		{AutomationID: 3, Answer: "unknown", Confidence: 0.7},
 		{AutomationID: 99, Answer: "yes", Confidence: 0.9, Evidence: "serial 42"},
+		{AutomationID: 4, Answer: "unknown", Confidence: 0.7, Evidence: "serial 42"},
 	}, questions, "Warranty serial 42 applies", "Warranty serial 42 applies")
 	if len(got) != 2 {
 		t.Fatalf("validated answers = %+v", got)

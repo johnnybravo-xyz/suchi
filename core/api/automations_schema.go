@@ -86,7 +86,7 @@ var automationSchema = AutomationSchema{
 		MaxEnabled: automations.MaxEnabledAsks, TriggerType: "document_added",
 		Answers: []AutomationAskAnswer{
 			{Type: "yes_no", Name: "Yes / No"},
-			{Type: "choice", Name: "Multiple choice", MinChoices: 2, MaxChoices: 10},
+			{Type: "choice", Name: "Multiple choice", MinChoices: 2, MaxChoices: automations.MaxAskChoices},
 		},
 		ActionKinds: []string{"assign_tags", "assign_correspondent", "assign_jd_category", "assign_custom_field"},
 	},

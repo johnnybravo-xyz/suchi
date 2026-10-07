@@ -773,13 +773,15 @@ func (p *Plugin) validAutomationAnswers(candidates []AutomationAnswer, questions
 			}
 		}
 		candidate.Evidence = normalizeEvidenceText(candidate.Evidence)
-		if reason == "" && utf8.RuneCountInString(candidate.Evidence) > 300 {
+		switch {
+		case reason == "" && utf8.RuneCountInString(candidate.Evidence) > 300:
 			reason = "invalid_evidence"
-		}
-		if reason == "" && canonical != "unknown" &&
+		case reason == "" && canonical == "unknown" && candidate.Evidence != "":
+			reason = "invalid_evidence"
+		case reason == "" && canonical != "unknown" &&
 			(candidate.Evidence == "" ||
 				!strings.Contains(normalizedExcerpt, candidate.Evidence) ||
-				!strings.Contains(normalizedOriginal, candidate.Evidence)) {
+				!strings.Contains(normalizedOriginal, candidate.Evidence)):
 			reason = "ungrounded_evidence"
 		}
 		if reason != "" {
