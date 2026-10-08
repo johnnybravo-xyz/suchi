@@ -90,6 +90,11 @@ Notable user-visible changes to Suchi are recorded here.
   when added. Both screens now use shared workspace, row, empty-state and
   builder-section components.
 
+- Streamline the **Account subscription** model tab into a compact connection
+  row, model and egress controls, retained confidence slider, and one inline
+  connection-test verdict. The panel now shows a bright ochre
+  **Experimental** tag.
+
 - Generate, verify, and embed the web application during production builds
   instead of storing compiled frontend bundles in the source tree.
 

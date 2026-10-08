@@ -360,6 +360,27 @@
     } finally { llmTesting = false }
   }
 
+  function subscriptionTestHint() {
+    if (!llmStatus?.subscription_connected) {
+      return 'Connect and acknowledge first. Sends one sample sentence, never your documents.'
+    }
+    if (modelsLoading) return 'Loading models from the connected account…'
+    if (modelsError) return 'Refresh the model list before testing.'
+    if (!subscriptionModels.some((model) => model.id === llm.model)) {
+      return 'Choose an available model before testing.'
+    }
+    if (!llm.egress_ack) {
+      return 'Acknowledge document egress first. The test sends one sample sentence, never your documents.'
+    }
+    return 'Sends one sample sentence, never your documents.'
+  }
+
+  function elapsedLabel(milliseconds) {
+    const value = Number(milliseconds) || 0
+    if (value < 1000) return `${Math.round(value)} ms`
+    return `${(value / 1000).toFixed(1).replace(/\.0$/, '')} s`
+  }
+
   const llmIsRemote = $derived(llmMode === 'subscription' || (!!llm.endpoint_url && !isLocalEndpoint(llm.endpoint_url)))
 </script>
 
@@ -497,20 +518,37 @@
         <button disabled={modelSaving || loginBusy} class:on={llmMode === 'subscription'} onclick={() => setLLMMode('subscription')}>Account subscription</button>
       </span>
       {#if llmMode === 'subscription'}
-        <div class="field"><label for="l-provider">Provider</label>
+        <div class="subscription-maturity"><span class="experimental-tag">Experimental</span></div>
+        <div class="field subscription-provider"><label for="l-provider">Provider</label>
           <select id="l-provider" class="input" bind:value={subscriptionProvider} disabled={loginBusy || modelSaving}><option value="openai_chatgpt">OpenAI ChatGPT (Codex)</option></select>
         </div>
-        <p class="wiz-p sub">Connect your ChatGPT Codex subscription for classification and archive research. This account powers AI for the whole archive. Suchi sends extracted text to OpenAI; subscription limits apply.</p>
-        <p role="status">{llmStatus?.subscription_connected ? 'ChatGPT connected' : 'ChatGPT not connected'}</p>
-        <div class="toolbar">
-          <button class="btn sm" disabled={loginBusy || !!loginCode} onclick={startSubscriptionLogin}>{llmStatus?.subscription_connected ? 'Reconnect ChatGPT' : 'Connect ChatGPT'}</button>
-          {#if llmStatus?.subscription_connected}<button class="btn sm" disabled={loginBusy} onclick={() => endSubscriptionLogin('disconnect')}>Disconnect ChatGPT</button>{/if}
+        <div class="subscription-account" class:connected={llmStatus?.subscription_connected}>
+          <div class="subscription-account-copy">
+            <span class="subscription-state-title">
+              {#if llmStatus?.subscription_connected}<span class="subscription-state-dot" aria-hidden="true"></span>{/if}
+              <strong role="status">{llmStatus?.subscription_connected ? 'ChatGPT connected' : 'ChatGPT'}</strong>
+            </span>
+            <span>{llmStatus?.subscription_connected
+              ? 'Subscription limits apply to this archive.'
+              : 'Powers suggestions and Archive research for this archive.'}</span>
+          </div>
+          <div class="subscription-account-actions">
+            {#if llmStatus?.subscription_connected}
+              <button class="act-link subscription-disconnect" disabled={loginBusy} onclick={() => endSubscriptionLogin('disconnect')}>Disconnect ChatGPT</button>
+            {:else}
+              <button class="btn sm" disabled={loginBusy || !!loginCode} onclick={startSubscriptionLogin}>
+                {loginBusy ? 'Connecting…' : 'Connect ChatGPT'}
+              </button>
+            {/if}
+          </div>
+          {#if loginCode}
+            <div class="subscription-login">
+              <p>Open <a href={loginCode.verification_url} target="_blank" rel="noopener noreferrer">ChatGPT device login</a> and enter <strong class="mono">{loginCode.user_code}</strong>. Waiting for sign-in…</p>
+              <button class="btn sm" onclick={() => endSubscriptionLogin('cancel')}>Cancel login</button>
+            </div>
+          {/if}
+          {#if loginError}<p class="err subscription-account-error" role="alert">{loginError}</p>{/if}
         </div>
-        {#if loginCode}
-          <p>Open <a href={loginCode.verification_url} target="_blank" rel="noopener noreferrer">ChatGPT device login</a> and enter <strong class="mono">{loginCode.user_code}</strong>. Waiting for sign-in…</p>
-          <button class="btn sm" onclick={() => endSubscriptionLogin('cancel')}>Cancel login</button>
-        {/if}
-        {#if loginError}<p class="err" role="alert">{loginError}</p>{/if}
       {:else if llmMode === 'local'}
         <p class="wiz-p sub" style="font-size:.8rem">The Docker Compose default reaches Ollama on the host. Edit the URL for a native install or another machine on your network.</p>
       {:else}
@@ -520,10 +558,16 @@
       <div class="field"><label for="l-url">Endpoint URL</label>
         <input id="l-url" class="input mono" placeholder="http://host.suchi.local:11434/v1" bind:value={llm.endpoint_url} oninput={invalidateLLMTest} /></div>
       {/if}
-      <div class="field"><label for="l-model">Model</label>
+      <div class="field model-field">
+        <div class="field-label-row">
+          <label for="l-model">Model</label>
+          {#if llmMode === 'subscription' && llmStatus?.subscription_connected}
+            <button class="act-link refresh-models" disabled={modelsLoading || modelSaving} onclick={loadSubscriptionModels}>Refresh models</button>
+          {/if}
+        </div>
         {#if llmMode === 'subscription'}
           <select id="l-model" class="input" bind:value={llm.model} onchange={persistSubscriptionModel} disabled={!llmStatus?.subscription_connected || modelsLoading || modelSaving || !subscriptionModels.length}>
-            {#if !subscriptionModels.length}<option value="">{modelsLoading ? 'Loading models…' : llmStatus?.subscription_connected ? 'No models available' : 'Connect ChatGPT to load models'}</option>{/if}
+            {#if !subscriptionModels.length}<option value="">{modelsLoading ? 'Loading models…' : llmStatus?.subscription_connected ? 'No models available' : 'Connect to choose a model'}</option>{/if}
             {#each subscriptionModels as model (model.id)}<option value={model.id}>{model.name} ({model.id})</option>{/each}
           </select>
         {:else}
@@ -531,12 +575,9 @@
         {/if}
       </div>
       {#if llmMode === 'subscription'}
-        {#if modelsError}<p class="err" role="alert">{modelsError}</p>{/if}
-        {#if llmStatus?.subscription_connected}<button class="btn sm" disabled={modelsLoading || modelSaving} onclick={loadSubscriptionModels}>Refresh models</button>{/if}
-        <p class="sub">Selection saves automatically. Test and enable the model to use it for classification and research.</p>
-        {#if modelSaving}<p class="sub" role="status">Saving model selection…</p>{/if}
-        {#if modelSaveError}<p class="err" role="alert">{modelSaveError}</p><button class="btn sm" onclick={persistSubscriptionModel}>Retry saving model</button>{/if}
-        <p class="sub">Models come from your connected ChatGPT account. Test connection verifies access to the selected model.</p>
+        {#if modelsError}<p class="err subscription-model-status" role="alert">{modelsError}</p>{/if}
+        {#if modelSaving}<p class="sub subscription-model-status" role="status">Saving model selection…</p>{/if}
+        {#if modelSaveError}<p class="err subscription-model-status" role="alert">{modelSaveError}</p><button class="btn sm" onclick={persistSubscriptionModel}>Retry saving model</button>{/if}
       {:else}
       <div class="field"><label for="l-key">API key (blank for local)</label>
         <input id="l-key" class="input mono" type="password" bind:value={llm.api_key} autocomplete="off"
@@ -549,32 +590,50 @@
       {/if}
       {/if}
       {#if llmIsRemote}
-        <label class="wiz-check attn"><input type="checkbox" bind:checked={llm.egress_ack} onchange={invalidateLLMTest} />
+        <label class="wiz-check attn" class:subscription-ack={llmMode === 'subscription'}><input type="checkbox" bind:checked={llm.egress_ack} onchange={invalidateLLMTest} />
           This endpoint is not local. I acknowledge document text will leave this machine.</label>
       {/if}
 
-      {#if llmMode === 'subscription' && !llm.egress_ack}
-        <p class="sub">Check the acknowledgement above to test the model. The test sends only a synthetic sample; enabling the model allows document text to leave this machine.</p>
-      {/if}
-      <div class="field"><label for="l-confidence">Minimum model confidence to apply automatically · {Math.round(Number(llm.confidence_threshold) * 100)}%</label>
+      <div class="field model-confidence"><label for="l-confidence">Minimum model confidence to apply automatically · {Math.round(Number(llm.confidence_threshold) * 100)}%</label>
         <input id="l-confidence" class="range" type="range" min="0.5" max="0.95" step="0.05" bind:value={llm.confidence_threshold} disabled={!autoApply} oninput={invalidateLLMTest} /></div>
-      <div class="toolbar connection-actions">
-        <button class="btn primary sm" disabled={busy || llmTesting || modelSaving || !!modelSaveError || (llmMode !== 'subscription' && !llm.endpoint_url) || !llm.model || (llmMode === 'subscription' && (!llmStatus?.subscription_connected || modelsLoading || !subscriptionModels.some(model => model.id === llm.model))) || (llmIsRemote && !llm.egress_ack)}
-                onclick={testClassifier}>Test connection</button>
-      </div>
-      {#if llmTestError}
-        <div class="test-result failed">
-          <b>Connection failed</b>
-          <span>{llmTestError}</span>
+      {#if llmMode === 'subscription'}
+        <div class="subscription-test" class:tested={!!llmTestResult}>
+          <div class="subscription-test-main">
+            <button class="btn sm" disabled={busy || llmTesting || modelSaving || !!modelSaveError || !llm.model || !llmStatus?.subscription_connected || modelsLoading || !subscriptionModels.some(model => model.id === llm.model) || !llm.egress_ack}
+                    onclick={testClassifier}>{llmTesting ? 'Testing…' : 'Test connection'}</button>
+            {#if llmTestError}
+              <span class="subscription-test-verdict failed" role="alert">
+                <span class="verdict-mark" aria-hidden="true">!</span>
+                Connection failed · {llmTestError}
+              </span>
+            {:else if llmTestResult}
+              <span class="subscription-test-verdict" role="status">
+                <span class="verdict-mark" aria-hidden="true">✓</span>
+                Responded in {elapsedLabel(llmTestResult.elapsed_ms)} · self-reported confidence {Math.round(Number(llmTestResult.confidence) * 100)}%
+              </span>
+            {/if}
+          </div>
+          <p>{subscriptionTestHint()}</p>
         </div>
-      {:else if llmTestResult}
-        <div class="test-result">
-          <b>Connection responded in {llmTestResult.elapsed_ms} ms</b>
-          <span>{llmTestResult.title || 'No title'} · self-reported score {Number(llmTestResult.confidence).toFixed(2)}</span>
-          {#if llmTestResult.tags?.length}<span class="sub">Tags: {llmTestResult.tags.join(', ')}</span>{/if}
+      {:else}
+        <div class="toolbar connection-actions">
+          <button class="btn primary sm" disabled={busy || llmTesting || modelSaving || !!modelSaveError || !llm.endpoint_url || !llm.model || (llmIsRemote && !llm.egress_ack)}
+                  onclick={testClassifier}>{llmTesting ? 'Testing…' : 'Test connection'}</button>
         </div>
+        {#if llmTestError}
+          <div class="test-result failed">
+            <b>Connection failed</b>
+            <span>{llmTestError}</span>
+          </div>
+        {:else if llmTestResult}
+          <div class="test-result">
+            <b>Connection responded in {llmTestResult.elapsed_ms} ms</b>
+            <span>{llmTestResult.title || 'No title'} · self-reported score {Number(llmTestResult.confidence).toFixed(2)}</span>
+            {#if llmTestResult.tags?.length}<span class="sub">Tags: {llmTestResult.tags.join(', ')}</span>{/if}
+          </div>
+        {/if}
+        <p class="wiz-p sub" style="font-size:.8rem;margin-top:12px">Sends one sample sentence, never your documents.</p>
       {/if}
-      <p class="wiz-p sub" style="font-size:.8rem;margin-top:12px">Test connection sends a sample, not your documents. A valid response checks connectivity and response format, not accuracy or permission to apply suggestions. Testing does not enable the model.</p>
 
           </div>
           <div class="mdl-foot"><span class="cls-note">Enabling starts suggestions for new documents.</span>
@@ -662,9 +721,95 @@
   .act-link { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-size: .8rem; font-weight: 600; cursor: pointer }
   .act-link:hover { text-decoration: underline }
   .mdl-dim { position: fixed; inset: 0; background: rgba(23,24,26,.4); z-index: 60 }
-  .mdl { position: fixed; left: 50%; top: 7vh; transform: translateX(-50%); width: min(620px, 94vw); background: var(--surface); border-radius: var(--r); box-shadow: 0 30px 70px rgba(20,22,28,.3); z-index: 61; max-height: 86vh; overflow: auto }
-  .mdl-head { display: flex; justify-content: space-between; align-items: center; padding: 16px 22px; border-bottom: 1px solid var(--line) } .mdl-head b { font-size: 1rem }
-  .mdl-body { padding: 16px 22px } .mdl-body .seg { margin-bottom: 14px }
-  .mdl-foot { display: flex; align-items: center; gap: 14px; padding: 14px 22px; border-top: 1px solid var(--line) }
+  .mdl { position: fixed; left: 50%; top: 7vh; transform: translateX(-50%); width: min(740px, 94vw); background: var(--surface); border-radius: var(--r); box-shadow: 0 30px 70px rgba(20,22,28,.3); z-index: 61; max-height: 86vh; overflow: auto }
+  .mdl-head { display: flex; justify-content: space-between; align-items: center; padding: 18px 26px; border-bottom: 1px solid var(--line) } .mdl-head b { font-size: 1rem }
+  .mdl-body { padding: 22px 26px } .mdl-body .seg { display: flex; width: 100%; margin-bottom: 18px }
+  .mdl-body .seg button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex: 1; }
+  .mdl-foot { display: flex; align-items: center; gap: 14px; padding: 16px 26px; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--surface-2) 55%, var(--surface)) }
   .mdl-foot .btn.primary { margin-left: auto }
+  .subscription-provider { margin-bottom: 14px; }
+  .subscription-maturity { display: flex; margin: 0 0 8px; }
+  .experimental-tag {
+    padding: 1px 6px;
+    border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--warn) 30%, var(--surface));
+    color: color-mix(in srgb, var(--warn) 82%, var(--ink));
+    font-size: .52rem;
+    font-weight: 800;
+    letter-spacing: .04em;
+    line-height: 1.2;
+    text-transform: uppercase;
+  }
+  .subscription-account {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 18px;
+    padding: 14px 16px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+    background: var(--surface-2);
+  }
+  .subscription-account-copy { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+  .subscription-account-copy > span:last-child { color: var(--muted); font-size: .8rem; line-height: 1.4; }
+  .subscription-state-title { display: flex; align-items: center; gap: 10px; color: var(--ink); font-size: .9rem; }
+  .subscription-state-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--ok); }
+  .subscription-account-actions { display: flex; align-items: center; justify-content: flex-end; }
+  .subscription-disconnect { color: var(--muted); }
+  .subscription-login {
+    display: flex;
+    grid-column: 1 / -1;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+  }
+  .subscription-login p { margin: 0; color: var(--muted); font-size: .8rem; line-height: 1.45; }
+  .subscription-account-error { grid-column: 1 / -1; margin: 0; }
+  .field-label-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  .refresh-models { color: var(--muted); }
+  .subscription-model-status { margin: -4px 0 12px; font-size: .78rem; }
+  .subscription-ack { align-items: center; margin: 4px 0 18px; color: var(--warn); font-weight: 600; }
+  .subscription-ack input { margin: 0; accent-color: var(--warn); }
+  .model-confidence { margin-top: 16px; }
+  .subscription-test {
+    margin-top: 16px;
+    padding: 14px 16px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+    background: var(--surface-2);
+  }
+  .subscription-test-main { display: flex; align-items: center; gap: 14px; min-height: 34px; }
+  .subscription-test-verdict { display: flex; align-items: center; gap: 8px; color: var(--ok); font-size: .8rem; font-weight: 650; }
+  .subscription-test-verdict.failed { color: var(--danger); }
+  .verdict-mark {
+    display: inline-grid;
+    width: 18px;
+    height: 18px;
+    flex: none;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--ok);
+    color: white;
+    font-size: .7rem;
+    line-height: 1;
+  }
+  .subscription-test-verdict.failed .verdict-mark { background: var(--danger); }
+  .subscription-test p { margin: 12px 0 0; color: var(--muted); font-size: .78rem; line-height: 1.45; }
+  .subscription-test.tested p { text-align: right; }
+  @media (max-width: 620px) {
+    .mdl { top: 3vh; max-height: 94vh; }
+    .mdl-head,
+    .mdl-body,
+    .mdl-foot { padding-right: 18px; padding-left: 18px; }
+    .subscription-account { grid-template-columns: 1fr; }
+    .subscription-account-actions { justify-content: flex-start; }
+    .subscription-login,
+    .subscription-test-main { align-items: flex-start; flex-direction: column; }
+    .subscription-test.tested p { text-align: left; }
+    .mdl-foot { flex-wrap: wrap; }
+  }
 </style>

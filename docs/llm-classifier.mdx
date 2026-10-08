@@ -59,6 +59,12 @@ choice saves automatically and survives a page refresh. Changing this preference
 does not change the active model until you test and enable it. Choose a model,
 acknowledge document egress, and use **Test connection** before enabling the model. Login alone does not enable inference.
 
+The Account subscription panel is marked **Experimental**. Connection state
+appears in one account row;
+the model catalog, document-egress acknowledgement, and confidence slider remain
+visible below it. **Test connection** reports one inline verdict, while disabled
+states explain the missing connection or acknowledgement in place.
+
 This is an instance-wide AI credential: classification and authorized archive
 research consume the connected account's subscription allowance. It does not
 change Suchi's local/OIDC user sign-in. Suchi uses the Codex device-login and

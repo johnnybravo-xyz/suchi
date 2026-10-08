@@ -328,23 +328,23 @@ forms and their required-load/retry gates. Mailbox editing delegates to
 `EmailAccounts.svelte`; both automation entry points link to the existing
 `Automations.svelte` editor.
 
-`ConfigurationSection.svelte` owns the model dialog, including the Account subscription connection form and Provider selector.
-OpenAI ChatGPT (Codex), ID `openai_chatgpt`, is the first option; mode comes from
-explicit server state rather than recognizing a provider endpoint.
-It displays only a device code and verification URL, polls through the named
-`subscriptionLoginAction(provider, action)` API, and cancels timers on disposal or provider changes.
-The named `getSubscriptionModels(provider)` operation loads the account catalog into a dropdown
-on connection, provider selection and saved-state reload. Dropdown changes use
-`saveSubscriptionModel(provider, model)` to persist a separate preference, with saving/error/retry states;
-reload restores it without activating inference. Mode switches retain separate
-endpoint, model and consent drafts for Local, Hosted endpoint and Account subscription.
-Catalog selection keeps an available current model, then the saved subscription
-model, then the first entry, including after reconnecting. Loading, empty and
-retry states gate connection testing. Generation checks reject late catalog or
-test results after provider/model changes or disposal. Tokens remain server-side.
-Connecting does not enable the model: the existing
-egress acknowledgement, connection test and save flow still apply. Verify the
-browser flow with `bun run e2e --grep 'Account subscription'`.
+`ConfigurationSection.svelte` owns the model dialog and separate drafts for
+Local, Hosted endpoint, and Account subscription. The subscription panel marks
+the feature **Experimental** above its Provider control and composes connection
+state, model catalog, egress acknowledgement, retained confidence slider, and
+connection-test verdict. Provider ID `openai_chatgpt` is explicit server state;
+the browser never infers subscription mode from an endpoint URL.
+
+Device authorization exposes only its code and verification URL, polls through
+`subscriptionLoginAction(provider, action)`, and cancels timers on disposal or
+provider changes. `getSubscriptionModels(provider)` loads the catalog after
+connection, provider selection, and saved-state reload;
+`saveSubscriptionModel(provider, model)` persists the preference without
+activating inference. Selection falls back from the current available model to
+the saved preference and then the first catalog entry. Generation checks discard
+late login, catalog, and test results. Connecting still requires explicit egress
+acknowledgement, a successful test, and **Enable model**; tokens remain
+server-side. Verify with `bun run e2e --grep 'Account subscription'`.
 
 Classification uses the same Suggestions and Archive research cards in both shells.
 The Suggestion application radio group defaults to **Apply when confident** and
