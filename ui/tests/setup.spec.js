@@ -2203,7 +2203,7 @@ test('loads the filing tree once for every archive screen', async ({ page }) => 
   await page.goto('/#/documents')
   await expect(page.getByText('No documents match.')).toBeVisible()
   await page.evaluate(() => { location.hash = '#/views' })
-  await expect(page.getByRole('heading', { name: 'Shortcuts into the archive' })).toBeVisible()
+  await expect(page.locator('.views-panel').getByRole('heading', { name: 'Views', exact: true })).toBeVisible()
   await page.evaluate(() => { location.hash = '#/automations' })
   await expect(page.getByText('Tag utility bills')).toBeVisible()
   await page.evaluate(() => { location.hash = '#/upload' })
@@ -2596,7 +2596,7 @@ test('starts view creation from the dashboard action', async ({ page }) => {
   await expect(page.getByText('No saved views yet.')).toBeVisible()
   await page.getByRole('link', { name: 'New view' }).click()
   await expect(page).toHaveURL(/#\/views\?new=1$/)
-  await expect(page.getByRole('dialog', { name: 'Create a view' })).toBeVisible()
+  await expect(page.locator('.view-builder').getByRole('heading', { name: 'New view' })).toBeVisible()
   await expect(page.getByLabel('View name')).toBeFocused()
 })
 
@@ -2607,17 +2607,21 @@ test('stores new saved views as one canonical query', async ({ page }) => {
   })
   await page.goto('/#/views')
   await page.getByRole('button', { name: 'New view' }).click()
-  const dialog = page.getByRole('dialog', { name: 'Create a view' })
+  const dialog = page.locator('.view-builder')
+  for (const filter of ['q', 'jd', 'sens', 'fieldPresence', 'dates']) {
+    await dialog.getByLabel('Add view filter').selectOption(filter)
+  }
   await dialog.getByLabel('View name').fill('Private investments')
   await dialog.getByLabel('Query').fill('"distribution advice"')
   await dialog.getByLabel('Filing category').selectOption('6')
-  await dialog.getByLabel('Sensitivity').selectOption('confidential')
+  await dialog.getByLabel('Sensitivity', { exact: true }).selectOption('confidential')
   await dialog.getByLabel('Custom field value').selectOption({ label: 'Missing value — Payment receipt' })
   await expect(dialog.getByLabel('Document date from', { exact: true })).toHaveAttribute('placeholder', 'yyyy-mm-dd')
   await dialog.getByLabel('Document date from', { exact: true }).fill('2026-01-01')
   await dialog.getByLabel('Document date from', { exact: true }).press('Tab')
   await dialog.getByLabel('Document date to', { exact: true }).fill('2026-12-31')
   await dialog.getByLabel('Document date to', { exact: true }).press('Tab')
+  await expect(dialog.getByText('Matches 0 documents', { exact: false })).toBeVisible()
 
   const saveRequest = page.waitForRequest(request => {
     return new URL(request.url()).pathname === '/api/saved_views/' && request.method() === 'POST'
@@ -2637,7 +2641,7 @@ test('reopens custom-field presence views and keeps browser navigation stable', 
   })
   await page.goto('/#/views')
   await page.getByRole('button', { name: 'Edit Invoices missing receipts' }).click()
-  const dialog = page.getByRole('dialog', { name: 'Edit view' })
+  const dialog = page.locator('.view-builder')
   await expect(dialog.getByLabel('Query')).toHaveValue('type:invoice')
   await expect(dialog.getByLabel('Custom field value')).toHaveValue(
     JSON.stringify({ name: 'Payment receipt', missing: true }),
@@ -2663,7 +2667,8 @@ test('keeps an invalid saved view open with the server error', async ({ page }) 
   })
   await page.goto('/#/views')
   await page.getByRole('button', { name: 'New view' }).click()
-  const dialog = page.getByRole('dialog', { name: 'Create a view' })
+  const dialog = page.locator('.view-builder')
+  await dialog.getByLabel('Add view filter').selectOption('q')
   await dialog.getByLabel('View name').fill('Missing tag')
   await dialog.getByLabel('Query').fill('tag:missing')
   await dialog.getByRole('button', { name: 'Save view' }).click()
@@ -2683,17 +2688,17 @@ test('edits saved views in place and keeps drafts after a rejected save', async 
   await mockAPI(page, options)
   await page.goto('/#/views')
   await page.getByRole('button', { name: 'Edit Investments', exact: true }).click()
-  const dialog = page.getByRole('dialog', { name: 'Edit view' })
+  const dialog = page.locator('.view-builder')
   await expect(dialog.getByLabel('View name')).toBeFocused()
   await expect(dialog.getByLabel('Query')).toHaveValue('jd:22')
-  await expect(dialog.getByLabel('Share this view')).toBeChecked()
+  await expect(dialog.getByRole('switch', { name: 'Share this view' })).toHaveAttribute('aria-checked', 'true')
   await dialog.getByLabel('View name').fill('Unsaved name')
   await dialog.getByLabel('Query').fill('discarded')
   await page.keyboard.press('Escape')
   await expect(page.getByRole('link', { name: /Investments/ })).toBeVisible()
   await page.getByRole('button', { name: 'New view' }).click()
-  await expect(page.getByRole('dialog').getByLabel('View name')).toHaveValue('')
-  await expect(page.getByRole('dialog').getByLabel('Query')).toHaveValue('')
+  await expect(page.locator('.view-builder').getByLabel('View name')).toHaveValue('')
+  await expect(page.locator('.view-builder').getByLabel('Query')).toHaveCount(0)
   await page.getByRole('button', { name: 'Cancel', exact: true }).click()
 
   await page.getByRole('button', { name: 'Edit Investments', exact: true }).click()
@@ -2701,7 +2706,7 @@ test('edits saved views in place and keeps drafts after a rejected save', async 
   await expect(dialog.getByLabel('Query')).toHaveValue('jd:22')
   await dialog.getByLabel('View name').fill('Private investments')
   await dialog.getByLabel('Query').fill('jd:22 -is:trash')
-  await dialog.getByLabel('Share this view').uncheck()
+  await dialog.getByRole('switch', { name: 'Share this view' }).click()
   await dialog.getByRole('button', { name: 'Save changes' }).click()
   await expect(dialog.getByRole('alert')).toHaveText(options.failureMessage)
   await expect(dialog.getByLabel('View name')).toHaveValue('Private investments')
@@ -2729,7 +2734,7 @@ test('editing legacy saved views preserves multi-value scopes and ordering witho
   })
   await page.goto('/#/views')
   await page.getByRole('button', { name: 'Edit Legacy scope' }).click()
-  const dialog = page.getByRole('dialog', { name: 'Edit view' })
+  const dialog = page.locator('.view-builder')
   await expect(dialog.getByLabel('Tag', { exact: true })).toHaveValue('2,7')
   await expect(dialog.getByLabel('Correspondent', { exact: true })).toHaveValue('3,9')
   await expect(dialog.getByLabel('Filing category')).toHaveValue('6')
@@ -2745,7 +2750,7 @@ test('editing legacy saved views preserves multi-value scopes and ordering witho
 
   await page.getByRole('button', { name: 'Edit Retained scope' }).click()
   await dialog.getByLabel('Filing category').selectOption('')
-  await dialog.getByLabel('Sensitivity').selectOption('restricted')
+  await dialog.getByLabel('Sensitivity', { exact: true }).selectOption('restricted')
   await dialog.getByRole('button', { name: 'Save changes' }).click()
   await expect(dialog).toHaveCount(0)
   await view.click()
@@ -2764,7 +2769,7 @@ test('renaming a saved view snapshot retains its exact document scope', async ({
   })
   await page.goto('/#/views')
   await page.getByRole('button', { name: 'Edit Research snapshot' }).click()
-  const dialog = page.getByRole('dialog', { name: 'Edit view' })
+  const dialog = page.locator('.view-builder')
   await expect(dialog.getByText('Exact research snapshot')).toBeVisible()
   await expect(dialog.getByLabel('Query')).toHaveCount(0)
   await dialog.getByLabel('View name').fill('Renewal evidence')
@@ -2851,9 +2856,8 @@ test('limits dashboard count requests and defers empty-view facets', async ({ pa
   await page.unrouteAll({ behavior: 'wait' })
   await mockAPI(page)
   await page.goto('/#/views')
-  const viewCount = page.locator('.views-panel .panel-count')
-  await expect(viewCount).toHaveText('0')
-  await expect(viewCount).not.toHaveClass(/chip/)
+  await expect(page.getByRole('heading', { name: 'No views yet' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Waiting to file' })).toBeVisible()
   expect(facetRequests).toEqual([])
 
   const facets = page.waitForRequest(request => new URL(request.url()).pathname === '/api/tags/')
@@ -2879,6 +2883,7 @@ test('defers automation facets until an empty workspace is edited', async ({ pag
 
 test('keeps saved views ahead of the creation form', async ({ page }) => {
   await mockAPI(page, {
+    documentsCount: 47,
     savedViews: [{
       id: 8,
       name: 'Private investments',
@@ -2890,12 +2895,12 @@ test('keeps saved views ahead of the creation form', async ({ page }) => {
   await page.goto('/#/views')
 
   await expect(page.getByRole('link', { name: /Private investments/ })).toBeVisible()
-  await expect(page.getByText('Search: “distribution advice”')).toBeVisible()
-  await expect(page.getByText('Confidential', { exact: true })).toBeVisible()
-  await expect(page.getByRole('dialog', { name: 'Create a view' })).toHaveCount(0)
+  await expect(page.getByText('distribution advice · confidential', { exact: true })).toBeVisible()
+  await expect(page.locator('.view-builder')).toHaveCount(0)
+  await expect(page.getByLabel('47 matching documents')).toBeVisible()
 
   await page.getByRole('button', { name: 'New view' }).click()
-  const dialog = page.getByRole('dialog', { name: 'Create a view' })
+  const dialog = page.locator('.view-builder')
   await expect(dialog).toBeVisible()
   await expect(dialog.getByLabel('View name')).toBeFocused()
   await expect(dialog.getByLabel('Share this view')).toBeVisible()
@@ -2903,17 +2908,36 @@ test('keeps saved views ahead of the creation form', async ({ page }) => {
   await expect(dialog).toHaveCount(0)
 })
 
+test('opens a progressive saved-view pattern from the empty state', async ({ page }) => {
+  await mockAPI(page, {
+    correspondents: [{ id: 4, name: 'HDFC Ergo' }],
+  })
+  await page.goto('/#/views')
+
+  await expect(page.getByRole('heading', { name: 'No views yet' })).toBeVisible()
+  await page.getByRole('button', { name: 'From one correspondent' }).click()
+
+  const builder = page.locator('.view-builder')
+  await expect(builder.getByRole('heading', { name: 'New view' })).toBeVisible()
+  await expect(builder.getByLabel('View name')).toHaveValue('From one correspondent')
+  await expect(builder.getByLabel('Correspondent', { exact: true })).toBeVisible()
+  await expect(builder.getByLabel('Query')).toHaveCount(0)
+  await expect(page.locator('.views-panel')).toHaveCount(0)
+  await builder.getByRole('button', { name: 'Cancel' }).click()
+  await expect(page.getByRole('heading', { name: 'No views yet' })).toBeVisible()
+})
+
 test('gates saved-view sharing for members by capability', async ({ page }) => {
   const options = { userRole: 'member', capabilities: [] }
   await mockAPI(page, options)
   await page.goto('/#/views')
   await page.getByRole('button', { name: 'New view' }).click()
-  await expect(page.getByRole('dialog').getByLabel('Share this view')).toHaveCount(0)
+  await expect(page.locator('.view-builder').getByRole('switch', { name: 'Share this view' })).toHaveCount(0)
 
   options.capabilities = ['share_views']
   await page.reload()
   await page.getByRole('button', { name: 'New view' }).click()
-  await expect(page.getByRole('dialog').getByLabel('Share this view')).toBeVisible()
+  await expect(page.locator('.view-builder').getByRole('switch', { name: 'Share this view' })).toBeVisible()
 })
 
 test('shows shared views without offering to change another users view', async ({ page }) => {
@@ -4790,9 +4814,9 @@ test('keeps search separate from scoped archive research and saves exact sources
   await resumedRibbon.click()
   await page.getByRole('link', { name: /Save retrieved documents as a view/ }).click()
   await expect(page).toHaveURL(/#\/views\?new=1&ids=17$/)
-  await expect(page.getByRole('dialog', { name: 'Create a view' })).toBeVisible()
+  await expect(page.locator('.view-builder').getByRole('heading', { name: 'New view' })).toBeVisible()
   await expect(page.getByText('Exact research snapshot')).toBeVisible()
-  await page.getByRole('button', { name: 'Close create view' }).click()
+  await page.locator('.view-builder').getByRole('button', { name: 'Cancel' }).click()
   await expect(page).toHaveURL(/#\/views$/)
   await expect(page.getByRole('button', { name: 'Return to archive research' })).toBeVisible()
 
@@ -4800,8 +4824,8 @@ test('keeps search separate from scoped archive research and saves exact sources
   await page.getByRole('button', { name: 'Return to archive research' }).click()
   await page.getByRole('link', { name: /Save retrieved documents as a view/ }).click()
   await expect(page).toHaveURL(/#\/views\?new=1&ids=17$/)
-  await expect(page.getByRole('dialog', { name: 'Create a view' })).toBeVisible()
-  await page.getByRole('button', { name: 'Close create view' }).click()
+  await expect(page.locator('.view-builder').getByRole('heading', { name: 'New view' })).toBeVisible()
+  await page.locator('.view-builder').getByRole('button', { name: 'Cancel' }).click()
   await expect(page).toHaveURL(/#\/views$/)
 
   await page.goto('/#/dashboard')

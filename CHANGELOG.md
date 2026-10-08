@@ -84,6 +84,12 @@ Notable user-visible changes to Suchi are recorded here.
   added progressively, document-model questions stay optional, and rules can be
   reordered by drag handle or keyboard.
 
+- Redesign **Views** with the same compact list and focused builder grammar as
+  Automations. Rows now show plain-language filters, live document counts and
+  sharing state; empty archives offer starter patterns, and filters appear only
+  when added. Both screens now use shared workspace, row, empty-state and
+  builder-section components.
+
 - Generate, verify, and embed the web application during production builds
   instead of storing compiled frontend bundles in the source tree.
 

@@ -5,6 +5,10 @@
            adminListUsers, systemMembers, automationsSchema } from '../lib/api.js'
   import { systems } from '../lib/systems.svelte.js'
   import Icon from '../lib/Icon.svelte'
+  import RuleWorkspace from '../lib/RuleWorkspace.svelte'
+  import RuleRow from '../lib/RuleRow.svelte'
+  import RuleEmpty from '../lib/RuleEmpty.svelte'
+  import RuleSection from '../lib/RuleSection.svelte'
 
   let { notify, readOnly = false, jdCategories = [] } = $props()
   let items = $state([])
@@ -43,6 +47,11 @@
     { kind: 'content', key: 'filter_content_matching', label: 'Content', operator: 'matches', placeholder: 'account number' },
     { kind: 'tag', key: 'filter_has_tag', label: 'Tag', operator: 'is', type: 'tag' },
     { kind: 'correspondent', key: 'filter_has_correspondent', label: 'Correspondent', operator: 'is', type: 'correspondent' },
+  ]
+  const AUTOMATION_PATTERNS = [
+    { value: 'correspondent', label: 'Tag by correspondent' },
+    { value: 'title-route', label: 'Route by title' },
+    { value: 'dated-title', label: 'Title scans by date' },
   ]
   automationsSchema().then(sc => {
     if (sc?.triggers?.length) TRIGGER_TYPES = sc.triggers.map(t => ({ code: t.code, label: t.name || t.type }))
@@ -492,69 +501,68 @@
 </script>
 
 {#snippet automationRow(a, sortable)}
-  <div class="automation-row" class:disabled={!a.enabled} id={`automation-${a.id}`}
-       role="listitem"
-       ondragover={(event) => { if (sortable && !readOnly) event.preventDefault() }}
-       ondrop={(event) => { if (sortable && !readOnly) dropAutomation(event, a.id) }}>
-    {#if sortable && !readOnly}
-      <button class="drag-handle" type="button" draggable="true"
-              disabled={reorderID !== null}
-              aria-label={`Move ${a.name || `automation ${a.id}`}`}
-              title="Drag to reorder; use arrow keys for precise movement"
-              ondragstart={(event) => startDrag(event, a.id)}
-              ondragend={() => (draggedID = null)}
-              onkeydown={(event) => {
-                if (event.key === 'ArrowUp') {
-                  event.preventDefault()
-                  moveAutomation(a.id, -1)
-                } else if (event.key === 'ArrowDown') {
-                  event.preventDefault()
-                  moveAutomation(a.id, 1)
-                }
-              }}>
-        <span aria-hidden="true">⠿</span>
-      </button>
-    {:else}
-      <span class="row-indent" aria-hidden="true"></span>
-    {/if}
-    <div class="rule-copy">
-      <div class="rule-title">
-        <strong>{a.name || `Automation #${a.id}`}</strong>
-        {#if a.preset_slug}<span class="owner-pill">{a.preset_slug} filing tree</span>{/if}
-      </div>
-      <div class="rule-sentence">{summary(a)}</div>
-    </div>
-    <div class="rule-controls">
+  <RuleRow class="automation-row"
+           id={`automation-${a.id}`}
+           title={a.name || `Automation #${a.id}`}
+           summary={summary(a)}
+           disabled={!a.enabled}
+           actionText={readOnly ? (peekID === a.id ? 'Hide JSON' : 'View JSON') : 'Edit'}
+           actionLabel={readOnly ? (peekID === a.id ? 'Hide JSON' : 'View JSON') : `Edit ${a.name || `automation ${a.id}`}`}
+           detailText={readOnly && peekID === a.id ? JSON.stringify(a, null, 2) : ''}
+           onaction={() => readOnly ? (peekID = peekID === a.id ? null : a.id) : openEditor(a)}
+           ondragover={(event) => { if (sortable && !readOnly) event.preventDefault() }}
+           ondrop={(event) => { if (sortable && !readOnly) dropAutomation(event, a.id) }}>
+    {#snippet leading()}
+      {#if sortable && !readOnly}
+        <button class="drag-handle" type="button" draggable="true"
+                disabled={reorderID !== null}
+                aria-label={`Move ${a.name || `automation ${a.id}`}`}
+                title="Drag to reorder; use arrow keys for precise movement"
+                ondragstart={(event) => startDrag(event, a.id)}
+                ondragend={() => (draggedID = null)}
+                onkeydown={(event) => {
+                  if (event.key === 'ArrowUp') {
+                    event.preventDefault()
+                    moveAutomation(a.id, -1)
+                  } else if (event.key === 'ArrowDown') {
+                    event.preventDefault()
+                    moveAutomation(a.id, 1)
+                  }
+                }}>
+          <span aria-hidden="true">⠿</span>
+        </button>
+      {:else}
+        <span class="row-indent" aria-hidden="true"></span>
+      {/if}
+    {/snippet}
+    {#snippet titleMeta()}
+      {#if a.preset_slug}<span class="owner-pill">{a.preset_slug} filing tree</span>{/if}
+    {/snippet}
+    {#snippet trailing()}
       {#if readOnly}
         <span class="pill" class:ok={a.enabled} class:warn={!a.enabled}>{a.enabled ? 'enabled' : 'disabled'}</span>
-        <button class="text-action" onclick={() => (peekID = peekID === a.id ? null : a.id)}>
-          {peekID === a.id ? 'Hide JSON' : 'View JSON'}
-        </button>
       {:else}
         <button type="button" class="switch" role="switch" aria-checked={a.enabled}
                 aria-label={`${a.name || `Automation ${a.id}`} enabled`}
                 disabled={toggleID !== null}
                 onclick={() => toggle(a)}></button>
-        <button class="text-action edit-action" onclick={() => openEditor(a)}>Edit</button>
       {/if}
-    </div>
-    {#if readOnly && peekID === a.id}
-      <pre class="spec">{JSON.stringify(a, null, 2)}</pre>
-    {/if}
-  </div>
+    {/snippet}
+  </RuleRow>
 {/snippet}
 
 <div class="automations-page">
   {#if err}<div class="err page-error">{err}</div>{/if}
 
   {#if editing !== null}
-    <section class="automation-builder" aria-labelledby="automation-editor-heading">
-      <header class="builder-header">
-        <h2 id="automation-editor-heading">{editing.id ? 'Edit automation' : 'New automation'}</h2>
+    <RuleWorkspace class="automation-builder"
+                   title={editing.id ? 'Edit automation' : 'New automation'}
+                   headingId="automation-editor-heading">
+      {#snippet actions()}
         <button class="text-action editor-mode" onclick={() => switchMode(mode === 'builder' ? 'json' : 'builder')}>
           {mode === 'builder' ? 'Edit as JSON' : 'Back to builder'}
         </button>
-      </header>
+      {/snippet}
 
       {#if draftErr}<div class="err editor-error">{draftErr}</div>{/if}
       {#if facetsError}
@@ -593,8 +601,7 @@
                  bind:value={editing.name} />
         </div>
 
-        <section class="builder-section trigger-section" aria-labelledby="when-heading">
-          <h3 id="when-heading">When</h3>
+        <RuleSection class="builder-section trigger-section" title="When" headingId="when-heading">
           {#each editing.triggers as trigger, triggerIndex (triggerIndex)}
             <div class="trigger-block">
               <div class="sentence-row trigger-row">
@@ -669,9 +676,9 @@
           <button class="inline-add" type="button" onclick={addTrigger}>
             <span aria-hidden="true">+</span> Add another trigger
           </button>
-        </section>
+        </RuleSection>
 
-        <section class="builder-section model-section" aria-labelledby="ask-heading">
+        <RuleSection class="builder-section model-section" tone="quiet">
           <div class="model-heading">
             <button type="button" class="switch" role="switch" aria-checked={!!editing.ask}
                     aria-label="Ask the document model"
@@ -730,10 +737,9 @@
               </div>
             {/if}
           {/if}
-        </section>
+        </RuleSection>
 
-        <section class="builder-section action-section" aria-labelledby="then-heading">
-          <h3 id="then-heading">Then</h3>
+        <RuleSection class="builder-section action-section" title="Then" headingId="then-heading">
           {#each editing.actions as action, actionIndex (actionIndex)}
             <div class="sentence-row action-row">
               {#if actionIndex > 0}<span class="conjunction">then</span>{/if}
@@ -879,10 +885,10 @@
           <button class="inline-add" type="button" onclick={addAction}>
             <span aria-hidden="true">+</span> Add an action
           </button>
-        </section>
+        </RuleSection>
       {/if}
 
-      <footer class="builder-footer">
+      {#snippet footer()}
         <div class="footer-note">
           {#if editing.id && !editing.preset_slug}
             <button class="delete-action" type="button" onclick={() => remove(editing)}>Delete automation</button>
@@ -896,24 +902,21 @@
             {saving ? 'Saving…' : 'Save automation'}
           </button>
         </div>
-      </footer>
-    </section>
+      {/snippet}
+    </RuleWorkspace>
   {:else}
-    <section class="automations-card" aria-labelledby="automations-heading">
-      <header class="list-header">
-        <div class="list-title">
-          <h2 id="automations-heading">Automations</h2>
-          <p>Rules that tag, title and route documents as they arrive.</p>
-        </div>
-        <div class="list-actions">
-          {#if !loading && userItems.length > 1}<span>Run top to bottom</span>{/if}
-          {#if !readOnly}
-            <button class="btn primary new-automation" onclick={() => openEditor(null)}>
-              <Icon name="plus" size={15} /> New automation
-            </button>
-          {/if}
-        </div>
-      </header>
+    <RuleWorkspace class="automations-card"
+                   title="Automations"
+                   description="Rules that tag, title and route documents as they arrive."
+                   headingId="automations-heading">
+      {#snippet actions()}
+        {#if !loading && userItems.length > 1}<span class="list-order">Run top to bottom</span>{/if}
+        {#if !readOnly}
+          <button class="btn primary new-automation" onclick={() => openEditor(null)}>
+            <Icon name="plus" size={15} /> New automation
+          </button>
+        {/if}
+      {/snippet}
 
       {#if loading}
         <div class="automation-list" role="list" aria-label="Loading automations">
@@ -928,19 +931,13 @@
           {/each}
         </div>
       {:else}
-        <div class="automation-empty">
-          <h3>No automations yet</h3>
-          <p>{readOnly ? 'An administrator can create filing and metadata rules.' : 'The first one takes about a minute. Start from a pattern:'}</p>
-          {#if !readOnly}
-            <div class="starter-patterns">
-              <button class="pattern-button" onclick={() => openTemplate('correspondent')}>Tag by correspondent</button>
-              <button class="pattern-button" onclick={() => openTemplate('title-route')}>Route by title</button>
-              <button class="pattern-button" onclick={() => openTemplate('dated-title')}>Title scans by date</button>
-            </div>
-          {/if}
-        </div>
+        <RuleEmpty class="automation-empty"
+                   title="No automations yet"
+                   description={readOnly ? 'An administrator can create filing and metadata rules.' : 'The first one takes about a minute. Start from a pattern:'}
+                   patterns={readOnly ? [] : AUTOMATION_PATTERNS}
+                   onselect={openTemplate} />
       {/if}
-    </section>
+    </RuleWorkspace>
 
     {#if !loading && builtInItems.length}
       <section class="builtins">
@@ -972,72 +969,24 @@
     margin: 0 auto;
   }
   .page-error { margin-bottom: 12px; }
-  .automations-card,
-  .automation-builder,
   .builtins {
     overflow: hidden;
     border: 1px solid var(--line);
     border-radius: 12px;
     background: var(--surface);
-    box-shadow: 0 12px 32px color-mix(in srgb, var(--ink) 5%, transparent);
   }
-  .list-header,
-  .builder-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 24px;
-    min-height: 68px;
-    padding: 14px 20px;
-    border-bottom: 1px solid var(--line);
-  }
-  .list-title {
-    display: flex;
-    align-items: baseline;
-    gap: 10px;
-    min-width: 0;
-  }
-  .list-title h2,
-  .builder-header h2 {
-    margin: 0;
-    font-size: 1rem;
-    line-height: 1.3;
-  }
-  .list-title p {
-    margin: 0;
-    overflow: hidden;
-    color: var(--muted);
-    font-size: .82rem;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .list-actions,
-  .rule-controls,
   .footer-actions {
     display: flex;
     align-items: center;
     gap: 12px;
     flex: none;
   }
-  .list-actions > span {
+  .list-order {
     color: var(--muted);
     font-size: .74rem;
   }
   .new-automation { padding: 9px 15px; }
   .automation-list { background: var(--surface); }
-  .automation-row {
-    display: grid;
-    grid-template-columns: 24px minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 10px;
-    min-height: 68px;
-    padding: 10px 18px;
-    border-bottom: 1px solid var(--line);
-    transition: background .12s ease;
-  }
-  .automation-row:last-child { border-bottom: 0; }
-  .automation-row:hover { background: var(--surface-2); }
-  .automation-row.disabled .rule-copy { opacity: .55; }
   .drag-handle {
     width: 24px;
     height: 34px;
@@ -1054,19 +1003,6 @@
   .drag-handle:focus-visible { color: var(--accent); }
   .drag-handle:disabled { cursor: wait; opacity: .45; }
   .row-indent { width: 24px; }
-  .rule-copy { min-width: 0; }
-  .rule-title {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-width: 0;
-    font-size: .84rem;
-  }
-  .rule-title strong {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
   .owner-pill,
   .count-pill {
     padding: 2px 7px;
@@ -1075,16 +1011,6 @@
     color: var(--accent);
     font-size: .65rem;
     font-weight: 650;
-    white-space: nowrap;
-  }
-  .rule-sentence {
-    margin-top: 3px;
-    overflow: hidden;
-    color: var(--muted);
-    font-family: "Spline Sans Mono", ui-monospace, monospace;
-    font-size: .7rem;
-    line-height: 1.4;
-    text-overflow: ellipsis;
     white-space: nowrap;
   }
   .text-action {
@@ -1097,34 +1023,6 @@
     cursor: pointer;
   }
   .text-action:hover { color: var(--accent); }
-  .edit-action { min-width: 30px; }
-  .automation-empty {
-    display: grid;
-    justify-items: center;
-    gap: 6px;
-    padding: 54px 22px 58px;
-    text-align: center;
-  }
-  .automation-empty h3 { margin: 0; font-size: .95rem; }
-  .automation-empty p { margin: 0; color: var(--muted); font-size: .8rem; }
-  .starter-patterns {
-    display: flex;
-    justify-content: center;
-    gap: 8px;
-    margin-top: 10px;
-    flex-wrap: wrap;
-  }
-  .pattern-button {
-    padding: 7px 12px;
-    border: 1px solid var(--line);
-    border-radius: 7px;
-    background: var(--surface);
-    color: var(--ink);
-    font-size: .75rem;
-    font-weight: 600;
-    cursor: pointer;
-  }
-  .pattern-button:hover { border-color: var(--accent); color: var(--accent); }
   .loading-row {
     display: grid;
     grid-template-columns: 24px minmax(0, 1fr);
@@ -1133,7 +1031,6 @@
     border-bottom: 1px solid var(--line);
   }
   .loading-row .skel { width: 48%; }
-  .builder-header { min-height: 64px; }
   .editor-mode { color: var(--muted); }
   .editor-error { margin: 14px 18px 0; }
   .facet-error {
@@ -1165,19 +1062,6 @@
     border-bottom: 1px solid var(--line);
   }
   .builder-name .input { width: min(100%, 360px); max-width: none; }
-  .builder-section {
-    padding: 18px 20px;
-    border-bottom: 1px solid var(--line);
-  }
-  .builder-section > h3 {
-    margin: 0 0 12px;
-    color: var(--muted);
-    font-family: "Spline Sans Mono", ui-monospace, monospace;
-    font-size: .58rem;
-    font-weight: 700;
-    letter-spacing: .09em;
-    text-transform: uppercase;
-  }
   .trigger-block + .trigger-block {
     margin-top: 14px;
     padding-top: 14px;
@@ -1268,7 +1152,6 @@
     font-weight: 650;
     cursor: pointer;
   }
-  .model-section { background: color-mix(in srgb, var(--surface-2) 55%, var(--surface)); }
   .model-heading {
     display: flex;
     align-items: flex-start;
@@ -1305,7 +1188,6 @@
   .choice-row { display: flex; align-items: center; gap: 5px; }
   .choice-row .input { flex: 1; max-width: none; }
   .choice-editor .inline-add { margin: 2px 0 0; justify-self: start; }
-  .action-section { padding-bottom: 22px; }
   .action-row { min-height: 38px; }
   .action-row:first-of-type { padding-left: 36px; }
   .branch-select { min-width: 110px; }
@@ -1357,16 +1239,6 @@
     font-size: .7rem;
   }
   .field-help { color: var(--muted); font-size: .72rem; }
-  .builder-footer {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 18px;
-    min-height: 68px;
-    padding: 13px 20px;
-    color: var(--muted);
-    font-size: .72rem;
-  }
   .footer-note { min-width: 0; }
   .delete-action {
     padding: 4px 0;
@@ -1397,38 +1269,7 @@
   .builtins-toggle .grow span { color: var(--muted); font-size: .72rem; }
   .builtins-toggle .chev { display: flex; transition: transform .15s; }
   .builtins-toggle .chev.open { transform: rotate(90deg); }
-  .builtins-list .automation-row { background: var(--surface); }
-  .spec {
-    grid-column: 2 / -1;
-    max-height: 320px;
-    margin: 7px 0 2px;
-    padding: 12px;
-    overflow: auto;
-    border: 1px solid var(--line);
-    border-radius: 7px;
-    background: var(--surface-2);
-    font-size: .72rem;
-    white-space: pre-wrap;
-  }
   @media (max-width: 760px) {
-    .list-header {
-      align-items: flex-start;
-      flex-direction: column;
-      gap: 12px;
-    }
-    .list-title { display: grid; gap: 3px; }
-    .list-title p { white-space: normal; }
-    .list-actions { width: 100%; justify-content: space-between; }
-    .automation-row {
-      grid-template-columns: 22px minmax(0, 1fr);
-      gap: 8px;
-      padding: 12px 14px;
-    }
-    .rule-controls {
-      grid-column: 2;
-      justify-content: flex-end;
-    }
-    .rule-sentence { white-space: normal; }
     .question-grid { grid-template-columns: 1fr; }
     .sentence-row { align-items: flex-start; }
     .conjunction { padding-top: 9px; }
@@ -1439,14 +1280,8 @@
     .tag-picker { max-width: none; }
   }
   @media (max-width: 520px) {
-    .automations-card,
-    .automation-builder,
     .builtins { border-radius: 9px; }
-    .builder-header,
-    .builder-name,
-    .builder-section,
-    .builder-footer { padding-left: 14px; padding-right: 14px; }
-    .builder-footer { align-items: stretch; flex-direction: column; }
+    .builder-name { padding-left: 14px; padding-right: 14px; }
     .footer-actions { justify-content: flex-end; }
     .question-grid,
     .model-note,
@@ -1471,6 +1306,5 @@
     .filter-row .icon-button,
     .action-row .icon-button { grid-column: 3; grid-row: 1; }
     .action-row:first-of-type { padding-left: 0; }
-    .rule-title { align-items: flex-start; flex-direction: column; gap: 3px; }
   }
 </style>

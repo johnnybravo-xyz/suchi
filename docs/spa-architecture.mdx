@@ -227,13 +227,18 @@ document URLs. It rejects another origin before any lookup. Target search,
 PUT/DELETE, and post-mutation detail/backlink refresh remain screen-owned; the
 browser never infers visibility, currentness, or reciprocal links.
 
-`Views.svelte` exposes one custom-field presence selector. Helpers in
-`lib/documentFilters.js` extract one generated `has-field:` token when reopening
-the editor and serialize it back into the canonical rich query. The saved
-contract remains `filters.q`, so summary chips, Documents navigation, copied
-hashes, and Back/Forward need no second state channel. Verify the combined
-surface with `cd ui && bun run e2e tests/document-versions-references.spec.js`
-and the custom-field presence cases in `tests/setup.spec.js`.
+`Views.svelte` keeps a flat draft plus a separate list of currently visible
+builder filters; starter patterns and **Add a filter** change only those ordinary
+draft values. Helpers in `lib/documentFilters.js` extract one generated
+`has-field:` token when reopening the editor and serialize it back into the
+canonical rich query. The saved contract remains `filters.q`, so Documents
+navigation, copied hashes, and Back/Forward need no second state channel.
+List counts use the existing visibility-scoped document list endpoint with four
+bounded workers; the editor debounces the same endpoint for its live match
+count. Count failures stay local and never hide or broaden a saved view. Verify
+the combined surface with `cd ui && bun run e2e
+tests/document-versions-references.spec.js` and the saved-view cases in
+`tests/setup.spec.js`.
 
 Above the single-column breakpoint, `DocumentDetail.svelte` consumes the
 available content height, fixes the preview and detail sidebar to the same
@@ -379,9 +384,13 @@ one question, closed answer choices, and per-action answer branches; enabling
 that branch clears transient trigger filters and limits action/custom-field
 pickers to the advertised safe subset. The browser does not infer model
 authority, action mappings, limits, or destination validity. IDs remain an
-internal persisted action contract. The centered list and editor follow the
-same page hierarchy as `Views.svelte` without introducing a shared screen
-abstraction.
+internal persisted action contract.
+
+`RuleWorkspace.svelte`, `RuleRow.svelte`, `RuleEmpty.svelte`, and
+`RuleSection.svelte` own the shared list/editor shell, compact sentence row,
+starter-pattern state, and progressive builder sections used by Views and
+Automations. They own layout and responsive behavior only; each route retains
+its API calls, draft semantics, validation, permissions, and navigation.
 
 `UserCreateForm.svelte` owns user creation in People and submits no hidden member
 capabilities for admins. Self-disable checks use

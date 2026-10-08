@@ -227,21 +227,28 @@ removes incoming links to that exact row. Restore keeps the document open;
 
 ## Saved views
 
-**New view** opens **Create a view** with optional Query, category, tag,
-correspondent, one **Custom field value** presence choice, sensitivity and date
-filters. The custom-field choice can require **Has value** or **Missing value**
-and serializes to the same `has-field:` query used by Search/Documents. Empty
-choices mean all values. Date ranges use `yyyy-mm-dd`. Select a view's name to
-open its documents; **Edit** is available only for your views. **Save changes**
-updates in place; **Cancel**/Escape discards the draft.
+**Views** opens as a compact list. Each row shows the saved name, one
+plain-language filter sentence, its current document count, and **Shared** when
+applicable. Select the row to open its documents; **Edit** is available only for
+your views. An empty list offers **Waiting to file**, **This year’s taxes**, and
+**From one correspondent** starter patterns.
 
-Rich filters appear in **Query** for editing/removal. The custom-field presence
-token reopens in its dedicated control. Older flat filters retain selections,
-multi-value scopes and ordering; exact research snapshots can be renamed/shared
-without changing their document set. New views store a normalized rich query;
-untouched legacy fields survive edits. Validation failures remain in the open
-form. Choices load when needed, not for an empty view list. See
-[Saved-view query rules](/query-language#saved-views).
+**New view**, a starter pattern, or **Edit** replaces the list with a focused
+builder. Filters appear only after **Add a filter** and cover search text,
+category, tag, correspondent, one **Custom field value** presence choice,
+sensitivity, and document dates. The custom-field choice can require **Has
+value** or **Missing value** and serializes to the same `has-field:` query used
+by Search/Documents. Empty choices mean all values; date ranges use
+`yyyy-mm-dd`. The footer reports the current matching-document count.
+**Save changes** updates in place; **Cancel**/Escape discards the draft.
+
+Rich filters reopen as search text for editing/removal, except the custom-field
+presence token, which reopens in its dedicated control. Older flat filters
+retain selections, multi-value scopes and ordering; exact research snapshots
+can be renamed/shared without changing their document set. New views store a
+normalized rich query; untouched legacy fields survive edits. Validation
+failures remain in the builder. Choices load when needed, not for an empty view
+list. See [Saved-view query rules](/query-language#saved-views).
 
 Admins and members with **Share saved views** can select **Share this view**.
 Shared views appear within their system and still obey document ACLs. Only the
