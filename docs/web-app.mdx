@@ -334,12 +334,18 @@ backup](/backup-restore).
 The editor shows supported variables and a server-rendered sample before save.
 Saved rows can be edited or deleted; deleting returns assigned documents to the
 default filing-tree projection. Both **Automations** entry points open the same
-main editor. Folder-layout, eligible-owner, and custom-field actions use named
-selectors rather than asking for numeric IDs; custom-field values use the chosen
-field's real type. **Ask the classifier** adds one bounded Yes/No or
-multiple-choice question and a branch selector to each supported action. It
-uses the existing classifier call and automatic/review-first setting. Custom
-rules appear first and filing-tree rules stay in the collapsed **Built-in
+list-first workspace. Compact rows summarize each rule as a sentence, expose its
+enabled state, and run from top to bottom; drag the handle or focus it and use
+the arrow keys to reorder custom rules. An empty list offers starter patterns,
+while **New automation** or **Edit** replaces the list with a focused builder.
+The builder adds trigger filters progressively, keeps the optional document-model
+question separate, and retains **Edit as JSON** for full contract access.
+Folder-layout, eligible-owner, and custom-field actions use named selectors
+rather than asking for numeric IDs; custom-field values use the chosen field's
+real type. A document-model question can use one bounded Yes/No or
+multiple-choice answer and a branch selector on each supported action. It uses
+the existing classifier call and automatic/review-first setting. Custom rules
+appear first and filing-tree rules stay in the collapsed **Built-in
 automations** section below them.
 
 After introduction, **Filing system · CODE** edits a nonblank name of at most 80

@@ -364,16 +364,24 @@ and taxonomy files. `ArchiveSettings.svelte` places
 `FolderLayoutsSettings.svelte` first under Advanced; its editor calls the server
 preview rather than duplicating template semantics in JavaScript.
 `Automations.svelte` retains action parameter schemas, reuses the existing
-metadata, user-directory, and filing-system-membership APIs, and presents
-named/type-aware controls for folder layouts, eligible owners, and custom
-fields. It also consumes the server's bounded ask capabilities to edit one
-question, closed answer choices, and per-action answer branches; enabling that
-branch clears transient trigger filters and limits action/custom-field pickers
-to the advertised safe subset. The browser does not infer model authority,
-action mappings, limits, or destination validity. IDs remain an internal
-persisted action contract. Its centered custom-rule panel and collapsed
-filing-tree rules follow the same page hierarchy as `Views.svelte` without
-introducing a shared screen abstraction.
+metadata, user-directory, and filing-system-membership APIs, and presents a
+list-first workspace with a mutually exclusive local editor state. Compact rows
+derive one-line trigger/action summaries from the loaded schema and facets;
+custom rules PATCH their numeric order after drag or keyboard movement, while
+filing-tree rules remain read-only in a collapsed section. Empty state patterns
+seed ordinary drafts rather than introducing a separate persistence contract.
+The sentence builder reveals only filters explicitly added to each trigger and
+keeps JSON editing as the complete fallback.
+
+Named/type-aware controls cover folder layouts, eligible owners, and custom
+fields. The builder also consumes the server's bounded ask capabilities to edit
+one question, closed answer choices, and per-action answer branches; enabling
+that branch clears transient trigger filters and limits action/custom-field
+pickers to the advertised safe subset. The browser does not infer model
+authority, action mappings, limits, or destination validity. IDs remain an
+internal persisted action contract. The centered list and editor follow the
+same page hierarchy as `Views.svelte` without introducing a shared screen
+abstraction.
 
 `UserCreateForm.svelte` owns user creation in People and submits no hidden member
 capabilities for admins. Self-disable checks use

@@ -1894,12 +1894,11 @@ test('centers custom automations ahead of collapsed filing-tree rules', async ({
   await page.goto('/#/automations')
 
   await expect(page.getByRole('button', { name: 'New automation' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Your automations' })).toBeVisible()
+  await expect(page.locator('.automations-card').getByRole('heading', { name: 'Automations', exact: true })).toBeVisible()
   await expect(page.getByText('Route tax records', { exact: true })).toBeVisible()
   await expect(page.locator('#automation-19')).toHaveCount(0)
 
-  const customPanel = page.locator('.automations-panel')
-  await expect(customPanel.locator('.panel-head .chip')).toHaveText('1')
+  const customPanel = page.locator('.automations-card')
   const builtIns = page.locator('.builtins')
   await expect.poll(async () => {
     const [customBox, builtInBox] = await Promise.all([customPanel.boundingBox(), builtIns.boundingBox()])
@@ -1907,7 +1906,52 @@ test('centers custom automations ahead of collapsed filing-tree rules', async ({
   }).toBe(true)
 
   await page.getByRole('button', { name: /Built-in automations/ }).click()
-  await expect(page.locator('#automation-19 .title').filter({ hasText: 'Built-in utility filing' })).toBeVisible()
+  await expect(page.locator('#automation-19 .rule-title').filter({ hasText: 'Built-in utility filing' })).toBeVisible()
+})
+
+test('opens the sentence builder from a starter pattern', async ({ page }) => {
+  await mockAPI(page, {
+    automations: [],
+    correspondents: [{ id: 4, name: 'BESCOM' }],
+  })
+  await page.goto('/#/automations')
+
+  await expect(page.getByRole('heading', { name: 'No automations yet' })).toBeVisible()
+  await page.getByRole('button', { name: 'Tag by correspondent' }).click()
+
+  await expect(page.getByRole('heading', { name: 'New automation' })).toBeVisible()
+  await expect(page.getByLabel('Automation name')).toHaveValue('Tag by correspondent')
+  await expect(page.getByLabel('Correspondent filter 1')).toBeVisible()
+  await expect(page.getByLabel('Action 1', { exact: true })).toHaveValue('assign_tags')
+  await expect(page.getByRole('switch', { name: 'Ask the document model' })).toHaveAttribute('aria-checked', 'false')
+  await expect(page.locator('.automations-card')).toHaveCount(0)
+  await page.getByRole('button', { name: 'Cancel' }).click()
+  await expect(page.getByRole('heading', { name: 'No automations yet' })).toBeVisible()
+})
+
+test('reorders custom automations with the keyboard drag handle', async ({ page }) => {
+  const orderPatches = []
+  page.on('request', request => {
+    const path = new URL(request.url()).pathname
+    if (request.method() === 'PATCH' && /^\/api\/automations\/\d+$/.test(path)) {
+      orderPatches.push({ path, body: request.postDataJSON() })
+    }
+  })
+  await mockAPI(page, {
+    automations: [
+      { id: 18, name: 'First rule', enabled: true, order: 0, triggers: [{ type: 2 }], actions: [{ type: 'assign_tags', params: { tag_ids: [] } }] },
+      { id: 20, name: 'Second rule', enabled: true, order: 1, triggers: [{ type: 2 }], actions: [{ type: 'assign_tags', params: { tag_ids: [] } }] },
+    ],
+  })
+  await page.goto('/#/automations')
+
+  await page.getByRole('button', { name: 'Move Second rule' }).press('ArrowUp')
+  const titles = page.locator('.automations-card .automation-row .rule-title strong')
+  await expect(titles.nth(0)).toHaveText('Second rule')
+  await expect.poll(() => orderPatches).toEqual([
+    { path: '/api/automations/20', body: { order: 0 } },
+    { path: '/api/automations/18', body: { order: 1 } },
+  ])
 })
 
 test('uses named folder-layout and typed custom-field automation controls', async ({ page }) => {
@@ -1935,9 +1979,9 @@ test('uses named folder-layout and typed custom-field automation controls', asyn
   await page.goto('/#/automations')
 
   const row = page.locator('#automation-19')
-  await expect(row.getByText('Assign folder layout → Bills by year', { exact: true })).toBeVisible()
-  await expect(row.getByText('Set Review status → Needs review', { exact: true })).toBeVisible()
-  await expect(row.getByText('Set owner → Member · member@example.test', { exact: true })).toBeVisible()
+  await expect(row.locator('.rule-sentence')).toContainText('use folder layout Bills by year')
+  await expect(row.locator('.rule-sentence')).toContainText('set Review status to Needs review')
+  await expect(row.locator('.rule-sentence')).toContainText('set owner Member · member@example.test')
   await row.getByRole('button', { name: 'Edit' }).click()
 
   await expect(page.getByRole('combobox', { name: 'Folder layout' })).toHaveValue('4')
@@ -1960,8 +2004,9 @@ test('authors a bounded classifier question with answer branches', async ({ page
   await page.getByRole('button', { name: 'New automation' }).click()
 
   await page.getByPlaceholder('Name, e.g. Tag utility bills').fill('Classify warranty proof')
-  await page.getByPlaceholder('filename matches (glob)').fill('*.pdf')
-  await page.getByRole('checkbox', { name: 'Ask the classifier' }).check()
+  await page.getByLabel('Add filter to trigger 1').selectOption('filename')
+  await page.getByLabel('Filename filter 1').fill('*.pdf')
+  await page.getByRole('switch', { name: 'Ask the document model' }).click()
   await page.getByLabel('Classifier question').fill('Is this valid warranty proof?')
   await page.getByLabel('Answer type').selectOption('choice')
   await page.getByLabel('Answer choice 1').fill('Warranty')
@@ -2825,9 +2870,8 @@ test('defers automation facets until an empty workspace is edited', async ({ pag
   await mockAPI(page, { automations: [] })
   await page.goto('/#/automations')
 
-  const automationCount = page.locator('.automations-panel .panel-count')
-  await expect(automationCount).toHaveText('0')
-  await expect(automationCount).not.toHaveClass(/chip/)
+  await expect(page.getByRole('heading', { name: 'No automations yet' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Tag by correspondent' })).toBeVisible()
   expect(facetRequests).toEqual([])
   await page.getByRole('button', { name: 'New automation' }).click()
   await expect.poll(() => new Set(facetRequests).size).toBe(2)

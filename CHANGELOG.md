@@ -79,6 +79,11 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Changed
 
+- Redesign **Automations** around a compact, ordered rule list and a focused
+  sentence-style editor. Empty archives now offer starter patterns, filters are
+  added progressively, document-model questions stay optional, and rules can be
+  reordered by drag handle or keyboard.
+
 - Generate, verify, and embed the web application during production builds
   instead of storing compiled frontend bundles in the source tree.
 
