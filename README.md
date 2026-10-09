@@ -29,8 +29,8 @@
 </p>
 
 Drop in a scan, an email attachment or a photo. Suchi reads it, gives it
-a useful title and files it into a numbered category tree. If it is unsure, it
-leaves the document in the Inbox for you instead of guessing. Originals are
+a useful title and files what it is sure about into a numbered category tree.
+Anything it is unsure about waits in the Inbox for you instead of being guessed. Originals are
 never modified, and the archive is also rendered as a plain folder tree you can
 browse without the app.
 
@@ -56,7 +56,7 @@ for freelancers and smaller teams.
   to the source documents.
 
 > [!NOTE]
-> Suchi is early (v0.1.0). Back up the data
+> Suchi is early (v0.2.0). Back up the data
 > directory, test a restore before relying on it, and read the
 > [database compatibility policy](docs/release-process.mdx#stable-v1-database-compatibility)
 > before upgrading.
@@ -111,7 +111,7 @@ docker run -d --name suchi --restart unless-stopped \
   -p 127.0.0.1:8000:8000 \
   -e PUBLIC_URL=http://127.0.0.1:8000 \
   -v suchi-data:/data \
-  ghcr.io/johnnybravo-xyz/suchi:v0.1.0
+  ghcr.io/johnnybravo-xyz/suchi:v0.2.0
 docker logs suchi 2>&1 | grep token_minted
 ```
 
@@ -128,15 +128,15 @@ configuration > Filing tree**. This is the only required archive setup step;
 the reminder remains until a preset, imported tree, or explicit Blank choice is
 saved.
 
-This quick start is bound to loopback and pins the v0.1.0 image. A production
+This quick start is bound to loopback and pins the v0.2.0 image. A production
 server, including one reached by the mobile app, must use HTTPS and pin the
 selected release by its published image digest.
 
 ## Images
 
-- `v0.1.0` / `latest`: Alpine. Supports all listed formats and indexes scanned
+- `v0.2.0` / `latest`: Alpine. Supports all listed formats and indexes scanned
   PDFs with Tesseract.
-- `v0.1.0-full` / `latest-full`: Debian. Adds OCRmyPDF so downloaded scanned
+- `v0.2.0-full` / `latest-full`: Debian. Adds OCRmyPDF so downloaded scanned
   PDFs can retain a searchable text layer.
 
 Both images include anydoc, DjVu, HEIC/HEIF, and Outlook MSG support. The full
@@ -145,7 +145,7 @@ types](docs/formats.mdx) for the exact routing and bare-metal dependencies.
 
 ## Development
 
-The workspace requires Go 1.27.0 or newer; `plugin-api` remains compatible
+The workspace requires Go 1.27.2 or newer; `plugin-api` remains compatible
 with Go 1.24.
 SPA and documentation development require Bun.
 
@@ -225,6 +225,10 @@ Copyright (c) 2026 Ritesh Shrivastav. Suchi is available under two licenses:
 - **Commercial license** — for embedding Suchi in a proprietary product, or for
   running a modified instance as a service without that source-offer obligation.
   Write to <contact@suchi.page>.
+
+Every feature, including OIDC, access controls, approvals and MCP, is in the
+AGPL version; no paid tier holds features back. The [CLA](CLA.md) exists so
+contributions can also be offered under the commercial license.
 
 The AGPL offer begins with Suchi's first public release. Before that release,
 its repository and container images were private development artifacts and were

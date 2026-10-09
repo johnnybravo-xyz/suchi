@@ -141,7 +141,7 @@ accepted decisions clear their deadline before a later timeout sweep can act.
 Accepting a decision or timeout increments the run revision immediately, so delayed
 entry work cannot create another task or apply an effect while advancement waits.
 
-The beta.2 upgrade preserves pending decisions only when retained entry jobs and
+Upgrading an archive created before v0.1.0 preserves pending decisions only when retained entry jobs and
 the resolved task prove their state. Initial-state timeouts can resume; later-state
 timeouts have ambiguous origins in the old implementation. Missing entry history
 or ambiguous events leave affected jobs `dead` with a recovery message, preserving

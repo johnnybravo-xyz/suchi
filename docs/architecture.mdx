@@ -377,19 +377,20 @@ files or deadlocking recovery.
 
 Pre-upgrade journal hashes may be unknown. Recovery reports and preserves a link
 to an unreferenced historical archive when ownership cannot be established.
-Restored absolute links with a known hash and the beta.1/beta.2 two-shard or
+Restored absolute links with a known hash and the pre-v0.1.0 two-shard or
 current three-shard CAS layout may be repaired. Render-only refile changes projections
 without OCR/classifier/filing reruns. [Backup and restore](/backup-restore) requires
 all of `DATA_DIR`, including credential keys, with writers stopped or an atomic
 whole-directory snapshot; a database-only copy is incomplete.
 
 The active catalog in `core/db/migrations/` contains immutable
-`0001_baseline.sql` for stable schema 1 and one current unreleased migration,
-`0002_metadata_cleanup.sql`, for `user_version = 2`. Migration 0002 converts
+`0001_baseline.sql` for stable schema 1 (v0.1.0) and the v0.2.0 migrations
+`0002_metadata_cleanup.sql` and `0003_automation_asks.sql`, for
+`user_version = 3`. Migration 0002 converts
 document types to namespaced tags and adds `documents.version_family_key`, the
 family/currentness index, the partial document-link reverse index, and the
 guarded chain backfill. The one-row `schema_lineage = 'stable-v1'` identity is
-unchanged. Frozen beta SQL and the final account-identity rebuild live separately
+unchanged. Frozen pre-v0.1.0 SQL and the final account-identity rebuild live separately
 as compatibility migrations `0002`–`0005`; the active catalog cannot discover
 them by path.
 

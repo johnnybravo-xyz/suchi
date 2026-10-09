@@ -297,7 +297,7 @@ read-only fields are not user profile settings.
   "email": "you@example.com",
   "display_name": "You (Admin)",
   "instance_host": "suchi.example.com",
-  "build_version": "v0.1.0",
+  "build_version": "v0.2.0",
   "build_revision": "1234567890ab",
   "role": "admin|member",
   "authn_by": "local-auth|oidc",
@@ -982,7 +982,7 @@ authoritative family-head check without exposing hidden revision identity.
 Upload a replacement with `previous_version_id={id}`. Uses the
 [document upload multipart, device OCR, source timestamp and idempotency rules](#post-apidocuments).
 The new row keeps the predecessor's system, owner, JD category, sensitivity,
-document type, explicit ACL grants, manual tags, correspondents, and its title.
+explicit ACL grants, manual tags (including `type:` tags), correspondents, and its title.
 It gets fresh extraction/generated state and does not copy custom-field values,
 document links, notes, the previous archive number, classifier-owned tags,
 accepted dates, or other exact-revision metadata. A conflicting requested system

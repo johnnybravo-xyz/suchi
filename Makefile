@@ -7,10 +7,11 @@ MODULES := . plugin-api hack/emlfixtures hack/bench/tools/sampler hack/bench/too
 TEST_FLAGS ?= -timeout 180s
 GO_FILES = find . \( -name .git -o -name node_modules -o -name vendor \) -prune -o -type f -name '*.go' -print0
 UI_SRC_FILES = find ui/src -type f \( -name '*.js' -o -name '*.svelte' -o -name '*.css' \) -print0
-STATICCHECK_VERSION := v0.8.0
-GOVULNCHECK_VERSION := v1.7.0
+STATICCHECK_VERSION := v0.8.1
+STATICCHECK_TOOLS_VERSION := v0.50.0
+GOVULNCHECK_VERSION := v1.8.0
 GITLEAKS_VERSION := v8.30.1
-MINT_VERSION := 4.2.874
+MINT_VERSION := 4.2.994
 GITHUB_REMOTE ?= gh
 GITHUB_REPO ?= johnnybravo-xyz/suchi
 
@@ -60,8 +61,9 @@ vet:
 lint:
 	@tool="$$(command -v staticcheck || printf '%s/bin/staticcheck' "$$(go env GOPATH)")"; \
 	  want="$(patsubst v%,%,$(STATICCHECK_VERSION))"; actual=""; \
-	  test ! -x "$$tool" || actual="$$($$tool -version 2>/dev/null || true)"; \
-	  case "$$actual" in *"($$want)") ;; *) go install honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION);; esac; \
+	  test ! -x "$$tool" || actual="$$($$tool -debug.version 2>/dev/null || true)"; \
+	  case "$$actual" in *"staticcheck $${want}"*"golang.org/x/tools@$(STATICCHECK_TOOLS_VERSION)"*) ;; \
+	    *) ( cd hack/tools/staticcheck && GOWORK=off go install honnef.co/go/tools/cmd/staticcheck );; esac; \
 	  for m in $(MODULES); do echo "=== lint $$m ==="; \
 	    ( cd "$$m" && GOWORK=off "$$tool" ./... ) || exit 1; \
 	  done

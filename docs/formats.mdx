@@ -345,7 +345,7 @@ curl -fL --output nep.traineddata \
 For the Alpine-based **standard** image, `Dockerfile.ocr` contains:
 
 ```dockerfile
-ARG SUCHI_BASE=ghcr.io/johnnybravo-xyz/suchi:v0.1.0
+ARG SUCHI_BASE=ghcr.io/johnnybravo-xyz/suchi:v0.2.0
 FROM ${SUCHI_BASE}
 USER root
 RUN apk add --no-cache tesseract-ocr-data-deu
@@ -358,7 +358,7 @@ USER 65532:65532
 For the Debian-based **full** image, the equivalent file contains:
 
 ```dockerfile
-ARG SUCHI_BASE=ghcr.io/johnnybravo-xyz/suchi:v0.1.0-full
+ARG SUCHI_BASE=ghcr.io/johnnybravo-xyz/suchi:v0.2.0-full
 FROM ${SUCHI_BASE}
 USER root
 RUN apt-get update \
@@ -486,7 +486,7 @@ handles PDF input. A `.pdf` filename alone does not prove the
 encoder worked: some installations silently write the source image format.
 Suchi explicitly requests PDF and rejects output without its signature.
 
-Beta.2 fixes the packaged encoder/policy and removes the old HEIC-to-PNG
+Suchi fixes the packaged encoder/policy and no longer uses the old HEIC-to-PNG
 workaround. Select affected photos/scans in Documents and **Rescan** to rebuild
 older missing or invalid image archives. See [Pipeline versions](/pipeline-versions)
 for controlled processing upgrades and explicit rescans from originals.

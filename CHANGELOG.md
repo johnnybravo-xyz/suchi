@@ -3,139 +3,85 @@
 Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
+
+## [0.2.0] - 2026-10-09
+
+### Upgrade notes
+
+- Document types become ordinary `type:<name>` tags. The schema upgrade
+  migrates assignments, ACLs, saved-view filters, automation filters and
+  actions, and title/storage templates. Automations whose tag-and-type AND
+  predicate cannot be represented are suspended, and pending type-change
+  reviews are cancelled.
+- The ready-made filing trees are now version 2. Existing archives keep their
+  categories until an administrator applies the tree again in
+  **Settings > Filing tree**; the preview renames in place and leaves removed
+  categories with their documents.
+- Production builds generate and embed the web application; compiled frontend
+  bundles are no longer stored in the source tree.
+
 ### Added
 
-- Add bounded **Ask the classifier** branches to Automations. Up to five
-  Yes/No or multiple-choice questions share the existing classifier call and
-  map validated, evidence-grounded answers to fixed tags, correspondents,
-  filing categories, or typed custom-field values through the existing
-  automatic/review-first policy.
-- Add linear document replacement history with current-head uploads, exact
-  historical URLs, idempotent retries, caller-relative latest discovery,
-  explicit metadata inheritance boundaries, and a badge that counts only other
-  versions.
-- Show typed custom-field values and exact named document links. **Linked
-  documents** separates editable links from paged incoming links in plain
-  language, accepts only canonical same-instance URL forms, offers administrators
-  direct link-type setup, rejects self and same-family targets, redacts hidden or
-  trashed endpoints, and removes incoming values on permanent deletion.
-- Add `version:`, `has-field:`, typed `field:`, and read-only `asn:` query
-  qualifiers across Documents, Search, saved Views, Calendar, and archive
-  research, plus a saved-view control for documents with or without a named
-  custom-field value. Imported archive-number view rules retain exact, missing,
-  greater-than, and less-than retrieval.
-- Add attributed, editable notes to Document Detail. Notes are exact-revision
-  metadata, remain read-only in Trash, enforce author/admin mutation, and are
-  accepted atomically from watched-folder sidecars.
-- Add complete typed custom-field workflows: validated select choices, protected
-  in-use definitions, type-aware Document Detail and automation controls,
-  formatted API values, atomic sidecar ingestion, and value retrieval with
-  `field:` comparisons.
-- Add **Folder layouts** under Archive configuration > Advanced, with
-  server-validated sample previews, named automation controls, transactional
-  rerenders, and compatibility guards for layouts that use read-only previous
-  archive numbers.
-- Add Account subscription mode in Classification settings, with OpenAI
-  ChatGPT (Codex) as the first provider, using device
-  login, encrypted credentials, automatic refresh and streaming Responses for
-  classification and archive research, plus an account-backed model dropdown.
-  Document egress requires consent; connection testing explains that requirement.
-
-### Fixed
-
-- `suchi import --auto-jd` no longer files into the codes of a retired starter
-  tree (tax under Investments, insurance under Taxes on preset archives). Its
-  heuristics now target the Solo and Household trees, and it refuses any other
-  tree before writing. Imports no longer create a filing tree; `--map-jd`
-  targets the tree an administrator already applied.
-- Align Automations with the centered Views workspace, use compact positive-count
-  badges and plain zero counts across both screens, keep custom rules ahead of
-  collapsed filing-tree rules, and replace folder-layout, owner, and custom-field
-  ID entry with named selectors.
-- Give Metadata its own tag icon so it is visually distinct from the Archive
-  configuration overview.
-- Right-align Document Detail metadata actions, revealing **Manage tags** only
-  while editing tags, while keeping values readable at narrow widths.
-- Hide zero-value **Linked**, **Versions**, and **Notes** badges in Document
-  Detail; the Versions badge still counts only other revisions.
-- Include active account subscription destinations in startup and doctor egress
-  reports; preserve mode-specific endpoint/model drafts and restore the saved
-  subscription model after reconnecting.
-
-- Keep local matching options editable after an account subscription disconnect,
-  without changing or reloading the saved model configuration.
-
-- Save subscription model dropdown selections automatically and restore them after refresh,
-  while keeping model activation and document egress consent explicit.
-
-- Read finalized text from ChatGPT subscription stream events when the completion
-  envelope omits its output, so connection testing and classification succeed.
-- Repair rendered links created by beta.1 and beta.2 when a stable-v1 refile
-  verifies that the linked blob belongs to the document.
-- Keep operational dead-job details and the Retry/Dismiss recovery controls out
-  of member Approvals; administrators retain the audited recovery controls.
-
-- Keep **All documents** on the left of document detail while aligning Download,
-  access, sharing, phone, and Trash actions to the right.
-- Keep the wide document preview and detail column at a stable viewport height;
-  longer metadata and extracted text now scroll inside the detail column.
-
-
+- **Ask the classifier** branches in Automations: up to five Yes/No or
+  multiple-choice questions share the existing classifier call and map
+  evidence-grounded answers to fixed tags, correspondents, categories or
+  custom-field values under the automatic/review-first policy.
+- Document versions: linear replacement history with exact historical URLs,
+  idempotent uploads and explicit metadata inheritance.
+- Typed custom fields end to end: select choices, protected in-use definitions,
+  type-aware Document Detail and automation controls, sidecar ingestion, and
+  **Linked documents** for exact named links with incoming links listed
+  separately.
+- Query qualifiers `version:`, `has-field:`, typed `field:` and read-only
+  `asn:` across Documents, Search, saved Views, Calendar and archive research.
+- Attributed, editable notes on Document Detail.
+- **Folder layouts** under Archive configuration > Advanced, with validated
+  previews and transactional rerenders.
+- Account subscription mode for Classification, starting with OpenAI ChatGPT
+  (Codex) via device login, encrypted credentials and an account-backed model
+  list. Document egress still requires explicit consent. Experimental.
 
 ### Changed
 
-- Redesign **Automations** around a compact, ordered rule list and a focused
-  sentence-style editor. Empty archives now offer starter patterns, filters are
-  added progressively, document-model questions stay optional, and rules can be
-  reordered by drag handle or keyboard.
+- The ready-made filing trees give each common document one obvious home. Solo
+  and Household add **Bank & card statements**, **Education** and
+  **Employment**, rename **Loans & credit** to **Loans**, **Taxes** to
+  **Income tax** and 14 to **Memberships & associations**, fold **Warranties**
+  into **Purchases & warranties**, and widen **Housing** to ownership, leases,
+  rent, mortgage agreements, property tax and association charges. Freelance
+  and Small business add **Bank & card statements**, rename collections to
+  **Client payments** / **Customer payments**, fold Freelance project costs
+  into **Expenses**, rename the vendor lane to **Suppliers**, and name the
+  compliance and portfolio lanes explicitly. Every category has a one-line
+  description, and keywords and starter rules each point to one category.
+- The document model sees each category's area, name and description and picks
+  the most specific fit.
+- Automations and Views share a compact rule list and a sentence-style builder
+  with starter patterns, live counts and keyboard reordering.
+- Documents gains a **Shared by me** toggle in place of the combined type/share
+  selector; approvals and Classification settings are more compact.
+- `suchi demo` applies the Household tree before seeding, with demo corpus
+  v0.2.0.
+- Refresh Go, browser and release-tool dependencies, including HuML 0.3.1.
 
-- Redesign **Views** with the same compact list and focused builder grammar as
-  Automations. Rows now show plain-language filters, live document counts and
-  sharing state; empty archives offer starter patterns, and filters appear only
-  when added. Both screens now use shared workspace, row, empty-state and
-  builder-section components.
+### Fixed
 
-- Streamline the **Account subscription** model tab into a compact connection
-  row, model and egress controls, retained confidence slider, and one inline
-  connection-test verdict. The panel now shows a bright ochre
-  **Experimental** tag.
+- `suchi import --auto-jd` no longer files into a retired starter tree's codes
+  (tax under Investments, insurance under Taxes). It targets the Solo and
+  Household trees and refuses any other tree before writing; imports never
+  create a filing tree.
+- Account subscriptions: finalized text is read from stream events, active
+  destinations appear in egress reports, and model choices and local matching
+  options survive disconnects and refreshes.
+- Stable-v1 refile repairs rendered links left by pre-v0.1.0 releases.
+- Dead-job details and recovery controls stay out of member Approvals.
+- Document Detail and settings layout fixes: aligned actions, hidden zero
+  badges, a stable preview column and distinct icons.
 
-- Generate, verify, and embed the web application during production builds
-  instead of storing compiled frontend bundles in the source tree.
+### Security
 
-- Replace the source-archive-derived document-type vocabulary with ordinary
-  `type:<name>` tags. The stable schema upgrade migrates assignments, ACLs,
-  saved-view filters, automation filters/actions, and title/storage templates;
-  automations whose tag-and-type AND predicate cannot be represented are
-  suspended, and pending type-change reviews are cancelled. Source bundle
-  imports preserve source types through the same tags and report unsupported
-  template expressions.
-- Replace the combined type/share selector in Documents with a dedicated
-  **Shared by me** toggle for active links created by the signed-in user.
-
-- Keep document-change approvals compact with one-line value transitions,
-  collapsed plain-language source explanations, and no producer score details.
-- Streamline Classification with concise helper copy and a contained **Similar
-  documents** switch that exposes standard switch semantics.
-
-- Revise the four ready-made filing trees (version 2) so each common document
-  has one obvious home. Solo and Household add **Bank & card statements**,
-  **Education** and **Employment**, rename **Loans & credit** to **Loans**,
-  **Taxes** to **Income tax** and 14 to **Memberships & associations**, fold
-  **Warranties** into **Purchases & warranties**, and widen **Housing** to
-  ownership, leases, rent, mortgage agreements, property tax and association
-  charges. Freelance and Small business add **Bank & card statements**, rename
-  collections to **Client payments** / **Customer payments**, fold Freelance
-  project costs into **Expenses**, rename the Small business vendor lane to
-  **Suppliers**, and give the compliance and portfolio lanes explicit names.
-  Every category now has a one-line description, keywords name one category
-  each, and starter rules no longer contradict them. Existing archives keep
-  their categories until an administrator applies the tree again; that preview
-  renames in place and leaves removed categories with their documents.
-- The document model now sees each category's area, name and description and
-  is asked for the most specific fit.
-- `suchi demo` applies the Household tree before seeding; demo corpus category
-  codes refer to it.
+- Build with Go 1.27.2 to include the standard-library fixes for HTTP/2 encoder
+  races and HTTP/1 connection desynchronization.
 
 ## [0.1.0] - 2026-09-28
 
@@ -611,7 +557,8 @@ Notable user-visible changes to Suchi are recorded here.
   and saved document passwords are sealed at rest.
 - Setup, demo isolation, error responses, and capability removal fail closed.
 
-[Unreleased]: https://github.com/johnnybravo-xyz/suchi/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/johnnybravo-xyz/suchi/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/johnnybravo-xyz/suchi/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/johnnybravo-xyz/suchi/compare/v0.1.0-beta.3...v0.1.0
 [0.1.0-beta.3]: https://github.com/johnnybravo-xyz/suchi/compare/v0.1.0-beta.2...v0.1.0-beta.3
 [0.1.0-beta.2]: https://github.com/johnnybravo-xyz/suchi/compare/v0.1.0-beta.1...v0.1.0-beta.2

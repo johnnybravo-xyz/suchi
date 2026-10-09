@@ -48,7 +48,7 @@ Assuming an upload has returned document 147 in S01/category 13, its address is
 document URL remain stable, while the old address no longer resolves. New versions
 and split children receive their own document IDs. There is no 99-document limit.
 Automatic allocation does not reuse IDs allocated after the taxonomy upgrade.
-Surviving beta.2 IDs are preserved, but numbers purged before the upgrade have no
+IDs that survive from earlier archives are preserved, but numbers purged before the upgrade have no
 retained allocation history and may be reused.
 
 Canonical addresses require a two-digit category and an unpadded positive decimal
@@ -327,7 +327,7 @@ move journals recover interrupted publication at the current target; cleanup rem
 only a verified document CAS link or proved-managed legacy index, never arbitrary
 user files. Only the original system's index writer removes the old root index,
 after publishing its named replacement. Startup does not rewrite the whole filesystem.
-Stable v1 repairs the absolute two-shard links emitted by beta.1 and beta.2
+Stable v1 repairs the absolute two-shard links emitted before v0.1.0
 when their blob hash still belongs to that document; unrelated links remain untouched.
 Use `suchi refile --system S01 --skip-automations` for render-only work without
 rerunning OCR or classification.

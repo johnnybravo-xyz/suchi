@@ -52,17 +52,19 @@ Only the current pre-1.0 release is supported.
 ## Stable-v1 database compatibility
 
 This section is the release authority for accepted core database states. The
-signed beta.1–beta.3 SQL, tags and release artifacts remain byte-identical.
-Stable v0.1.0 embeds frozen compatibility SQL in
+signed pre-v0.1.0 SQL, tags and release artifacts remain byte-identical.
+v0.1.0 embeds frozen compatibility SQL in
 `core/db/compatibility/0002`–`0005`; its declarative baseline is active migration
-`0001_baseline.sql`, `user_version = 1`, lineage `stable-v1`. The current
-checkout adds active `0002_metadata_cleanup.sql` and targets `user_version = 2`
-without changing that lineage.
+`0001_baseline.sql`, `user_version = 1`, lineage `stable-v1`. v0.2.0 adds active
+`0002_metadata_cleanup.sql` and `0003_automation_asks.sql` and targets
+`user_version = 3` without changing that lineage.
 
 The exact stable schema-1 fingerprint is
 `9d2a6320eae1582b0f294caa6ed518b5a73ab3dbe6597c9ca1a36cc563e03240`.
-The current schema-2 fingerprint is
-`645e7798d663fff83d120182f661e7148fbd68d263517de9d44783d80aaebae3`.
+The v0.2.0 schema-3 fingerprint is
+`cfbdda9e3e80f35be33f763ad14c1c0d83a22ead62e91d04f6dc900331742a82`; development
+archives at schema 2 (`645e7798d663fff83d120182f661e7148fbd68d263517de9d44783d80aaebae3`)
+upgrade to it.
 The one admitted pre-identity schema-4 boundary remains
 `5d6ac98308eb644b030092178792a46f36e6f8f5041411f020ed2dcf216f46c2`.
 Startup admits only these exact states:
@@ -141,7 +143,7 @@ Use only the reviewed manual path:
    issuer/subject, a retained `user.oidc_bound` row, a replacement cookie, and
    unchanged ownership.
 
-For beta adoption, keep both the automatic database snapshot and a complete
+When adopting a pre-v0.1.0 archive, keep both the automatic database snapshot and a complete
 operator backup. If no live session survives to bind an occupied unbound OIDC
 email, stop and restore with the old binary/config; do not delete, merge, or
 recreate the account to bypass the conflict.
@@ -206,7 +208,7 @@ do not duplicate them here.
    the exact commit and tag to GitHub:
 
    ```sh
-   export VERSION=v0.1.0
+   export VERSION=v0.2.0
    git tag -s "$VERSION" -m "suchi ${VERSION#v}"
    ./hack/verify-release-tag.sh "$VERSION"
    git push gh main
@@ -266,7 +268,7 @@ the release artifacts to verify and deploy.
 Set the release coordinates on every build machine:
 
 ```sh
-export VERSION=v0.1.0
+export VERSION=v0.2.0
 export IMAGE=ghcr.io/johnnybravo-xyz/suchi
 export CACHE_AMD64="$IMAGE:buildcache-amd64"
 export CACHE_ARM64="$IMAGE:buildcache-arm64"
@@ -369,8 +371,7 @@ docker buildx imagetools create \
   "$IMAGE:$VERSION-full"
 ```
 
-Release candidates promote `rc` / `rc-full`; beta releases promote `beta` /
-`beta-standard` and `beta-full`. Never create a moving alias in the same command
+Release candidates promote `rc` / `rc-full`. Never create a moving alias in the same command
 that first publishes the version manifest.
 
 The first successful native build seeds its architecture's registry cache.

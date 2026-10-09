@@ -14,6 +14,6 @@ package demo
 // Consumers may point at any tarball; the seeder errors clearly on
 // shape mismatch (see seed.go).
 const (
-	DemoCorpusVersion = "v0.1.1"
-	DemoCorpusSHA256  = "e3bc9a9d340dafbc899ceb3b52eef50f516aeec962babe2f7fb0505958f3ae8e"
+	DemoCorpusVersion = "v0.2.0"
+	DemoCorpusSHA256  = "55054534213581bf9fb608d8cc36bf1ca576b819097e739956987b4864876ff5"
 )

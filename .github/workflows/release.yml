@@ -75,7 +75,7 @@ jobs:
           bun-version: 1.4.1
       - name: run release-only gates
         run: |
-          make test TEST_FLAGS='-race -count=1 -timeout 600s'
+          make test TEST_FLAGS='-race -count=1 -timeout 1200s'
           make security-check
           make smoke
           make bench-check

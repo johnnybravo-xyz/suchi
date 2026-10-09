@@ -1,11 +1,11 @@
 # Contributing to suchi
 
-Suchi is early v0.1 software. Interfaces may change while the product is
+Suchi is pre-1.0 software. Interfaces may change while the product is
 still pre-1.0, so prefer clear designs over compatibility layers.
 
 ## Get started
 
-The workspace uses Go 1.27.0 or newer and Bun 1.4.1.
+The workspace uses Go 1.27.2 or newer and Bun 1.4.1.
 
 ```sh
 git clone git@github.com:johnnybravo-xyz/suchi.git
