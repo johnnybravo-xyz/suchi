@@ -8,7 +8,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -18,14 +20,17 @@ import (
 	"mime"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/config"
+	"github.com/johnnybravo-xyz/suchi/core/customfield"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
+	ingestmeta "github.com/johnnybravo-xyz/suchi/core/ingest"
 	"github.com/johnnybravo-xyz/suchi/core/intelligence"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 	"github.com/johnnybravo-xyz/suchi/core/jd/presetfile"
@@ -157,16 +162,18 @@ func runDemo(args []string) int {
 			FixtureIngest:    ingest,
 			SavedViewIngest:  viewIngest,
 			AutomationIngest: automationIngest,
+			LinkIngest:       makeLinkIngest(d, now),
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "manifest seed: %v\n", err)
 			return 1
 		}
-		fmt.Printf("manifest seed: seeded=%d existing=%d skipped=%d failed=%d would-seed=%d views=%d existing-views=%d views-failed=%d automations=%d existing-automations=%d automations-failed=%d\n",
+		fmt.Printf("manifest seed: seeded=%d existing=%d skipped=%d failed=%d would-seed=%d views=%d existing-views=%d views-failed=%d automations=%d existing-automations=%d automations-failed=%d links=%d links-failed=%d\n",
 			stats.Seeded, stats.Existing, stats.Skipped, stats.Failed, stats.WouldSeed,
 			stats.ViewsSeeded, stats.ViewsExisting, stats.ViewsFailed,
-			stats.AutomationsSeeded, stats.AutomationsExisting, stats.AutomationsFailed)
-		if stats.Skipped+stats.Failed+stats.ViewsFailed+stats.AutomationsFailed > 0 {
+			stats.AutomationsSeeded, stats.AutomationsExisting, stats.AutomationsFailed,
+			stats.LinksSeeded, stats.LinksFailed)
+		if stats.Skipped+stats.Failed+stats.ViewsFailed+stats.AutomationsFailed+stats.LinksFailed > 0 {
 			fmt.Fprintln(os.Stderr, "manifest seed incomplete; fix the corpus errors above and retry")
 			return 1
 		}
@@ -249,15 +256,21 @@ func makeFixtureIngest(d *db.DB, cas *blob.CAS, ownerID int64, now int64) func(c
 			}
 			tagNames := append([]string(nil), f.Tags...)
 
+			previousID, familyKey, err := demoVersionParent(ctx, tx, f.PreviousVersion)
+			if err != nil {
+				return err
+			}
 			var docID int64
 			err = tx.QueryRowContext(ctx, `
 				INSERT INTO documents(
 					system_id, owner_id, original_blob, original_size, title, mime_type,
-					jd_category_id, sensitivity, languages, added_at, created_at, updated_at
-				) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+					jd_category_id, sensitivity, languages, added_at, created_at, updated_at,
+					previous_version_id, version_family_key
+				) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT DO NOTHING RETURNING id
 			`, ownerID, ref.SHA256, ref.Size, title, mimeType,
-				jdCatID, nullString(f.Sensitivity), f.Language, now, now, now).Scan(&docID)
+				jdCatID, nullString(f.Sensitivity), f.Language, now, now, now,
+				previousID, familyKey).Scan(&docID)
 			if errors.Is(err, sql.ErrNoRows) {
 				return nil
 			}
@@ -265,6 +278,11 @@ func makeFixtureIngest(d *db.DB, cas *blob.CAS, ownerID int64, now int64) func(c
 				return err
 			}
 			created = true
+			// The filename is the fixture's identity for version and link
+			// references, and shows as the document's source.
+			if err := ingestmeta.RecordSource(ctx, tx, docID, "import", demoSourceLabel, f.Filename, now); err != nil {
+				return err
+			}
 			if corrID.Valid {
 				if err := taxonomy.SetPrimaryCorrespondent(ctx, tx, docID, corrID.Int64); err != nil {
 					return err
@@ -386,6 +404,89 @@ func makeSavedViewIngest(d *db.DB, ownerID, now int64) func(context.Context, dem
 			return err
 		})
 		return created, err
+	}
+}
+
+// demoSourceLabel marks documents seeded from the demo corpus; each source
+// detail is the fixture filename.
+const demoSourceLabel = "Demo corpus"
+
+// demoDocumentID resolves a fixture filename to its seeded document.
+func demoDocumentID(ctx context.Context, tx *sql.Tx, filename string) (int64, error) {
+	var id int64
+	err := tx.QueryRowContext(ctx, `
+		SELECT document_id FROM document_sources
+		WHERE kind = 'import' AND label = ? AND detail = ?
+		ORDER BY document_id LIMIT 1
+	`, demoSourceLabel, filename).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("fixture %q is not seeded", filename)
+	}
+	return id, err
+}
+
+// demoVersionParent returns the predecessor and shared family key for a
+// fixture that replaces an earlier one, creating the family key on first use.
+func demoVersionParent(ctx context.Context, tx *sql.Tx, previous string) (sql.NullInt64, sql.NullString, error) {
+	if previous == "" {
+		return sql.NullInt64{}, sql.NullString{}, nil
+	}
+	previousID, err := demoDocumentID(ctx, tx, previous)
+	if err != nil {
+		return sql.NullInt64{}, sql.NullString{}, err
+	}
+	var familyKey sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT version_family_key FROM documents WHERE id = ?`, previousID).Scan(&familyKey); err != nil {
+		return sql.NullInt64{}, sql.NullString{}, err
+	}
+	if !familyKey.Valid {
+		var random [16]byte
+		if _, err := rand.Read(random[:]); err != nil {
+			return sql.NullInt64{}, sql.NullString{}, fmt.Errorf("generate version family key: %w", err)
+		}
+		familyKey = sql.NullString{String: "v:" + hex.EncodeToString(random[:]), Valid: true}
+		if _, err := tx.ExecContext(ctx, `UPDATE documents SET version_family_key = ? WHERE id = ?`, familyKey.String, previousID); err != nil {
+			return sql.NullInt64{}, sql.NullString{}, err
+		}
+	}
+	return sql.NullInt64{Int64: previousID, Valid: true}, familyKey, nil
+}
+
+// makeLinkIngest writes a fixture's named document links, creating each
+// link field on first use.
+func makeLinkIngest(d *db.DB, now int64) func(context.Context, demo.ManifestFixture) (bool, error) {
+	return func(ctx context.Context, f demo.ManifestFixture) (bool, error) {
+		fields := make([]string, 0, len(f.Links))
+		for field := range f.Links {
+			fields = append(fields, field)
+		}
+		sort.Strings(fields)
+		err := d.WriteTx(ctx, func(tx *sql.Tx) error {
+			sourceID, err := demoDocumentID(ctx, tx, f.Filename)
+			if err != nil {
+				return err
+			}
+			for _, field := range fields {
+				targetID, err := demoDocumentID(ctx, tx, f.Links[field])
+				if err != nil {
+					return err
+				}
+				var fieldID int64
+				if err := tx.QueryRowContext(ctx, `
+					INSERT INTO custom_fields(system_id, name, data_type, extra_data, created_at, updated_at)
+					VALUES (1, ?, 'documentlink', '{}', ?, ?)
+					ON CONFLICT(system_id, name) DO UPDATE SET name = excluded.name
+					RETURNING id
+				`, field, now, now).Scan(&fieldID); err != nil {
+					return err
+				}
+				if err := customfield.WriteDocumentLinkInTx(ctx, tx, sourceID, fieldID, targetID, false); err != nil {
+					return fmt.Errorf("link %q: %w", field, err)
+				}
+			}
+			return nil
+		})
+		return err == nil, err
 	}
 }
 

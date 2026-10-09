@@ -5,8 +5,9 @@
   import { documentListHash } from '../lib/documentFilters.js'
 
   let { jdCategories = [] } = $props()
-  const financeCategory = $derived(jdCategories.find((category) => Number(category.code) === 22))
+  const statementsCategory = $derived(jdCategories.find((category) => Number(category.code) === 21))
   const northstarQuery = 'from:"Northstar Cloud" tag:renewal'
+  const paperTrailQuery = 'from:"Northstar Cloud" version:all'
 
   const cards = [
     { title: 'Filter by language',
@@ -14,15 +15,15 @@
       href: '#/search?lang=de',
       icon: 'search' },
     { title: 'Browse the Johnny Decimal tree',
-      hint: 'Jump to Money & Tax (category 22) and see the real filing structure.',
-      jdCode: 22,
+      hint: 'Jump to Bank & card statements (category 21) and see the real filing structure.',
+      jdCode: 21,
       icon: 'docs' },
     { title: 'Similar documents',
       hint: 'Open any utility bill; the Similar strip finds the rest of its household.',
       href: '#/documents?q=tag%3Autilities',
       icon: 'docs' },
     { title: 'Automations',
-      hint: 'Manifest-owned examples tag utility bills and classify invoices.',
+      hint: 'Manifest-owned examples tag utility bills and invoices.',
       href: '#/automations',
       icon: 'zap' },
     { title: 'Approvals inbox',
@@ -37,7 +38,7 @@
 
   function cardHref(card) {
     if (!card.jdCode) return card.href
-    return financeCategory ? documentListHash({ jd_category_id: financeCategory.id }) : '#/documents'
+    return statementsCategory ? documentListHash({ jd_category_id: statementsCategory.id }) : '#/documents'
   }
 </script>
 
@@ -45,7 +46,7 @@
   <header class="demo-hero">
     <span class="eyebrow">Live archive · resets daily</span>
     <h1>Find the document. See what comes next.</h1>
-    <p class="lede">Search an anonymized archive, then follow its deadlines back to the source. These examples open the real product so you can inspect every result.</p>
+    <p class="lede">Search an anonymized archive, follow its deadlines back to the source, and trace a contract's paper trail. These examples open the real product so you can inspect every result.</p>
     <div class="hero-note"><Icon name="help" size={14} /><span>Use the help icon in the top-right from any screen to return here.</span></div>
   </header>
 
@@ -53,9 +54,9 @@
     <div class="section-head">
       <div>
         <span class="eyebrow">Two-minute guided tour</span>
-        <h2 id="guided-title">From a precise search to dates with sources</h2>
+        <h2 id="guided-title">From a precise search to a contract's paper trail</h2>
       </div>
-      <span class="tour-time">2 steps · anonymized data</span>
+      <span class="tour-time">3 steps · anonymized data</span>
     </div>
 
     <div class="tour-grid">
@@ -85,6 +86,21 @@
             Browse document dates <Icon name="chev" size={13} />
           </a>
           <small>Read-only, curated examples. No live model is used in the public demo.</small>
+        </div>
+      </article>
+
+      <article class="tour-step">
+        <span class="step-number">03</span>
+        <span class="step-icon"><Icon name="docs" size={20} /></span>
+        <div class="step-copy">
+          <span class="step-kicker">Versions and links</span>
+          <h3>Follow a contract's paper trail</h3>
+          <p>The renewal notice, quote and addendum each link to the Workspace agreement as its <b>Governing contract</b>. The quote was revised, so it keeps its earlier version.</p>
+          <code>{paperTrailQuery}</code>
+          <a class="btn primary tour-action" href={filingHref(`#/search?q=${encodeURIComponent(paperTrailQuery)}`)}>
+            Trace the paper trail <Icon name="chev" size={13} />
+          </a>
+          <small>Open the agreement to see what links to it, or the quote to see its versions.</small>
         </div>
       </article>
     </div>
@@ -139,7 +155,7 @@
   .section-head.compact { margin-bottom: 10px; }
   .section-head h2 { font-size: 1.2rem; }
   .tour-time { flex: none; color: var(--faint); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .63rem; }
-  .tour-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .tour-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
   .tour-step { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; min-height: 320px; padding: 19px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
   .tour-step::before { content: ''; position: absolute; inset: 0; border-radius: inherit; background: linear-gradient(145deg, color-mix(in srgb, var(--accent) 5%, transparent), transparent 55%); pointer-events: none; }
   .step-number { position: absolute; top: 14px; right: 15px; color: var(--line-strong); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: 1.55rem; font-weight: 700; }

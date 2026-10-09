@@ -1082,8 +1082,10 @@ test('guides first-time demo visitors and keeps the help launcher available', as
   await page.goto('/#/dashboard')
 
   await expect(page).toHaveURL(/#\/demo$/)
-  await expect(page.getByRole('heading', { name: 'From a precise search to dates with sources' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: "From a precise search to a contract's paper trail" })).toBeVisible()
   await expect(page.getByText('Rich query language', { exact: true })).toBeVisible()
+  await expect(page.getByRole('link', { name: /Trace the paper trail/ }))
+    .toHaveAttribute('href', '#/search?q=from%3A%22Northstar%20Cloud%22%20version%3Aall')
   await expect(page.getByText('Archive research · Available on your own installation', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Ask the archive' })).toHaveCount(0)
   const queryLink = page.getByRole('link', { name: /Run the guided query/ })

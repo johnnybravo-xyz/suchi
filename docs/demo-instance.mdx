@@ -64,12 +64,30 @@ and `extractor=demo-corpus`; no model confidence or human review is invented.
 Evidence must come from the fixture. Reseeding preserves existing documents;
 updated fixtures take effect on a fresh demo volume at the next reset.
 
+A fixture can also replace an earlier fixture and name document links, both by
+filename:
+
+```json
+"previous_version": "quote NS-WKS-4481.pdf",
+"links": {"Governing contract": "Northstar_workspace_agreement_2025.pdf"}
+```
+
+A version must follow the fixture it replaces, and link targets must be other
+fixtures in the same manifest; otherwise the seed fails before writing. The two
+become one document with version history. Links are written after every fixture
+is stored, creating each named document-link field on first use. The seeder
+records each fixture's filename as an import source, which is how these
+references resolve.
+
 ## Guided feature tour
 
 The first dashboard visit in a browser redirects to the Demo guide once per
 session. Its first step runs a real rich query against the anonymized
 Northstar Cloud renewal cluster. The second step opens Calendar's read-only
-examples across all months and years, each linked to its source document.
+examples across all months and years, each linked to its source document. The
+third step searches the same cluster with `version:all`: the Workspace agreement
+lists the notice, quote and addendum that name it as **Governing contract**, and
+the revised quote keeps its earlier version.
 
 Public demo identities do not invoke Archive research or any model provider.
 The guide labels Archive research as available on private installations, not a

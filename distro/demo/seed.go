@@ -58,6 +58,11 @@ type ManifestFixture struct {
 	Cluster       string         `json:"cluster,omitempty"`
 	Sensitivity   string         `json:"sensitivity,omitempty"`
 	Dates         []ManifestDate `json:"dates,omitempty"`
+	// PreviousVersion names an earlier fixture this file replaces; the two
+	// become one logical document with version history.
+	PreviousVersion string `json:"previous_version,omitempty"`
+	// Links maps a document-link field name to the fixture it points at.
+	Links map[string]string `json:"links,omitempty"`
 }
 
 // ManifestDate is a curated, source-backed example, not model output.
@@ -65,6 +70,28 @@ type ManifestDate struct {
 	Role     string `json:"role"`
 	Date     string `json:"date"`
 	Evidence string `json:"evidence"`
+}
+
+// validateFixtureReferences keeps version and link references inside the
+// manifest. A version must follow the fixture it replaces.
+func validateFixtureReferences(fixtures []ManifestFixture) error {
+	all := map[string]bool{}
+	for _, f := range fixtures {
+		all[f.Filename] = true
+	}
+	earlier := map[string]bool{}
+	for _, f := range fixtures {
+		if f.PreviousVersion != "" && !earlier[f.PreviousVersion] {
+			return fmt.Errorf("fixture %s: previous_version %q must name an earlier fixture", f.Filename, f.PreviousVersion)
+		}
+		for field, target := range f.Links {
+			if strings.TrimSpace(field) == "" || target == f.Filename || !all[target] {
+				return fmt.Errorf("fixture %s: link %q must name another fixture", f.Filename, field)
+			}
+		}
+		earlier[f.Filename] = true
+	}
+	return nil
 }
 
 // ReadManifest parses corpus/manifest.json from an extracted corpus
@@ -109,6 +136,11 @@ type SeedOptions struct {
 	// AutomationIngest returns true when it inserted a new rule and false
 	// when a same-name rule was preserved.
 	AutomationIngest func(ctx context.Context, order int, automation presetfile.SeedAutomation) (bool, error)
+
+	// LinkIngest writes one fixture's document links after every fixture is
+	// stored, so targets later in the manifest resolve. It returns true when
+	// it wrote a new or changed value.
+	LinkIngest func(ctx context.Context, f ManifestFixture) (bool, error)
 }
 
 // SeedFromManifest walks the corpus manifest and hands each fixture to
@@ -123,6 +155,9 @@ func SeedFromManifest(ctx context.Context, opts SeedOptions) (Stats, error) {
 	}
 	if m.Version != DemoCorpusVersion {
 		return s, fmt.Errorf("demo corpus version %q is incompatible with this build (want %q)", m.Version, DemoCorpusVersion)
+	}
+	if err := validateFixtureReferences(m.Fixtures); err != nil {
+		return s, err
 	}
 	log := opts.Log
 	if log == nil {
@@ -174,6 +209,17 @@ func SeedFromManifest(ctx context.Context, opts SeedOptions) (Stats, error) {
 		} else {
 			s.Existing++
 		}
+	}
+	for _, f := range m.Fixtures {
+		if len(f.Links) == 0 || opts.LinkIngest == nil {
+			continue
+		}
+		if _, err := opts.LinkIngest(ctx, f); err != nil {
+			log.Warn("demo.seed.links.err", "filename", f.Filename, "err", err.Error())
+			s.LinksFailed++
+			continue
+		}
+		s.LinksSeeded++
 	}
 	for _, view := range m.SavedViews {
 		view.Name = strings.TrimSpace(view.Name)
@@ -283,4 +329,6 @@ type Stats struct {
 	AutomationsExisting  int
 	AutomationsFailed    int
 	AutomationsWouldSeed int
+	LinksSeeded          int
+	LinksFailed          int
 }

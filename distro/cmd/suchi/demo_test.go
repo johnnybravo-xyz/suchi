@@ -157,3 +157,91 @@ func TestDemoManifestReseedingPreservesDocumentTagsAndJobs(t *testing.T) {
 		t.Fatal("invalid fixture date must fail validation")
 	}
 }
+
+// A corpus can show version history and named document links: a later
+// fixture replaces an earlier one, and links resolve once every fixture exists.
+func TestDemoManifestSeedsVersionsAndLinks(t *testing.T) {
+	ctx := t.Context()
+	d := newDemoTestDB(t)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if err := applyDemoTree(ctx, d, log); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	cas, err := blob.New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "fixtures"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fixtures := []demo.ManifestFixture{
+		{Filename: "quote.txt", Links: map[string]string{"Governing contract": "agreement.txt"}},
+		{Filename: "quote-rev2.txt", PreviousVersion: "quote.txt", Links: map[string]string{"Governing contract": "agreement.txt"}},
+		{Filename: "agreement.txt"},
+	}
+	for _, f := range fixtures {
+		if err := os.WriteFile(filepath.Join(dir, "fixtures", f.Filename), []byte(f.Filename), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	body, err := json.Marshal(demo.Manifest{Version: demo.DemoCorpusVersion, Fixtures: fixtures})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opts := demo.SeedOptions{
+		CorpusDir: dir, Log: log,
+		FixtureIngest: makeFixtureIngest(d, cas, 1, 100),
+		LinkIngest:    makeLinkIngest(d, 100),
+	}
+	for _, run := range []string{"first", "repeat"} {
+		stats, err := demo.SeedFromManifest(ctx, opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stats.Failed != 0 || stats.LinksFailed != 0 || stats.LinksSeeded != 2 {
+			t.Fatalf("%s seed stats = %+v", run, stats)
+		}
+	}
+
+	var sameFamily, previousIsOriginal bool
+	if err := d.Read.QueryRowContext(ctx, `
+		SELECT revised.version_family_key = original.version_family_key,
+		       revised.previous_version_id = original.id
+		FROM documents revised, documents original
+		WHERE revised.title = 'Quote Rev2' AND original.title = 'Quote'
+	`).Scan(&sameFamily, &previousIsOriginal); err != nil {
+		t.Fatal(err)
+	}
+	if !sameFamily || !previousIsOriginal {
+		t.Fatalf("revised quote family=%v previous=%v, want one version family", sameFamily, previousIsOriginal)
+	}
+	var links int
+	if err := d.Read.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM document_custom_field_values v
+		JOIN custom_fields f ON f.id = v.field_id
+		JOIN documents target ON target.id = v.value_int
+		WHERE f.name = 'Governing contract' AND f.data_type = 'documentlink' AND target.title = 'Agreement'
+	`).Scan(&links); err != nil {
+		t.Fatal(err)
+	}
+	if links != 2 {
+		t.Fatalf("governing-contract links = %d, want 2", links)
+	}
+
+	broken := append([]demo.ManifestFixture(nil), fixtures...)
+	broken[0].PreviousVersion = "quote-rev2.txt"
+	body, err = json.Marshal(demo.Manifest{Version: demo.DemoCorpusVersion, Fixtures: broken})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := demo.SeedFromManifest(ctx, opts); err == nil {
+		t.Fatal("a version that precedes its predecessor must be rejected")
+	}
+}

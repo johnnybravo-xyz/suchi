@@ -4,6 +4,12 @@ Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
 
+### Changed
+
+- The demo tour adds a third step that traces the Northstar agreement's linked
+  documents and its revised quote's version history. Demo corpus manifests can
+  declare `previous_version` and named `links` by fixture filename.
+
 ## [0.2.0] - 2026-10-09
 
 ### Upgrade notes
