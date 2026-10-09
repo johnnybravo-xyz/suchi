@@ -1,6 +1,6 @@
 format = "suchi-taxonomy/v1"
 id = "freelance"
-version = 1
+version = 2
 name = "Freelance / consultant"
 license = "CC0-1.0"
 market = "global"
@@ -14,21 +14,24 @@ name = "Clients"
   [[areas.categories]]
   code = 12
   name = "Quotes & contracts"
-  keywords = ["quote", "proposal", "contract", "msa", "nda", "engagement letter"]
+  description = "Quotes, proposals, statements of work and signed client agreements."
+  keywords = ["quote", "proposal", "contract", "msa", "nda", "engagement letter", "statement of work", "sow"]
 
   [[areas.categories]]
   code = 13
   name = "Invoices out"
-  keywords = ["invoice", "tax invoice", "credit note"]
+  description = "Invoices and credit notes you issue to clients."
 
   [[areas.categories]]
   code = 14
-  name = "Collections & aging"
-  keywords = ["receivable", "aging", "ageing", "outstanding", "past due", "remittance"]
+  name = "Client payments"
+  description = "Client payments received, remittances and overdue reminders."
+  keywords = ["payment received", "payment reminder", "overdue notice", "accounts receivable", "past due", "aging report", "ageing report"]
 
   [[areas.categories]]
   code = 15
   name = "Correspondence"
+  description = "Letters, emails and meeting notes exchanged with clients."
   keywords = ["client letter", "client email", "meeting notes"]
 
 [[areas]]
@@ -38,46 +41,54 @@ name = "Projects"
   [[areas.categories]]
   code = 22
   name = "Briefs & plans"
-  keywords = ["project brief", "project plan", "scope of work", "statement of work", "sow"]
-
-  [[areas.categories]]
-  code = 23
-  name = "Costs & purchases"
-  keywords = ["project expense", "purchase", "expense report"]
+  description = "Project briefs, plans and scope."
+  keywords = ["project brief", "project plan", "scope of work"]
 
   [[areas.categories]]
   code = 24
   name = "Deliverables"
-  keywords = ["deliverable", "asset pack", "handover"]
+  description = "Delivered work, asset packs and handovers."
+  keywords = ["asset pack", "handover"]
 
   [[areas.categories]]
   code = 25
   name = "Approvals & sign-off"
-  keywords = ["completion certificate", "sign-off", "client approval", "acceptance"]
+  description = "Client approvals, acceptance and completion certificates."
+  keywords = ["completion certificate", "sign-off", "client approval", "acceptance certificate"]
 
 [[areas]]
 code = 30
 name = "Money"
 
   [[areas.categories]]
+  code = 31
+  name = "Bank & card statements"
+  description = "Business bank and card statements."
+  keywords = ["bank statement", "account statement", "statement of account", "credit card statement", "card statement"]
+
+  [[areas.categories]]
   code = 32
   name = "Expenses"
-  keywords = ["expense report", "travel expense", "receipt"]
+  description = "Receipts and invoices for business spending, including project costs."
+  keywords = ["expense report", "expense claim", "travel expense", "project expense"]
 
   [[areas.categories]]
   code = 33
   name = "Tax working papers"
-  keywords = ["schedule c", "self-employment tax", "itr", "form 16", "form 26as"]
+  description = "Tax computations, AIS or 26AS, advance tax and other inputs for your returns."
+  keywords = ["schedule c", "self-employment tax", "form 16", "form 26as", "advance tax", "tax computation"]
 
   [[areas.categories]]
   code = 34
-  name = "Contractors"
+  name = "Contractor agreements"
+  description = "Agreements with contractors and subcontractors."
   keywords = ["contractor agreement", "subcontractor", "freelancer agreement"]
 
   [[areas.categories]]
   code = 35
   name = "Contractor payments"
-  keywords = ["contractor invoice", "contractor payment", "withholding"]
+  description = "Contractor invoices and your payments to them."
+  keywords = ["contractor invoice", "contractor payment"]
 
 [[areas]]
 code = 50
@@ -85,23 +96,27 @@ name = "Compliance"
 
   [[areas.categories]]
   code = 51
-  name = "Tax filings"
-  keywords = ["tax filing", "tax return", "gstr", "itr"]
+  name = "Tax filings & acknowledgements"
+  description = "Submitted income, GST/sales and similar tax returns, plus filing confirmations."
+  keywords = ["tax filing", "tax return", "itr", "gstr", "tds return", "vat return", "sales tax return"]
 
   [[areas.categories]]
   code = 52
-  name = "Statutory returns"
-  keywords = ["statutory return", "annual return", "regulatory filing"]
+  name = "Corporate & regulatory filings"
+  description = "Company, employment, pension and non-tax regulatory submissions."
+  keywords = ["roc filing", "mgt-7", "aoc-4", "pf return", "esi return", "regulatory filing"]
 
   [[areas.categories]]
   code = 53
-  name = "Audits"
-  keywords = ["audit report", "auditor letter"]
+  name = "Audit reports & correspondence"
+  description = "Audit reports, findings and auditor letters."
+  keywords = ["audit report", "auditor letter", "audit findings", "management letter"]
 
   [[areas.categories]]
   code = 54
   name = "Licenses & permits"
-  keywords = ["licence", "license", "permit", "registration certificate"]
+  description = "Operating licenses, registrations and permits."
+  keywords = ["permit", "registration certificate", "trade licence", "business license"]
 
 [[areas]]
 code = 60
@@ -109,23 +124,27 @@ name = "Portfolio & marketing"
 
   [[areas.categories]]
   code = 61
-  name = "Case studies"
-  keywords = ["case study", "portfolio piece"]
+  name = "Case studies & portfolio examples"
+  description = "Case studies and examples of past client work."
+  keywords = ["case study", "portfolio piece", "portfolio example"]
 
   [[areas.categories]]
   code = 62
-  name = "Testimonials"
-  keywords = ["testimonial", "reference letter"]
+  name = "Testimonials & references"
+  description = "Client testimonials and client reference letters."
+  keywords = ["client testimonial", "client reference"]
 
   [[areas.categories]]
   code = 63
-  name = "Templates"
-  keywords = ["template", "boilerplate"]
+  name = "Reusable document templates"
+  description = "Reusable contract, proposal and letter templates."
+  keywords = ["document template", "contract template", "proposal template", "letter template", "boilerplate"]
 
   [[areas.categories]]
   code = 64
-  name = "Marketing assets"
-  keywords = ["brochure", "brand asset", "campaign", "marketing plan"]
+  name = "Brand & campaign assets"
+  description = "Brand guidelines, brochures, campaign material and marketing templates."
+  keywords = ["brand guidelines", "brand asset", "brochure", "marketing plan", "campaign brief", "social media template"]
 
 [seeds]
 
@@ -140,20 +159,10 @@ name = "Portfolio & marketing"
     jd_category_code = 12
 
   [[seeds.automations]]
-  name = "Freelance: file outgoing invoices"
-  [seeds.automations.trigger]
-  type = 2
-  filter_content_matching = "(?i)tax invoice|invoice.*due|please remit"
-  [[seeds.automations.actions]]
-  kind = "assign_jd_category"
-    [seeds.automations.actions.params]
-    jd_category_code = 13
-
-  [[seeds.automations]]
   name = "Freelance: file business expenses"
   [seeds.automations.trigger]
   type = 2
-  filter_content_matching = "(?i)expense report|reimbursement|receipt.*payment|paid by"
+  filter_content_matching = "(?i)expense report|expense claim|travel expense"
   [[seeds.automations.actions]]
   kind = "assign_jd_category"
     [seeds.automations.actions.params]
@@ -163,7 +172,7 @@ name = "Portfolio & marketing"
   name = "Freelance: file tax working papers"
   [seeds.automations.trigger]
   type = 2
-  filter_content_matching = "(?i)self[- ]?employment tax|schedule c|1099[- ]?nec|itr[- ]?4|advance tax"
+  filter_content_matching = "(?i)self[- ]?employment tax|schedule c|1099[- ]?nec|advance tax"
   [[seeds.automations.actions]]
   kind = "assign_jd_category"
     [seeds.automations.actions.params]

@@ -35,7 +35,7 @@ func TestSweep(t *testing.T) {
 	if err := db.Migrate(ctx, d, migs, log); err != nil {
 		t.Fatal(err)
 	}
-	if err := jd.EnsureTree(ctx, d, log, jd.ModeJD, 1); err != nil {
+	if err := jd.ApplyPreset(ctx, d, log, "household", jd.ApplyPresetOpts{SystemID: 1, SkipSeeds: true}); err != nil {
 		t.Fatal(err)
 	}
 	var inbox int64

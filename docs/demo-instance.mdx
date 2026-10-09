@@ -3,9 +3,10 @@ title: "Public demo mode"
 description: "Seed and run a disposable, guarded suchi instance."
 ---
 
-`suchi demo` seeds a fresh `DATA_DIR` from a versioned corpus manifest.
-`SUCHI_DEMO_MODE=1` adds the runtime controls needed for a disposable public
-showcase.
+`suchi demo` seeds a fresh `DATA_DIR` from a versioned corpus manifest. It first
+applies the built-in Household filing tree without starter rules; manifest
+category codes refer to that tree. `SUCHI_DEMO_MODE=1` adds the runtime controls
+needed for a disposable public showcase.
 
 The mechanism ships in the main binary. Corpus and deployment artifacts are
 maintained separately in

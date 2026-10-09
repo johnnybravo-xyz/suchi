@@ -46,7 +46,7 @@ func openHandlerDocument(t *testing.T, title, content string) (*db.DB, int64) {
 	if err := db.Migrate(ctx, d, migs, silentLog()); err != nil {
 		t.Fatal(err)
 	}
-	if err := jd.EnsureTree(ctx, d, silentLog(), jd.ModeJD, 1); err != nil {
+	if err := jd.ApplyPreset(ctx, d, silentLog(), "household", jd.ApplyPresetOpts{SystemID: 1, SkipSeeds: true}); err != nil {
 		t.Fatal(err)
 	}
 	res, err := d.Write.ExecContext(ctx, `
@@ -915,15 +915,26 @@ func TestClassifyInjectsJDCatsIntoUserMessage(t *testing.T) {
 
 	p, _ := New(Config{EndpointURL: srv.URL, Model: "x"}, silentLog())
 	_, err := p.Classify(context.Background(), "invoice", "body",
-		[]JDCat{{Code: 31, Name: "Utilities"}, {Code: 22, Name: "Tax"}},
+		[]JDCat{
+			{Code: 21, Area: "Money", Name: "Bank & card statements",
+				Description: "Bank, credit card\nand debit card statements, and letters about those accounts. " + strings.Repeat("x", 200)},
+			{Code: 51, Area: "Home", Name: "Utilities"},
+		},
 		nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"31 – Utilities", "22 – Tax", "Available Johnny-Decimal"} {
+	for _, want := range []string{
+		"Available Johnny-Decimal",
+		"21 – Money › Bank & card statements: Bank, credit card and debit card statements",
+		"51 – Home › Utilities\n",
+	} {
 		if !strings.Contains(gotUser, want) {
 			t.Errorf("user message missing %q; got: %s", want, gotUser)
 		}
+	}
+	if strings.Contains(gotUser, strings.Repeat("x", 100)) {
+		t.Errorf("category description was not capped: %s", gotUser)
 	}
 }
 

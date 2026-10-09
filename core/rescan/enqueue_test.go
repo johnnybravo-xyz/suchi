@@ -39,7 +39,7 @@ func setupDB(t testing.TB) (*db.DB, int64) {
 	if err := db.Migrate(ctx, d, migs, log); err != nil {
 		t.Fatal(err)
 	}
-	if err := jd.EnsureTree(ctx, d, log, jd.ModeJD, 1); err != nil {
+	if err := jd.ApplyPreset(ctx, d, log, "household", jd.ApplyPresetOpts{SystemID: 1, SkipSeeds: true}); err != nil {
 		t.Fatal(err)
 	}
 	// One admin user so documents.owner_id FK is satisfied.

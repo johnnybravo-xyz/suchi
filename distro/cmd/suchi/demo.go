@@ -29,6 +29,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/intelligence"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 	"github.com/johnnybravo-xyz/suchi/core/jd/presetfile"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
@@ -94,7 +95,7 @@ func runDemo(args []string) int {
 		fmt.Fprintf(os.Stderr, "migrate: %v\n", err)
 		return 1
 	}
-	if err := jd.EnsureTree(ctx, d, log, jd.ModeJD, 1); err != nil {
+	if err := applyDemoTree(ctx, d, log); err != nil {
 		fmt.Fprintf(os.Stderr, "jd tree: %v\n", err)
 		return 1
 	}
@@ -386,6 +387,23 @@ func makeSavedViewIngest(d *db.DB, ownerID, now int64) func(context.Context, dem
 		})
 		return created, err
 	}
+}
+
+// demoPresetID names the built-in filing tree whose codes the demo corpus
+// manifest uses for fixtures and automations.
+const demoPresetID = "household"
+
+// applyDemoTree applies the demo's filing tree once. Starter rules stay off
+// because the manifest already files every fixture.
+func applyDemoTree(ctx context.Context, d *db.DB, log *slog.Logger) error {
+	system, err := systems.Get(ctx, d.Read, systems.DefaultID)
+	if err != nil {
+		return err
+	}
+	if system.PresetID != "" {
+		return nil
+	}
+	return jd.ApplyPreset(ctx, d, log, demoPresetID, jd.ApplyPresetOpts{SystemID: systems.DefaultID, SkipSeeds: true})
 }
 
 func makeAutomationIngest(d *db.DB, now int64) func(context.Context, int, presetfile.SeedAutomation) (bool, error) {

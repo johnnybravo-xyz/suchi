@@ -1,11 +1,11 @@
 format = "suchi-taxonomy/v1"
 id = "smb_billing"
-version = 1
+version = 2
 name = "Small business"
 license = "CC0-1.0"
 market = "global"
 language = "en"
-story = "Customer, vendor, money, payroll, compliance, and marketing records for a small business."
+story = "Customer, supplier, money, payroll, compliance, and marketing records for a small business."
 
 [[areas]]
 code = 10
@@ -14,69 +14,86 @@ name = "Customers"
   [[areas.categories]]
   code = 12
   name = "Quotes & contracts"
+  description = "Quotes, proposals and signed customer agreements."
   keywords = ["quote", "proposal", "customer contract", "sales agreement"]
 
   [[areas.categories]]
   code = 13
   name = "Invoices out"
-  keywords = ["invoice", "tax invoice", "credit note"]
+  description = "Invoices and credit notes you issue to customers."
 
   [[areas.categories]]
   code = 14
-  name = "Collections & aging"
-  keywords = ["receivable", "aging", "ageing", "outstanding", "past due", "remittance"]
+  name = "Customer payments"
+  description = "Customer payments received, remittances and overdue reminders."
+  keywords = ["payment received", "payment reminder", "overdue notice", "accounts receivable", "past due", "aging report", "ageing report"]
 
   [[areas.categories]]
   code = 15
   name = "Correspondence"
+  description = "Letters, emails and meeting notes exchanged with customers."
   keywords = ["customer letter", "customer email", "meeting notes"]
 
 [[areas]]
 code = 20
-name = "Vendors"
+name = "Suppliers"
 
   [[areas.categories]]
   code = 22
-  name = "Orders & contracts"
-  keywords = ["purchase order", "po number", "vendor agreement"]
+  name = "Supplier contracts"
+  description = "Purchase orders and supplier agreements."
+  keywords = ["purchase order", "po number", "vendor agreement", "supplier agreement"]
 
   [[areas.categories]]
   code = 23
-  name = "Bills & purchases"
-  keywords = ["vendor bill", "supplier invoice", "bill of supply"]
+  name = "Supplier invoices"
+  description = "Bills and invoices from suppliers."
+  keywords = ["vendor bill", "vendor invoice", "supplier invoice", "bill of supply", "purchase invoice"]
 
   [[areas.categories]]
   code = 24
   name = "Deliveries"
-  keywords = ["delivery note", "goods receipt", "consignment"]
+  description = "Delivery notes and goods receipt notes."
+  keywords = ["delivery note", "goods receipt note", "grn", "consignment"]
 
   [[areas.categories]]
   code = 25
-  name = "Payments"
-  keywords = ["remittance advice", "payment voucher", "utr"]
+  name = "Supplier payments"
+  description = "Payment vouchers and other records of payments you make to suppliers."
+  keywords = ["payment voucher", "vendor payment", "supplier payment"]
 
 [[areas]]
 code = 30
 name = "Money"
 
   [[areas.categories]]
+  code = 31
+  name = "Bank & card statements"
+  description = "Business bank and card statements."
+  keywords = ["bank statement", "account statement", "statement of account", "credit card statement", "card statement"]
+
+  [[areas.categories]]
   code = 32
   name = "Expenses"
-  keywords = ["expense report", "travel expense", "receipt"]
+  description = "Receipts and expense claims for business spending. Supplier invoices go to Supplier invoices."
+  keywords = ["expense report", "expense claim", "travel expense"]
 
   [[areas.categories]]
   code = 33
   name = "Tax working papers"
-  keywords = ["tax working paper", "form 26as", "advance tax", "tax calculation"]
+  description = "Tax computations, AIS or 26AS, advance tax and other inputs for your returns."
+  keywords = ["tax working paper", "form 26as", "advance tax", "tax calculation", "tax computation"]
 
   [[areas.categories]]
   code = 34
   name = "Employee records"
+  description = "Employee IDs, offer letters and employment contracts."
   keywords = ["employee id", "offer letter", "employment contract"]
 
   [[areas.categories]]
   code = 35
   name = "Payroll"
+  description = "Payslips and payroll registers."
   keywords = ["payslip", "salary slip", "payroll register"]
 
 [[areas]]
@@ -85,23 +102,27 @@ name = "Compliance"
 
   [[areas.categories]]
   code = 51
-  name = "Tax filings"
-  keywords = ["tax filing", "tax return", "gstr", "itr"]
+  name = "Tax filings & acknowledgements"
+  description = "Submitted income, GST/sales and similar tax returns, plus filing confirmations."
+  keywords = ["tax filing", "tax return", "itr", "gstr", "tds return", "vat return", "sales tax return"]
 
   [[areas.categories]]
   code = 52
-  name = "Statutory returns"
-  keywords = ["pf return", "esi return", "roc filing", "statutory return"]
+  name = "Corporate & regulatory filings"
+  description = "Company, employment, pension and non-tax regulatory submissions."
+  keywords = ["pf return", "esi return", "roc filing", "mgt-7", "aoc-4", "regulatory filing"]
 
   [[areas.categories]]
   code = 53
-  name = "Audits"
-  keywords = ["audit report", "auditor letter"]
+  name = "Audit reports & correspondence"
+  description = "Audit reports, findings and auditor letters."
+  keywords = ["audit report", "auditor letter", "audit findings", "management letter"]
 
   [[areas.categories]]
   code = 54
   name = "Licenses & permits"
-  keywords = ["licence", "license", "permit", "trade licence"]
+  description = "Operating licenses, registrations and permits."
+  keywords = ["permit", "trade licence", "trade license", "business license", "registration certificate"]
 
 [[areas]]
 code = 60
@@ -109,23 +130,27 @@ name = "Portfolio & marketing"
 
   [[areas.categories]]
   code = 61
-  name = "Case studies"
-  keywords = ["case study", "customer story"]
+  name = "Case studies & portfolio examples"
+  description = "Case studies, customer stories and examples of past work."
+  keywords = ["case study", "customer story", "portfolio example"]
 
   [[areas.categories]]
   code = 62
-  name = "Testimonials"
-  keywords = ["testimonial", "reference letter"]
+  name = "Testimonials & references"
+  description = "Customer testimonials and customer reference letters."
+  keywords = ["customer testimonial", "customer reference"]
 
   [[areas.categories]]
   code = 63
-  name = "Templates"
-  keywords = ["template", "boilerplate"]
+  name = "Reusable document templates"
+  description = "Reusable contract, proposal and letter templates."
+  keywords = ["document template", "contract template", "proposal template", "letter template", "boilerplate"]
 
   [[areas.categories]]
   code = 64
-  name = "Marketing assets"
-  keywords = ["brochure", "brand asset", "campaign", "marketing plan"]
+  name = "Brand & campaign assets"
+  description = "Brand guidelines, brochures, campaign material and marketing templates."
+  keywords = ["brand guidelines", "brand asset", "brochure", "marketing plan", "campaign brief", "social media template"]
 
 [seeds]
 
@@ -140,20 +165,10 @@ name = "Portfolio & marketing"
     jd_category_code = 23
 
   [[seeds.automations]]
-  name = "Small business: file customer invoices"
-  [seeds.automations.trigger]
-  type = 2
-  filter_content_matching = "(?i)tax invoice|invoice to customer|credit note"
-  [[seeds.automations.actions]]
-  kind = "assign_jd_category"
-    [seeds.automations.actions.params]
-    jd_category_code = 13
-
-  [[seeds.automations]]
   name = "Small business: file statutory returns"
   [seeds.automations.trigger]
   type = 2
-  filter_content_matching = "(?i)gstr[- ]?[0-9]|tds return|pf return|esi return"
+  filter_content_matching = "(?i)pf return|esi return|roc filing|mgt-7|aoc-4"
   [[seeds.automations.actions]]
   kind = "assign_jd_category"
     [seeds.automations.actions.params]

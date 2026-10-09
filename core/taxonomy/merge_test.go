@@ -290,7 +290,7 @@ func setup(t *testing.T, ctx context.Context) *db.DB {
 	migs, _ := db.LoadMigrations(migrations.FS, ".")
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	must(t, db.Migrate(ctx, d, migs, log))
-	must(t, jd.EnsureTree(ctx, d, log, jd.ModeJD, 1))
+	must(t, jd.ApplyPreset(ctx, d, log, "household", jd.ApplyPresetOpts{SystemID: 1, SkipSeeds: true}))
 	return d
 }
 

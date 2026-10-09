@@ -30,7 +30,7 @@ func runImport(args []string) int {
 		dryRun     = fs.Bool("dry-run", false, "parse the bundle and report counts without writing")
 		flat       = fs.Bool("flat", false, "force every imported doc to the inbox category — skip JD resolution")
 		mapJD      = fs.String("map-jd", "", "path to a HuML or TOML rules mapping from bundle metadata to JD code")
-		autoJD     = fs.Bool("auto-jd", false, "apply the built-in JD heuristics (deterministic keyword matches against the starter tree). Off by default — inbox is the safe fallback.")
+		autoJD     = fs.Bool("auto-jd", false, "apply the built-in JD heuristics (deterministic tag matches for the Solo and Household filing trees). Off by default — inbox is the safe fallback.")
 		verify     = fs.Bool("verify", false, "dry-diff the bundle against the live DB — no writes. Prints new/match/differ/orphan counts.")
 		reportPath = fs.String("report", "./import-report.md", "write a FULL/PARTIAL/FAILED markdown report of the migration to this path")
 		systemCode = fs.String("system", "", "target system code (default: original archive)")
@@ -163,13 +163,10 @@ Import complete (dry_run=%v).
 	return 0
 }
 
-// ensureImportTree preserves the starter taxonomy only when the operator
-// explicitly requested category mapping. An unclassified import is neutral and
-// lands in the same Inbox-only baseline as normal server boot.
+// ensureImportTree never chooses a filing tree for the operator. Every import
+// lands in the archive's existing tree, or the Inbox-only baseline; category
+// mapping files into codes of the tree an administrator already applied.
 func ensureImportTree(ctx context.Context, d *db.DB, log *slog.Logger, mode jd.TaxonomyMode, opts bundle.Options) error {
-	if opts.AutoJD || opts.MapJD != nil {
-		return jd.EnsureTree(ctx, d, log, mode, opts.SystemID)
-	}
 	return jd.EnsureBootstrapTree(ctx, d, log, mode, opts.SystemID)
 }
 

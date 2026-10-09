@@ -17,6 +17,12 @@ suggestions stay inside its filing system; equal labels in another system are
 not candidates. Model output cannot transfer a document or grant system access.
 Archive research additionally checks the requesting user's membership and ACLs.
 
+The model sees each offered category as its code, area, name and description
+(descriptions are capped at 120 characters), and is asked for the most specific
+fit. Editing a category's description therefore changes where the model files
+borderline documents. See [Johnny.Decimal filing](/jd) for the built-in
+boundaries.
+
 It uses the OpenAI-compatible chat-completions API and supports local servers
 such as Ollama or llama.cpp and compatible hosted providers. The plugin is
 compiled into Suchi and can be enabled or reconfigured from the web interface.

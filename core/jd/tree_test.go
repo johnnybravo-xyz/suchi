@@ -61,12 +61,12 @@ func TestValidateRejectsBad(t *testing.T) {
 	}
 }
 
-func TestEnsureTreeFirstBoot(t *testing.T) {
+func TestEnsureBootstrapTreeIsIdempotent(t *testing.T) {
 	d, log := setupDB(t)
 	defer d.Close()
 	ctx := context.Background()
 
-	if err := jd.EnsureTree(ctx, d, log, jd.ModeJD, 1); err != nil {
+	if err := jd.EnsureBootstrapTree(ctx, d, log, jd.ModeJD, 1); err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
 	inbox, err := jd.InboxCategoryID(ctx, d, 1)
@@ -77,7 +77,7 @@ func TestEnsureTreeFirstBoot(t *testing.T) {
 		t.Fatal("inbox pointer not set")
 	}
 	// Re-run must be a no-op.
-	if err := jd.EnsureTree(ctx, d, log, jd.ModeJD, 1); err != nil {
+	if err := jd.EnsureBootstrapTree(ctx, d, log, jd.ModeJD, 1); err != nil {
 		t.Fatalf("re-ensure: %v", err)
 	}
 	inbox2, _ := jd.InboxCategoryID(ctx, d, 1)
@@ -127,8 +127,8 @@ func TestEnsureBootstrapTreePreservesExistingTaxonomy(t *testing.T) {
 	defer d.Close()
 	ctx := context.Background()
 
-	if err := jd.EnsureTree(ctx, d, log, jd.ModeJD, 1); err != nil {
-		t.Fatalf("seed starter: %v", err)
+	if err := jd.ApplyPreset(ctx, d, log, "solo", jd.ApplyPresetOpts{SystemID: 1, SkipSeeds: true}); err != nil {
+		t.Fatalf("apply solo: %v", err)
 	}
 	var before int
 	if err := d.Read.QueryRowContext(ctx, `SELECT COUNT(*) FROM jd_categories`).Scan(&before); err != nil {
@@ -150,12 +150,12 @@ func TestEnsureBootstrapTreePreservesExistingTaxonomy(t *testing.T) {
 	}
 }
 
-func TestEnsureTreeFlatMode(t *testing.T) {
+func TestEnsureBootstrapTreeFlatMode(t *testing.T) {
 	d, log := setupDB(t)
 	defer d.Close()
 	ctx := context.Background()
 
-	if err := jd.EnsureTree(ctx, d, log, jd.ModeFlat, 1); err != nil {
+	if err := jd.EnsureBootstrapTree(ctx, d, log, jd.ModeFlat, 1); err != nil {
 		t.Fatalf("ensure flat: %v", err)
 	}
 	var areas int

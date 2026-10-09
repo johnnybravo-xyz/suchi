@@ -80,29 +80,56 @@ System/49 Inbox and leaves 70–99 free for later operator additions. `blank`
 contains no user categories and needs explicit confirmation. Applying any reviewed
 tree or taxonomy import satisfies first-run archive setup.
 
-Solo and Household deliberately use only four user lanes. Solo keeps
-**Education & memberships** at 14 in Life admin; Household keeps
-**Memberships** at 14 in Family admin.
+Solo and Household deliberately use only four user lanes and share their Money,
+Health and Home lanes. Their administration lane holds identity, insurance,
+vehicles, **Memberships & associations** (14), **Education** (15) and
+**Employment** (16).
 
 Freelance and Small business likewise omit generic **Banking** and
 client/customer/vendor/project “records” buckets. Their categories describe a
 specific document purpose or workflow stage instead.
-All four ready-made trees call their money-management lane **Money**. The plain
-label covers personal investments and borrowing as well as business expenses,
-tax working papers and payroll without suggesting a separate financial system.
+All four ready-made trees call their money-management lane **Money**, and each
+has a **Bank & card statements** category there. The plain label covers personal
+investments and borrowing as well as business expenses, tax working papers and
+payroll without suggesting a separate financial system.
 
-The category names make their boundaries explicit:
+Each document should have one obvious home:
 
-- **Collections & aging** is for follow-up after an invoice is issued, including
-  overdue notices and remittance records. The invoice itself stays in
+- Use the most specific category. **Purchases & warranties** holds things you
+  buy that have no more specific home: a vehicle's purchase invoice goes to
+  **Vehicles**, school fees to **Education** and a hospital bill to
+  **Medical billing**.
+- Statements go with the account they cover: bank and card statements to
+  **Bank & card statements**, loan statements to **Loans** and investment
+  statements to **Investments**.
+- **Housing** holds ownership and title documents, leases, rent, mortgage
+  agreements, property tax and association charges. Loan statements and EMI
+  schedules stay in **Loans**; income tax stays in **Income tax**.
+- Personal **Medical billing** is for provider charges, insurance claims and
+  reimbursement records. Diagnoses, reports and discharge summaries stay in
+  **Medical records**; medication instructions stay in **Prescriptions**.
+- **Client payments** and **Customer payments** hold payments received,
+  remittances and overdue reminders. The invoice itself stays in
   **Invoices out**.
 - Freelance **Briefs & plans** is for project scope and planning. Signed legal
-  terms stay in client **Quotes & contracts**.
+  terms and statements of work stay in **Quotes & contracts**.
 - Freelance **Approvals & sign-off** is for acceptance and completion evidence.
-  Payment evidence stays with collections or the relevant **Money** category.
-- Personal **Medical billing** is for provider charges, insurance claims and
-  reimbursement records. Diagnoses and clinical reports stay in
-  **Medical records**; medication instructions stay in **Prescriptions**.
+  Payment evidence stays with the relevant **Money** category.
+- **Tax filings & acknowledgements** holds submitted income, GST/sales and similar
+  tax returns with their confirmations. Company, employment, pension and other
+  non-tax submissions go to **Corporate & regulatory filings**.
+
+Every built-in category has a one-line description of what belongs there and
+where a near neighbour's documents go instead. The document model sees each
+category's area, name and description. Category keywords name one category each;
+a form word such as “receipt”, “invoice” or “statement” is never a keyword on its
+own. Every matching rule runs and the last category assignment wins: starter
+rules run first, then keyword rules in category-code order.
+
+Archives that applied an earlier version of a ready-made tree keep their
+categories until an administrator applies it again; the preview below shows
+each rename and addition, and categories that are no longer part of the tree
+keep their documents.
 
 Ready-made and composed changes always preview first. After Preview completes,
 the workspace moves focus to the review and scrolls it into view. The review

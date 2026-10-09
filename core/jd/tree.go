@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Package jd owns the Johnny.Decimal taxonomy: the neutral first-boot
-// baseline, the legacy importer starter tree, and the inbox-category invariant.
+// baseline, the built-in presets, and the inbox-category invariant.
 //
 // The design opinion is: JD on by default, flat mode is a degenerate JD
 // tree (one area, one category, no branching in code). Either way
@@ -12,21 +12,15 @@ package jd
 import (
 	"context"
 	"database/sql"
-	_ "embed"
 	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/render/index"
 )
-
-//go:embed defaults/jd-tree.yaml
-var starterTreeYAML []byte
 
 // Tree is the on-disk shape of a JD taxonomy YAML file.
 type Tree struct {
@@ -79,26 +73,6 @@ func inboxOnlyTree(description string) Tree {
 	}}}
 }
 
-// StarterTree returns the embedded default JD tree. Parsed on every call
-// (cheap) so tests can freely mutate the result.
-func StarterTree() (Tree, error) {
-	return Parse(starterTreeYAML)
-}
-
-// Parse reads a JD tree YAML into a Tree. Enforces the CHECK-worthy
-// invariants at parse time so a bad file fails fast at boot instead of
-// bubbling up as an obscure SQL constraint error.
-func Parse(b []byte) (Tree, error) {
-	var t Tree
-	if err := yaml.Unmarshal(b, &t); err != nil {
-		return Tree{}, fmt.Errorf("parse jd tree: %w", err)
-	}
-	if err := t.Validate(); err != nil {
-		return Tree{}, err
-	}
-	return t, nil
-}
-
 // Validate checks the same constraints the schema does — code ranges
 // nested inside areas, one system category max, unique codes.
 func (t Tree) Validate() error {
@@ -137,34 +111,16 @@ func (t Tree) Validate() error {
 }
 
 // EnsureBootstrapTree establishes the neutral System/Inbox baseline used by
-// normal server boot. A populated taxonomy is only repaired, never replaced.
+// normal server boot, so it never chooses categories before an administrator.
+//
+//   - An empty system receives the baseline tree and its own Inbox pointer.
+//   - A populated system is only checked for a stale Inbox pointer.
+//
+// Idempotent: safe to run on every boot.
 func EnsureBootstrapTree(ctx context.Context, d *db.DB, log *slog.Logger, mode TaxonomyMode, systemID int64) error {
 	tree := BootstrapTree
 	if mode == ModeFlat {
 		tree = FlatTree
-	}
-	return ensureTree(ctx, d, log, mode, systemID, tree)
-}
-
-// EnsureTree preserves the established starter taxonomy used by explicit
-// classified imports and demo seeding. Normal server boot should call
-// EnsureBootstrapTree so it does not choose categories before an administrator.
-// Behavior:
-//
-//   - An empty system receives the caller's tree and its own Inbox pointer.
-//   - A populated system is only checked for a stale Inbox pointer.
-//
-// Idempotent: safe to run on every boot.
-func EnsureTree(ctx context.Context, d *db.DB, log *slog.Logger, mode TaxonomyMode, systemID int64) error {
-	// The active tree depends on the mode. Flat mode uses the built-in
-	// degenerate tree — no file read, no external state.
-	tree := FlatTree
-	if mode != ModeFlat {
-		t, err := StarterTree()
-		if err != nil {
-			return err
-		}
-		tree = t
 	}
 	return ensureTree(ctx, d, log, mode, systemID, tree)
 }

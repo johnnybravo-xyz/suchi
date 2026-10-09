@@ -37,55 +37,55 @@ var filingSetOrder = []string{
 
 var filingSetSpecs = map[string]filingSetSpec{
 	"life-admin": {
-		FilingSet:    FilingSet{ID: "life-admin", Name: "Life admin", Description: "Identity, insurance, vehicles, education, and memberships.", Lane: 10},
-		SourcePreset: "solo", CategoryKeys: map[int]string{11: "admin.identity", 12: "admin.insurance", 13: "admin.vehicles", 14: "admin.memberships"},
+		FilingSet:    FilingSet{ID: "life-admin", Name: "Life admin", Description: "Identity, insurance, vehicles, memberships, education, and employment.", Lane: 10},
+		SourcePreset: "solo", CategoryKeys: map[int]string{11: "admin.identity", 12: "admin.insurance", 13: "admin.vehicles", 14: "admin.memberships", 15: "admin.education", 16: "admin.employment"},
 	},
 	"family-admin": {
-		FilingSet:    FilingSet{ID: "family-admin", Name: "Family admin", Description: "Shared identity, insurance, vehicle, and membership records.", Lane: 10},
-		SourcePreset: "household", CategoryKeys: map[int]string{11: "admin.identity", 12: "admin.insurance", 13: "admin.vehicles", 14: "admin.memberships"},
+		FilingSet:    FilingSet{ID: "family-admin", Name: "Family admin", Description: "Shared identity, insurance, vehicle, membership, education, and employment records.", Lane: 10},
+		SourcePreset: "household", CategoryKeys: map[int]string{11: "admin.identity", 12: "admin.insurance", 13: "admin.vehicles", 14: "admin.memberships", 15: "admin.education", 16: "admin.employment"},
 	},
 	"clients": {
-		FilingSet:    FilingSet{ID: "clients", Name: "Clients", Description: "Quotes, contracts, invoices, collections, and correspondence.", Lane: 10},
-		SourcePreset: "freelance", CategoryKeys: map[int]string{12: "revenue.agreements", 13: "revenue.invoices", 14: "revenue.collections", 15: "revenue.correspondence"},
+		FilingSet:    FilingSet{ID: "clients", Name: "Clients", Description: "Quotes, contracts, invoices, payments, and correspondence.", Lane: 10},
+		SourcePreset: "freelance", CategoryKeys: map[int]string{12: "revenue.agreements", 13: "revenue.invoices", 14: "revenue.payments", 15: "revenue.correspondence"},
 	},
 	"customers": {
-		FilingSet:    FilingSet{ID: "customers", Name: "Customers", Description: "Quotes, contracts, invoices, collections, and correspondence.", Lane: 10},
-		SourcePreset: "smb_billing", CategoryKeys: map[int]string{12: "revenue.agreements", 13: "revenue.invoices", 14: "revenue.collections", 15: "revenue.correspondence"},
+		FilingSet:    FilingSet{ID: "customers", Name: "Customers", Description: "Quotes, contracts, invoices, payments, and correspondence.", Lane: 10},
+		SourcePreset: "smb_billing", CategoryKeys: map[int]string{12: "revenue.agreements", 13: "revenue.invoices", 14: "revenue.payments", 15: "revenue.correspondence"},
 	},
 	"finance": {
-		FilingSet:    FilingSet{ID: "finance", Name: "Money", Description: "Investments, tax, credit, and receipts.", Lane: 20},
-		SourcePreset: "solo", CategoryKeys: map[int]string{22: "finance.investments", 23: "finance.taxes", 24: "finance.credit", 25: "finance.receipts"},
+		FilingSet:    FilingSet{ID: "finance", Name: "Money", Description: "Bank and card statements, investments, income tax, loans, and purchases.", Lane: 20},
+		SourcePreset: "solo", CategoryKeys: map[int]string{21: "money.bank-statements", 22: "finance.investments", 23: "finance.income-tax", 24: "finance.loans", 25: "finance.purchases"},
 	},
 	"projects": {
-		FilingSet:    FilingSet{ID: "projects", Name: "Projects", Description: "Briefs, plans, costs, deliverables, approvals, and sign-off.", Lane: 20},
-		SourcePreset: "freelance", CategoryKeys: map[int]string{22: "projects.briefs-plans", 23: "projects.costs", 24: "projects.deliverables", 25: "projects.approvals-signoff"},
+		FilingSet:    FilingSet{ID: "projects", Name: "Projects", Description: "Briefs, plans, deliverables, approvals, and sign-off.", Lane: 20},
+		SourcePreset: "freelance", CategoryKeys: map[int]string{22: "projects.briefs-plans", 24: "projects.deliverables", 25: "projects.approvals-signoff"},
 	},
 	"vendors": {
-		FilingSet:    FilingSet{ID: "vendors", Name: "Vendors", Description: "Orders, contracts, bills, deliveries, and payments.", Lane: 20},
-		SourcePreset: "smb_billing", CategoryKeys: map[int]string{22: "vendors.agreements", 23: "vendors.bills-purchases", 24: "vendors.deliveries", 25: "vendors.payments"},
+		FilingSet:    FilingSet{ID: "vendors", Name: "Suppliers", Description: "Supplier contracts, invoices, deliveries, and payments.", Lane: 20},
+		SourcePreset: "smb_billing", CategoryKeys: map[int]string{22: "vendors.contracts", 23: "vendors.invoices", 24: "vendors.deliveries", 25: "vendors.payments"},
 	},
 	"health": {
 		FilingSet:    FilingSet{ID: "health", Name: "Health", Description: "Medical records, prescriptions, bills, and claims.", Lane: 30},
 		SourcePreset: "solo", CategoryKeys: map[int]string{31: "health.records", 32: "health.prescriptions", 33: "health.billing"},
 	},
 	"business-finance": {
-		FilingSet:    FilingSet{ID: "business-finance", Name: "Money", Description: "Expenses, tax working papers, and contractors.", Lane: 30},
-		SourcePreset: "freelance", CategoryKeys: map[int]string{32: "business.expenses", 33: "business.tax", 34: "business.contractors", 35: "business.contractor-payments"},
+		FilingSet:    FilingSet{ID: "business-finance", Name: "Money", Description: "Bank and card statements, expenses, tax working papers, and contractors.", Lane: 30},
+		SourcePreset: "freelance", CategoryKeys: map[int]string{31: "money.bank-statements", 32: "business.expenses", 33: "business.tax", 34: "business.contractors", 35: "business.contractor-payments"},
 	},
 	"finance-payroll": {
-		FilingSet:    FilingSet{ID: "finance-payroll", Name: "Money", Description: "Expenses, tax working papers, employee records, and payroll.", Lane: 30},
-		SourcePreset: "smb_billing", CategoryKeys: map[int]string{32: "business.expenses", 33: "business.tax", 34: "business.employees", 35: "business.payroll"},
+		FilingSet:    FilingSet{ID: "finance-payroll", Name: "Money", Description: "Bank and card statements, expenses, tax working papers, employee records, and payroll.", Lane: 30},
+		SourcePreset: "smb_billing", CategoryKeys: map[int]string{31: "money.bank-statements", 32: "business.expenses", 33: "business.tax", 34: "business.employees", 35: "business.payroll"},
 	},
 	"home": {
-		FilingSet:    FilingSet{ID: "home", Name: "Home", Description: "Utilities, housing, and warranties.", Lane: 50},
-		SourcePreset: "solo", CategoryKeys: map[int]string{51: "home.utilities", 52: "home.property", 54: "home.warranties"},
+		FilingSet:    FilingSet{ID: "home", Name: "Home", Description: "Utilities and housing.", Lane: 50},
+		SourcePreset: "solo", CategoryKeys: map[int]string{51: "home.utilities", 52: "home.housing"},
 	},
 	"compliance": {
-		FilingSet:    FilingSet{ID: "compliance", Name: "Compliance", Description: "Tax filings, statutory returns, audits, licenses, and permits.", Lane: 50},
-		SourcePreset: "freelance", CategoryKeys: map[int]string{51: "compliance.tax", 52: "compliance.statutory", 53: "compliance.audits", 54: "compliance.licenses"},
+		FilingSet:    FilingSet{ID: "compliance", Name: "Compliance", Description: "Tax filings, corporate and regulatory filings, audits, licenses, and permits.", Lane: 50},
+		SourcePreset: "freelance", CategoryKeys: map[int]string{51: "compliance.tax", 52: "compliance.regulatory", 53: "compliance.audits", 54: "compliance.licenses"},
 	},
 	"portfolio-marketing": {
-		FilingSet:    FilingSet{ID: "portfolio-marketing", Name: "Portfolio & marketing", Description: "Case studies, testimonials, templates, and marketing assets.", Lane: 60},
+		FilingSet:    FilingSet{ID: "portfolio-marketing", Name: "Portfolio & marketing", Description: "Case studies, testimonials, templates, and brand assets.", Lane: 60},
 		SourcePreset: "freelance", CategoryKeys: map[int]string{61: "marketing.case-studies", 62: "marketing.testimonials", 63: "marketing.templates", 64: "marketing.assets"},
 	},
 }

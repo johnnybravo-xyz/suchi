@@ -18,7 +18,7 @@ import (
 func seedEmailPreviewDoc(t *testing.T, s *Server, content string) int64 {
 	t.Helper()
 	ctx := context.Background()
-	if err := jd.EnsureTree(ctx, s.DB, s.Log, jd.ModeFlat, 1); err != nil {
+	if err := jd.EnsureBootstrapTree(ctx, s.DB, s.Log, jd.ModeFlat, 1); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.DB.Write.ExecContext(ctx, `

@@ -479,12 +479,16 @@ func (h *Handler) loadDoc(ctx context.Context, id int64) (title, content, source
 }
 
 // loadJDCategories returns the operator's user-facing JD categories in
-// code order. System-only rows (Inbox and its siblings) are excluded —
-// the LLM should never pick them as a suggested classification, and
-// dropping them from the prompt cuts token cost.
+// code order, with their area and description. System-only rows (Inbox and
+// its siblings) are excluded — the LLM should never pick them as a suggested
+// classification, and dropping them from the prompt cuts token cost.
 func (h *Handler) loadJDCategories(ctx context.Context, systemID int64) ([]JDCat, error) {
-	rows, err := h.db.Read.QueryContext(ctx,
-		`SELECT code, name FROM jd_categories WHERE system_id = ? AND system = 0 ORDER BY code`, systemID)
+	rows, err := h.db.Read.QueryContext(ctx, `
+		SELECT c.code, a.name, c.name, COALESCE(c.description, '')
+		FROM jd_categories c
+		JOIN jd_areas a ON a.system_id = c.system_id AND a.code_start = c.area_start
+		WHERE c.system_id = ? AND c.system = 0
+		ORDER BY c.code`, systemID)
 	if err != nil {
 		return nil, err
 	}
@@ -492,7 +496,7 @@ func (h *Handler) loadJDCategories(ctx context.Context, systemID int64) ([]JDCat
 	var out []JDCat
 	for rows.Next() {
 		var c JDCat
-		if err := rows.Scan(&c.Code, &c.Name); err != nil {
+		if err := rows.Scan(&c.Code, &c.Area, &c.Name, &c.Description); err != nil {
 			return nil, err
 		}
 		out = append(out, c)

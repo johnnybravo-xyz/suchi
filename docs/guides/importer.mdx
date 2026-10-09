@@ -217,10 +217,13 @@ visible, bulk-reassignable, never lost. Three flags override:
 
   </Tab>
   <Tab title="--auto-jd">
-    Apply the built-in heuristics — deterministic keyword matches
-    against the starter tree (`tax` → 22 Tax, `insurance` → 23,
-    `bescom`/`electricity`/`water` → 31 Utilities, `passport` /
-    `aadhaar` → 11 Identity, and so on).
+    Apply the built-in heuristics — deterministic matches on Paperless tag and
+    document-type names that target the Solo and Household filing trees
+    (`bank` → 21 Bank & card statements, `tax` → 23 Income tax,
+    `insurance` → 12, `electricity`/`water` → 51 Utilities, `passport` /
+    `aadhaar` → 11, and so on). Apply Solo or Household in
+    **Settings > Filing tree** first; the importer refuses `--auto-jd` for any
+    other tree before writing anything. Use `--map-jd` for other trees.
 
     ```bash
     suchi import --from ./export --owner-email you@ex.com --auto-jd
@@ -341,7 +344,8 @@ Choose at most one category strategy:
 
 - `--flat` sends every imported document to the inbox.
 - `--map-jd <file>` applies the first matching HuML or TOML rule.
-- `--auto-jd` uses the bundled deterministic keyword mapping.
+- `--auto-jd` uses the bundled deterministic keyword mapping for the Solo and
+  Household trees.
 
 An unmatched rule or a rule targeting a category absent from the active tree
 falls back to the inbox. Invalid targets are also listed in the import

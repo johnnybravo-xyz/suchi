@@ -48,7 +48,7 @@ Point `--from` at your existing DMS's export bundle. See
 | `--dry-run`             | no                      | Parse + report counts without writing.                                                                     |
 | `--flat`                | no                      | Every doc → inbox. Skip JD resolution.                                                                     |
 | `--map-jd <path>`       | no                      | HuML or TOML rules: source metadata → JD code.                                                             |
-| `--auto-jd`             | no                      | Apply built-in JD heuristics (deterministic keyword matches). Off by default — inbox is the safe fallback. |
+| `--auto-jd`             | no                      | Apply built-in JD heuristics for the Solo or Household tree (deterministic tag matches). Off by default — inbox is the safe fallback. |
 | `--verify`              | no                      | Dry-diff the bundle against the live DB. No writes.                                                        |
 | `--report <path>`       | no                      | Write the import report. Defaults to `./import-report.md`.                                                 |
 | `--system <CODE>`       | no                      | Existing destination for import and `--verify`; omission uses original system 1.                           |

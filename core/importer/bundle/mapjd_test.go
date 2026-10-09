@@ -6,9 +6,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/johnnybravo-xyz/suchi/core/importer/bundle"
+	"github.com/johnnybravo-xyz/suchi/core/jd/presetfile"
 )
 
 // TestAutoMappingParses is a smoke test — the embedded heuristics.yaml
@@ -86,8 +88,8 @@ func TestOptionsValidate(t *testing.T) {
 }
 
 // TestAutoJDEndToEnd runs the full importer with --auto-jd against a
-// bundle where one doc has tag "tax" (matches AutoMapping code 22) and
-// another has tag "cli-test" (no rule → inbox).
+// Household archive where one doc has tag "tax" (matches AutoMapping code 23,
+// Income tax) and another has tag "cli-test" (no rule → inbox).
 func TestAutoJDEndToEnd(t *testing.T) {
 	ctx := context.Background()
 	tmp := t.TempDir()
@@ -111,7 +113,7 @@ func TestAutoJDEndToEnd(t *testing.T) {
 		t.Errorf("MappedByRule = %d, want 1 (only the tax-tagged doc)", rep.MappedByRule)
 	}
 
-	// The tax doc must have landed in category with code 22.
+	// The tax doc must have landed in category with code 23.
 	var code int
 	if err := d.Read.QueryRow(`
 		SELECT jc.code
@@ -120,7 +122,66 @@ func TestAutoJDEndToEnd(t *testing.T) {
 	`).Scan(&code); err != nil {
 		t.Fatalf("query: %v", err)
 	}
-	if code != 22 {
-		t.Errorf("tax doc landed in code %d, want 22", code)
+	if code != 23 {
+		t.Errorf("tax doc landed in code %d, want 23", code)
+	}
+}
+
+// The heuristics name Solo/Household codes, so any other tree is refused
+// before a single document is written.
+func TestAutoJDRefusesOtherFilingTrees(t *testing.T) {
+	ctx := context.Background()
+	tmp := t.TempDir()
+	bundleDir := buildAutoJDBundle(t, tmp)
+	d, cas, log, ownerEmail := setupTarget(t, ctx, tmp+"/data")
+	if _, err := d.Write.ExecContext(ctx, `UPDATE jd_systems SET preset_id='freelance' WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := bundle.Run(ctx, d, cas, log, bundle.Options{
+		SystemID:   1,
+		BundleRoot: bundleDir,
+		OwnerEmail: ownerEmail,
+		AutoJD:     true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "Solo or Household") {
+		t.Fatalf("run error = %v, want Solo or Household refusal", err)
+	}
+	var documents int
+	if err := d.Read.QueryRow(`SELECT COUNT(*) FROM documents`).Scan(&documents); err != nil {
+		t.Fatal(err)
+	}
+	if documents != 0 {
+		t.Fatalf("documents written before refusal = %d, want 0", documents)
+	}
+}
+
+// Every heuristic must target a category that exists in both Solo and
+// Household, the only trees --auto-jd accepts.
+func TestAutoMappingTargetsSoloAndHouseholdCodes(t *testing.T) {
+	m, err := bundle.AutoMapping()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, preset := range []string{"solo", "household"} {
+		raw, err := os.ReadFile(filepath.Join("..", "..", "jd", "presets", preset+".toml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		pf, err := presetfile.Parse(raw, presetfile.FormatTOML)
+		if err != nil {
+			t.Fatal(err)
+		}
+		codes := map[int]bool{}
+		for _, area := range pf.Areas {
+			for _, category := range area.Categories {
+				codes[category.Code] = true
+			}
+		}
+		for _, rule := range m.Rules {
+			if !codes[rule.Category] {
+				t.Errorf("%s has no category %d for heuristic %q", preset, rule.Category, rule.If)
+			}
+		}
 	}
 }

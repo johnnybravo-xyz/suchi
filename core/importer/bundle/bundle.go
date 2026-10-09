@@ -123,6 +123,15 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 		effective = nil
 		source = "flat"
 	} else if effective == nil && opts.AutoJD {
+		system, err := systems.Get(ctx, d.Read, opts.SystemID)
+		if err != nil {
+			return nil, err
+		}
+		// The embedded heuristics name Solo/Household codes; other trees
+		// would receive documents under unrelated categories.
+		if system.PresetID != "solo" && system.PresetID != "household" {
+			return nil, errors.New("--auto-jd files into the Solo or Household filing tree; apply one in Settings > Filing tree first, or use --map-jd")
+		}
 		auto, err := AutoMapping()
 		if err != nil {
 			return nil, err

@@ -15,7 +15,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 )
 
-func TestEnsureImportTreeSelection(t *testing.T) {
+func TestEnsureImportTreeNeverChoosesATree(t *testing.T) {
 	tests := []struct {
 		name          string
 		opts          bundle.Options
@@ -23,8 +23,8 @@ func TestEnsureImportTreeSelection(t *testing.T) {
 	}{
 		{name: "unclassified import", opts: bundle.Options{}},
 		{name: "flat import", opts: bundle.Options{Flat: true}},
-		{name: "automatic mapping", opts: bundle.Options{AutoJD: true}, wantNonSystem: true},
-		{name: "explicit mapping", opts: bundle.Options{MapJD: &bundle.Mapping{}}, wantNonSystem: true},
+		{name: "automatic mapping", opts: bundle.Options{AutoJD: true}},
+		{name: "explicit mapping", opts: bundle.Options{MapJD: &bundle.Mapping{}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

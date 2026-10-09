@@ -134,11 +134,17 @@ type Config struct {
 
 // JDCat is one Johnny-Decimal category exposed to the model as a valid
 // classification target. Handler injects these per-installation so the
-// model sees real codes + names instead of a bare "integer 10-99" hint.
+// model sees the same area, name and description a person sees in the tree.
 type JDCat struct {
-	Code int
-	Name string
+	Code        int
+	Area        string
+	Name        string
+	Description string
 }
+
+// maxCategoryDescriptionRunes bounds each description in the prompt; the
+// full category list is sent with every classification.
+const maxCategoryDescriptionRunes = 120
 
 // Invariant: exactly ONE Classify call per doc in the ingestion
 // pipeline. LLM turns dominate ingestion wall-clock + spend; a
@@ -604,9 +610,13 @@ func lastChars(value string, limit int) string {
 func buildRequestBody(model, title, content string, jdCats []JDCat, siblingTitles []string, questions []automations.ModelQuestion) []byte {
 	var cats strings.Builder
 	if len(jdCats) > 0 {
-		cats.WriteString("\n\nAvailable Johnny-Decimal categories (pick one code from this list only; return 0 if none fit):\n")
+		cats.WriteString("\n\nAvailable Johnny-Decimal categories as code – area › name: description (pick the most specific code from this list only; return 0 if none fit):\n")
 		for _, c := range jdCats {
-			fmt.Fprintf(&cats, "%d – %s\n", c.Code, c.Name)
+			fmt.Fprintf(&cats, "%d – %s › %s", c.Code, c.Area, c.Name)
+			if description := truncateChars(strings.Join(strings.Fields(c.Description), " "), maxCategoryDescriptionRunes); description != "" {
+				fmt.Fprintf(&cats, ": %s", description)
+			}
+			cats.WriteString("\n")
 		}
 	}
 	var siblings strings.Builder
@@ -652,8 +662,8 @@ Respond with a JSON object:
   title: 5-8 word document title (empty string if unclear)
   correspondent: sender/issuer name (empty if unclear)
   tags: 0-5 short lowercase labels like ["utilities","invoice"]
-  jd_category: pick the code from the list of Johnny-Decimal categories
-               the user provides; return 0 if no listed code fits
+  jd_category: pick the most specific code from the list of Johnny-Decimal
+               categories the user provides; return 0 if no listed code fits
   confidence: 0.0-1.0 self-assessed confidence
   reasoning: one short sentence explaining low confidence, else empty
   language: dominant language as an ISO-639-1 code ("en","de","kn"),

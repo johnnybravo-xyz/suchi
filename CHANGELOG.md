@@ -43,6 +43,11 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- `suchi import --auto-jd` no longer files into the codes of a retired starter
+  tree (tax under Investments, insurance under Taxes on preset archives). Its
+  heuristics now target the Solo and Household trees, and it refuses any other
+  tree before writing. Imports no longer create a filing tree; `--map-jd`
+  targets the tree an administrator already applied.
 - Align Automations with the centered Views workspace, use compact positive-count
   badges and plain zero counts across both screens, keep custom rules ahead of
   collapsed filing-tree rules, and replace folder-layout, owner, and custom-field
@@ -112,6 +117,25 @@ Notable user-visible changes to Suchi are recorded here.
   collapsed plain-language source explanations, and no producer score details.
 - Streamline Classification with concise helper copy and a contained **Similar
   documents** switch that exposes standard switch semantics.
+
+- Revise the four ready-made filing trees (version 2) so each common document
+  has one obvious home. Solo and Household add **Bank & card statements**,
+  **Education** and **Employment**, rename **Loans & credit** to **Loans**,
+  **Taxes** to **Income tax** and 14 to **Memberships & associations**, fold
+  **Warranties** into **Purchases & warranties**, and widen **Housing** to
+  ownership, leases, rent, mortgage agreements, property tax and association
+  charges. Freelance and Small business add **Bank & card statements**, rename
+  collections to **Client payments** / **Customer payments**, fold Freelance
+  project costs into **Expenses**, rename the Small business vendor lane to
+  **Suppliers**, and give the compliance and portfolio lanes explicit names.
+  Every category now has a one-line description, keywords name one category
+  each, and starter rules no longer contradict them. Existing archives keep
+  their categories until an administrator applies the tree again; that preview
+  renames in place and leaves removed categories with their documents.
+- The document model now sees each category's area, name and description and
+  is asked for the most specific fit.
+- `suchi demo` applies the Household tree before seeding; demo corpus category
+  codes refer to it.
 
 ## [0.1.0] - 2026-09-28
 
