@@ -4,11 +4,17 @@ Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-10
+
+Source tag only: no binaries, images or GitHub release are published for this
+version. Installations keep using the v0.2.0 artifacts.
+
 ### Changed
 
-- The demo tour adds a third step that traces the Northstar agreement's linked
-  documents and its revised quote's version history. Demo corpus manifests can
-  declare `previous_version` and named `links` by fixture filename.
+- The demo seeds corpus v0.2.1, and its tour adds a third step that traces the
+  Northstar agreement's linked documents and its revised quote's version
+  history. Demo corpus manifests can declare `previous_version` and named
+  `links` by fixture filename.
 
 ## [0.2.0] - 2026-10-09
 
@@ -563,7 +569,8 @@ Notable user-visible changes to Suchi are recorded here.
   and saved document passwords are sealed at rest.
 - Setup, demo isolation, error responses, and capability removal fail closed.
 
-[Unreleased]: https://github.com/johnnybravo-xyz/suchi/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/johnnybravo-xyz/suchi/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/johnnybravo-xyz/suchi/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/johnnybravo-xyz/suchi/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/johnnybravo-xyz/suchi/compare/v0.1.0-beta.3...v0.1.0
 [0.1.0-beta.3]: https://github.com/johnnybravo-xyz/suchi/compare/v0.1.0-beta.2...v0.1.0-beta.3
