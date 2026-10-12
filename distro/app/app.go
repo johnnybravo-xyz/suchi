@@ -783,7 +783,6 @@ func Run(ctx context.Context, opts Options) error {
 		}
 	}
 
-
 	return runHTTPEndpoints(ctx, cancel, endpoints, log)
 }
 
