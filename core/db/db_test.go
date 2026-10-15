@@ -68,8 +68,12 @@ func TestWriteTxFailureReleasesWriter(t *testing.T) {
 func TestOpenPreservesLiteralFilenameAndDatabaseIsolation(t *testing.T) {
 	root := t.TempDir()
 	var databases []*db.DB
-	for _, name := range []string{"archive #one%2f.db", "archive #two%2f.db"} {
-		path := filepath.Join(root, name)
+	for i, name := range []string{"archive #one%2f.db", "archive #two%2f.db"} {
+		archiveDir := filepath.Join(root, strconv.Itoa(i))
+		if err := os.Mkdir(archiveDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(archiveDir, name)
 		d, err := db.Open(t.Context(), path)
 		if err != nil {
 			t.Fatal(err)
