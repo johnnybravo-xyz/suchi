@@ -319,13 +319,14 @@ desktop-sbom:
 	  cargo cyclonedx --format json --override-filename suchi-desktop.cdx; \
 	  mv suchi-desktop.cdx.json ../../dist/sbom/suchi-desktop.cdx.json
 
+# Rust 1.99's macOS rust-objcopy cannot load libLLVM from Tauri's Cargo subprocess.
 desktop-build:
 	@set -eu; \
 	  export PATH="$$(dirname "$$(rustup which --toolchain $(DESKTOP_RUST_VERSION) rustfmt)"):$${PATH}"; \
 	  host="$$(rustup run $(DESKTOP_RUST_VERSION) rustc -vV | awk '/^host:/ { print $$2; exit }')"; \
 	  if test "$$(uname -s)" = Darwin; then \
 	    export CC="$$(xcrun --find clang)" SDKROOT="$$(xcrun --show-sdk-path)"; \
-	    export DYLD_LIBRARY_PATH="$$(rustup run $(DESKTOP_RUST_VERSION) rustc --print sysroot)/lib:$${DYLD_LIBRARY_PATH:-}"; \
+	    export CARGO_PROFILE_RELEASE_STRIP=none; \
 	    export CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER="$$CC" CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER="$$CC"; \
 	  fi; \
 	  target="$${DESKTOP_TARGET:-$$host}"; \
