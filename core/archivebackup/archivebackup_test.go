@@ -5,6 +5,7 @@ package archivebackup_test
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -29,6 +30,13 @@ func TestCreateAndVerifyCompleteBackup(t *testing.T) {
 	}
 	if !preflight.Ready || preflight.Compatibility.Status != db.CompatibilityCurrent || preflight.PayloadFileCount != 4 {
 		t.Fatalf("preflight = %+v", preflight)
+	}
+	wire, err := json.Marshal(preflight)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(wire, []byte(`"issues":[]`)) {
+		t.Fatalf("preflight issues must serialize as an empty array: %s", wire)
 	}
 
 	output := filepath.Join(t.TempDir(), "archive.suchi-backup")

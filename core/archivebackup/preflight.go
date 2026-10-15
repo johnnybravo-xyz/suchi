@@ -81,6 +81,7 @@ func preflightSourcesLocked(ctx context.Context, options Options) (PreflightRepo
 		Version:    ReportVersion,
 		DataDir:    options.DataDir,
 		ConfigPath: options.ConfigPath,
+		Issues:     make([]string, 0),
 	}
 	databasePath := filepath.Join(options.DataDir, "suchi.db")
 	compatibility, err := inspectDatabase(ctx, databasePath)
