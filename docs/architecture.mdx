@@ -17,6 +17,7 @@ browser composition; linked feature guides own detailed user and wire behavior.
 | Concern | Entry point and owner |
 | --- | --- |
 | Lifecycle and wiring | `distro/cmd/suchi/main.go` parses configuration/signals; `distro/app/app.go: Run` and `serve_*.go` assemble services and HTTP policy |
+| Desktop lifecycle/package | `desktop/src-tauri/src/` owns the Tauri launcher, sidecar identity, process/readiness supervision, paths, upgrade/restore journal, and exact legacy migration; `desktop/launcher/` is only the pre-ready shell; `Makefile` and release CI own native packages |
 | JSON contracts | `core/api/api.go: Server.Register`; feature handlers in `core/api/` |
 | Browser/blob delivery | `core/ui/ui.go`, `core/ui/spa.go`; `core/uiassets` verifies generated browser builds; `distro/app` wires API preview/download mirrors |
 | Localization | `core/i18n` validates server catalogs and negotiates request locales; account preference is stored on `users`, exposed by `core/api/users.go`, and shared with `core/ui` server-rendered pages |
@@ -104,6 +105,42 @@ directory from the checkout and stop during server assembly when it is missing
 or stale; `make ui` restores the required state. CI passes one target-SHA-bound
 bundle from its frontend job to Go test and cross-build jobs, while Docker uses
 a pinned Bun build stage and copies only generated files into the Go stage.
+
+## Desktop local runtime
+
+The native package reuses the Go server and canonical embedded SPA:
+
+```mermaid
+flowchart LR
+  T[Tauri tray and launcher] -->|managed child| G[Go sidecar]
+  G -->|loopback after nonce-bound readiness| W[system WebView]
+  G --> A[SQLite and immutable CAS]
+```
+
+`desktop/src-tauri/src/` owns paths, sidecar identity, process/readiness
+supervision, and the tray. It verifies the packaged sidecar's metadata and
+SHA-256 before every spawn, clears the inherited environment, keeps child stdin
+as the lifetime channel, and requires both an atomic nonce-bound ready file and
+direct `/readyz` response before opening the SPA. The launcher never kills an
+unrelated port owner.
+
+`core/archivelock` gives server and offline CLI work one exclusive archive
+owner. `core/archivebackup` owns the strict `.suchi-backup` format and
+crash-recoverable activation. Rust journals upgrade/restore intent, creates a
+verified retained backup, and commits only after readiness; a downgrade restores
+an older-build backup without first launching the older binary against newer
+data. `desktop-state.json` stores only launcher state, never credentials or
+documents.
+
+`legacy.rs` accepts only fixture-pinned installer layouts, backs up before
+mutation, preserves archive/config paths and port, and removes only exact
+installer-owned service files after readiness.
+
+`DEPLOYMENT_PROFILE=desktop_local` is server-enforced: literal loopback only;
+no TLS, OIDC, shares, model connections, managed mail, or mobile pairing. Release
+packages are universal macOS app/DMG and glibc Linux deb/rpm, gated by package
+allowlists, launch smoke, signatures, notices, advisory audit, checksums, and
+SBOMs. See [Desktop local install](/local-install).
 
 ## From upload to usable document
 
@@ -920,6 +957,7 @@ Start at the affected boundary, then run the aggregate loop.
 | Queue/concurrency | `go test -race ./core/jobs/... ./distro/app/... ./distro/cmd/suchi/...`; backlog, cancellation, restart recovery |
 | Schema/blobs/deletion | `go test ./core/db/... ./core/blob/... ./core/trash/... ./core/gc/... ./core/importer/bundle/...`; migrations/shared blobs |
 | Filing/model/review | `go test ./core/automations/... ./core/approvals/... ./core/intelligence/... ./plugins/llm-classifier/...`; human decisions/no-model operation |
+| Desktop lifecycle/archive/package | `go test -race ./core/archivebackup ./core/archivelock ./distro/app ./distro/cmd/suchi`; `make desktop-check desktop-security desktop-build`; packaged launch smoke |
 
 ```sh
 GOCACHE=/tmp/suchi-go-cache go test ./core/db ./core/automations ./distro/app ./distro/cmd/suchi

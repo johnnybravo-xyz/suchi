@@ -96,7 +96,31 @@ backup. A separate GC process could remove bytes still needed by that snapshot.
 
 Do not copy only a live `suchi.db`, copy WAL files separately, or omit blobs.
 
+### Complete `.suchi-backup` file
+
+`suchi backup create --out FILE.suchi-backup` is the portable whole-instance
+backup path used by the desktop app. It acquires the archive lock, checks schema
+compatibility, checkpoints SQLite, and writes the database, every current CAS
+blob, `.decrypt-key`, and the managed config into a strict stored ZIP. A
+versioned manifest records build/schema identity and every entry's mode, size,
+and SHA-256 digest. Creation verifies the finished temporary archive before an
+atomic publish.
+
+Run `suchi backup preflight` before choosing a destination and `suchi backup
+verify FILE` after transferring it. Creating the file while the server owns the
+archive is rejected; stop every writer first. The desktop tray's **Create
+Complete Backup…** action performs stop, create, verify, and restart as one
+supervised operation. See [CLI](/cli#suchi-backup-command) and [Desktop local
+install](/local-install#complete-backup-restore-and-upgrades).
+
 ## Restore
+
+Desktop users should choose **Restore Complete Backup…** from the tray instead
+of moving files manually. It creates a retained backup, stages and verifies the
+selected `.suchi-backup`, activates it with a durable recovery journal, and
+commits only after the restored sidecar reaches readiness. A crash resumes the
+journal; failed readiness offers rollback to the retained archive. The manual
+server procedure is:
 
 1. Stop the target process.
 2. Move the existing `DATA_DIR` aside rather than deleting it immediately.
@@ -144,6 +168,16 @@ Take a complete backup using one of the methods above, stop every archive
 writer, and keep the deployment pinned to an explicit version. Pull or install
 the target version, recreate or restart the single Suchi instance, then verify
 `/readyz` and run `suchi doctor`.
+
+The desktop launcher adds a stricter transaction around this procedure. A
+changed newer build cannot open an existing archive until a verified
+pre-upgrade `.suchi-backup` has been retained; insufficient local space opens
+an external-destination picker. It records the source and target build and
+commits only after nonce-bound file readiness and `/readyz`. A semantic
+downgrade is refused before the old sidecar starts. Restore an older-version
+complete backup from the older app; the app activates it and quits without
+opening the newer archive through old code. See [Desktop local
+install](/local-install#complete-backup-restore-and-upgrades).
 
 Database migrations are one-way. To roll back after a migration, stop Suchi,
 restore the complete pre-upgrade data directory, install the previous binary or

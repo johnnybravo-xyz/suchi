@@ -72,6 +72,11 @@ pinned Bun stage and copies only `ui/dist` into the Go stage; Bun and
 `node_modules` do not enter either runtime image. All paths preserve a single
 offline binary and serve `third-party-notices.txt` with the application.
 
+The desktop app uses this same embedded bundle in the system WebView. Its static
+launcher exists only before sidecar readiness; it is not a frontend fork.
+Navigation stays on the verified loopback origin, with explicit `https:` and
+`mailto:` links delegated to the operating system.
+
 Settings reads `build_version` and optional `build_revision` from the existing
 `/api/whoami` session response. The executable supplies this identity once at
 startup through `app.Options` from release linker values or Go VCS metadata,
@@ -133,6 +138,12 @@ done
 `router.svelte.js` owns hash state; `App.svelte` chooses routes and persistent
 navigation. Screens support reload, Back/Forward and narrow layouts through this
 router, without a second navigation registry.
+
+Authenticated `/api/whoami` also supplies deployment `features`. `App.svelte`
+checks them before creating feature routes or dynamic imports; route entry and
+named API helpers reject model, mailbox, share-link, and mobile-pairing work when
+disabled. Role/capability checks remain separate and cannot override deployment
+policy.
 
 ### Filing systems and request lifetimes
 

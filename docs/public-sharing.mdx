@@ -15,6 +15,12 @@ confidential or restricted documents, send the link and password separately,
 and revoke the link when it is no longer needed. Revocation cannot retract bytes
 already downloaded.
 
+Both share-link surfaces are unavailable in the desktop-local profile. The
+loopback desktop listener is not a private sharing service: share routes are not
+registered and the SPA does not load sharing controls. Use a server deployment
+with an intentional network boundary for either surface. See [Desktop local
+install](/local-install#desktop-security-boundary).
+
 ## Boundary
 
 ```text

@@ -26,6 +26,12 @@ It uses the OpenAI-compatible chat-completions API and supports local servers
 such as Ollama or llama.cpp and compatible hosted providers. The plugin is
 compiled into Suchi and can be enabled or reconfigured from the web interface.
 
+Model connections are unavailable in the desktop-local profile. Its server does
+not expose model settings or model-backed automation/chat operations, and the
+SPA does not import those screens. Use a container or direct-binary deployment
+to opt into a local or hosted model. Local archive matching remains available
+without a model. See [Desktop local install](/local-install#desktop-security-boundary).
+
 ## Configure in the web app
 
 Open **Settings > Archive configuration > Classification** during or after

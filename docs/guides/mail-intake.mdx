@@ -14,6 +14,12 @@ active and able to enter it. Messages and attachment children, including files-o
 intake, inherit that system. Duplicate matching is owner-and-system scoped.
 Membership remains an additional gate to the existing owner/admin mailbox rules.
 
+Suchi-managed mailbox ingestion is unavailable in the desktop-local profile.
+Mailbox routes and screens are absent even when an administrator would
+otherwise have the `mailboxes` capability. Use a container or direct-binary
+deployment for polling, or deliver files through a separate local workflow.
+See [Desktop local install](/local-install#desktop-security-boundary).
+
 ## Provider setup
 
 | Provider            | Incoming server             | Authentication                            |

@@ -4,6 +4,23 @@ Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
 
+### Added
+
+- Native Suchi desktop packages for universal macOS and amd64/arm64 Linux,
+  using the existing local server and web app with tray-controlled lifecycle.
+- Complete `.suchi-backup` archives, CLI verification/restore/recovery, and
+  crash-safe desktop upgrade, downgrade, and restore transactions.
+- Exact migration from the final managed legacy local installer, preserving its
+  archive, configuration, port, and launch-at-login choice.
+
+### Changed
+
+- The server-enforced `desktop_local` profile is loopback-only and disables
+  model connections, managed mail, share links, and mobile pairing. The desktop
+  app reports optional local parsers instead of downloading them.
+- Archive ownership is exclusive across servers and offline backup operations;
+  schema compatibility is checked before startup can mutate an archive.
+
 ## [0.3.0] - 2026-10-14
 
 ### Changed

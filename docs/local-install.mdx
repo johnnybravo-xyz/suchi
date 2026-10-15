@@ -1,0 +1,165 @@
+---
+title: "Desktop local install"
+description: "Install the signed macOS or Linux app, manage its local archive, and recover upgrades or restores."
+---
+
+The desktop app bundles the normal Suchi server and opens its canonical web app
+in the system WebView. Use it for one person on one computer. Use a [server
+install](/getting-started) when other devices must connect or you need OIDC,
+managed mail, model connections, mobile pairing, or share links.
+
+## Packages
+
+| Platform | Artifact | Requirement |
+| --- | --- | --- |
+| macOS | Universal `.dmg` and `.app` for Apple silicon and Intel | macOS 13+ |
+| Debian/Ubuntu | `.deb` for `amd64` or `arm64` | WebKitGTK 4.1, GTK 3, Ayatana AppIndicator |
+| Fedora/RHEL family | `.rpm` for `x86_64` or `aarch64` | WebKitGTK 4.1, GTK 3, AppIndicator |
+
+Windows and AppImage packages are not available. Static server binaries remain
+available for the platforms listed on each release.
+
+## Verify and install
+
+Verify the signed release checksum before trusting a package:
+
+```sh
+cosign verify-blob \
+  --bundle SHA256SUMS.cosign.bundle \
+  --certificate-identity-regexp 'https://github.com/johnnybravo-xyz/suchi/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  SHA256SUMS
+
+shasum -a 256 -c SHA256SUMS --ignore-missing  # macOS
+sha256sum -c SHA256SUMS --ignore-missing      # Linux
+```
+
+On macOS, open the DMG, drag **Suchi** to **Applications**, and open it there.
+Do not bypass a Gatekeeper failure. Optional manual checks:
+
+```sh
+codesign --verify --deep --strict /Applications/Suchi.app
+spctl --assess --type execute --verbose /Applications/Suchi.app
+xcrun stapler validate Suchi_*.dmg
+```
+
+On Linux, verify the package signature and install it:
+
+```sh
+dpkg-sig --verify suchi-desktop-*.deb  # must report GOODSIG
+sudo apt install ./suchi-desktop-*-linux-amd64.deb
+
+rpm --checksig suchi-desktop-*.rpm     # must report a valid signature
+sudo dnf install ./suchi-desktop-*-linux-x86_64.rpm
+```
+
+Use the arm64/aarch64 artifact on an ARM machine. Releases also include SPDX and
+CycloneDX SBOMs; native packages include `LICENSE`, `NOTICE`, and Rust notices.
+
+## First launch and tray
+
+The app verifies its bundled sidecar, checks archive compatibility and optional
+parsers, then starts on `127.0.0.1:8000`. It opens the web app only after a
+nonce-bound readiness file and `/readyz` both succeed. A migrated legacy install
+retains its selected loopback port.
+
+On a new archive, choose **Reveal setup token**, then **Open setup**, and create
+the first administrator. Port 8000 must be free; Suchi never kills another
+process that owns it.
+
+Closing the window hides it. The tray controls show/hide, start/stop processing,
+complete backup/restore, data/backup/log folders, **Launch at Login**, and quit.
+**Quit Suchi** stops the supervised server before exiting.
+
+## Desktop security boundary
+
+The server-enforced `desktop_local` profile accepts only a literal IPv4 loopback
+listener and matching HTTP origin. It rejects TLS, OIDC, share listeners,
+dev/demo mode, and a disabled UI. Model connections, managed mail, share links,
+and mobile pairing are unavailable. `/api/whoami` reports these feature gates;
+the SPA checks them before loading the related code or making a request.
+
+The launcher clears inherited network-integration configuration and gives local
+parsers a fixed search path: Homebrew and system paths on macOS, or
+`/usr/local/bin:/usr/bin:/bin` on Linux. It never downloads parsers or checks for
+updates. Explicit `https:` or `mailto:` links open through the operating system.
+
+Missing parsers degrade only their formats:
+
+| Format work | Commands |
+| --- | --- |
+| PDF text, images, normalization | `pdftotext`, `pdftoppm`, `qpdf` |
+| OCR | `tesseract` with English data, `ocrmypdf` |
+| DjVu, Office/EPUB, images, Outlook MSG | `djvutxt`, `anydoc`, `magick`/`convert`, `msgconvert` |
+
+The launcher reports the same inventory as `suchi prerequisites --json`.
+`mbsync` may appear there, but managed mailbox ingestion remains disabled.
+
+## Files and archive ownership
+
+Use the tray folder actions; platform path APIs and migrated state are
+canonical. A new install separates these paths:
+
+```text
+application data/archive/       database, blobs, keys, staging
+application data/backups/       complete desktop backups
+application data/desktop-state.json
+application configuration/local-install.toml
+application cache/runtime/      readiness and setup files
+application cache/webview/      WebView cache
+```
+
+Do not run another server or offline writer against the archive. Server startup,
+imports, GC, backup, and restore use one exclusive archive lock and fail rather
+than mutate concurrently.
+
+## Complete backup, restore, and upgrades
+
+**Create Complete Backup…** stops processing, checks the archive, checkpoints
+SQLite, writes and verifies a private `.suchi-backup`, then restarts. Store
+important backups off the computer. Each complete backup contains the database,
+all referenced immutable blobs, `.decrypt-key`, managed config when present, and
+a manifest with build/schema identity and SHA-256 digests. Scheduled database
+snapshots and exports are not complete disaster-recovery backups.
+
+**Restore Complete Backup…** first retains a verified backup of the current
+archive, then stages and verifies the selected file, activates it under a durable
+journal, and commits only after full readiness. A crash resumes this operation.
+If readiness fails, keep the retained file and choose **Roll back**.
+
+A changed newer build similarly creates `suchi-before-upgrade-*.suchi-backup`
+before opening the archive; if local space is insufficient, choose an external
+destination. On failure, restore that backup, quit, and reinstall the prior app.
+
+An older app never starts its sidecar against an archive last used by a newer
+version. To downgrade, install the older app and restore a complete backup made
+by that older version. Suchi activates it and quits; reopen the app afterward.
+Replacing binaries without the matching backup is not a rollback.
+
+## Legacy installer migration
+
+Only the exact final managed legacy layout is accepted. Suchi validates owners,
+file types, markers, service definitions, port, login preference, and the
+absence of foreign files or service drop-ins. Ambiguous, modified, symlinked, or
+partly foreign installations are refused.
+
+For a match, Suchi stops the old user service, creates a verified complete
+backup, reuses the existing archive/config paths and port, and removes only
+exact installer-owned service files after readiness. It preserves **Launch at
+Login** and does not copy the archive into a second tree.
+
+## Troubleshooting and uninstall
+
+- **Port in use:** stop its owner, then choose **Retry**.
+- **Missing parser:** install the named tool in a trusted path; other formats
+  continue working.
+- **Startup/upgrade failure:** open **Logs** and preserve the offered backup;
+  choose **Roll back** when available.
+- **WebView problem:** quit Suchi before clearing only the WebView cache. Never
+  remove `archive/` as cache cleanup.
+
+Before uninstalling, create an off-computer complete backup, clear **Launch at
+Login**, and quit. Remove `Suchi.app` or uninstall the Linux `suchi` package.
+Package removal keeps documents, credentials, backups, logs, and recovery state;
+remove the active application data/configuration directories yourself only when
+you intend to erase the archive.

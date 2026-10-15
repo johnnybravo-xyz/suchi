@@ -34,6 +34,40 @@ Probes `LISTEN_ADDR`'s `/readyz` over loopback. Exit `0` if the server
 answers `200`, non-zero otherwise. Wired as the Docker `HEALTHCHECK`, so the
 image does not depend on `wget` or `curl` for readiness checks.
 
+## `suchi prerequisites --json`
+
+Reports the availability and resolved path of `qpdf`, Poppler, Tesseract,
+OCRmyPDF, DjVuLibre, anydoc, ImageMagick, msgconvert, and mbsync. It also
+executes bounded checks for English Tesseract data and image-to-PDF support.
+The versioned JSON includes `degraded: true` when optional formats are
+unavailable; degraded capability is still a successful inspection.
+
+The desktop launcher invokes this command with its restricted parser `PATH` and
+turns missing capabilities into non-blocking guidance.
+
+## `suchi backup <command>`
+
+Creates, verifies, restores, or recovers a complete `.suchi-backup` archive.
+Except for standalone verification, commands load the configured `DATA_DIR`,
+decryption-key path, and config file. Stop the server and every other archive
+writer first; the archive lock rejects concurrent ownership.
+
+| Command | Behavior |
+| --- | --- |
+| `backup preflight [--json]` | Check database compatibility, required regular files, CAS objects, source stability, and approximate local free space. Exit `1` when not ready. |
+| `backup create --out FILE [--overwrite] [--json]` | Checkpoint SQLite, copy the database, immutable blobs, key, and managed config into a stored ZIP, write per-entry digests, fsync, and verify before publishing the destination. |
+| `backup verify FILE [--json]` | Verify the strict manifest, entry ordering/types/sizes/digests, decryption key, config, CAS paths, and staged database compatibility without changing the archive. |
+| `backup restore FILE [--json]` | Require a source outside `DATA_DIR`, stage and verify it, durably preserve live assets, then activate the staged archive with a recovery journal. |
+| `backup recover --status [--json]` | Report a pending restore journal and its ID/phase. |
+| `backup recover --rollback [--json]` | Restore the assets preserved before activation. |
+| `backup recover --commit ID [--json]` | Commit the matching activated restore and remove its recovery state. |
+
+Restore activation is not proof that the application can serve the archive. A
+supervisor must start the restored build, check readiness, then commit; otherwise
+it must roll back. The desktop app performs that protocol and should be operated
+through its tray backup/restore actions. See [Backup and restore](/backup-restore)
+and [Desktop local install](/local-install).
+
 ## `suchi import [flags]`
 
 Point `--from` at your existing DMS's export bundle. See

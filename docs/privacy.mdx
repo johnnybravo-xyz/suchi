@@ -19,6 +19,16 @@ Outbound traffic occurs only when an operator configures or uses an integration:
 | Hosted model assistance     | Extracted text and bounded classification context from the document's filing system, including matching automation IDs, question text, and closed answers but not action mappings or destination values; for an authorized archive question, the question, newest complete history pairs within four messages/12 KB, and up to six system/membership/ACL-filtered sources containing title, sensitivity, snippet, and capability-gated accepted fact value/evidence |
 | Operator pre-consume script | Whatever the operator's executable chooses to send                                                                                                                                                                                                                                                                                              |
 
+The desktop-local profile disables OIDC, IMAP ingestion, model connections,
+share links, and mobile pairing before the server starts. It does not check for
+updates or download parsers. Opening an explicit HTTPS or `mailto:` link hands
+that user action to the operating system; creating an export or complete backup
+writes only to the path the user selects. Local parser subprocesses inherit a
+minimized environment and a fixed trusted executable search path. A
+`PRE_CONSUME_SCRIPT` is not inherited from the parent process, but one explicitly
+set in `local-install.toml` retains the operator-owned egress risk described
+below. See [Desktop local install](/local-install#desktop-security-boundary).
+
 Hosted LLM use requires an explicit egress acknowledgement. Local LLM endpoints
 do not require that acknowledgement, but they are still network destinations
 chosen by the operator. Suchi logs a redacted inventory of its managed egress

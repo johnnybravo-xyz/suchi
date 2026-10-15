@@ -82,6 +82,8 @@ Optional integrations must preserve useful local operation.
   concurrency changes.
 - Frontend: `cd ui && bun run check && bun test src`; exercise changed browser
   behavior with `bun run e2e --grep '<behavior>'`.
+- Desktop: `make desktop-check desktop-security`; package changes also require
+  `make desktop-build` and `DESKTOP_LAUNCH_SMOKE=1 hack/smoke-desktop-package.sh`.
 - Run `make ui` after frontend edits, then `make check` before handoff. This
   checks all Go modules, UI diagnostics/tests/build, and embedded bundle parity.
 - Tests reuse Go's cache. `make test TEST_FLAGS='-count=1 -timeout 60s'` forces

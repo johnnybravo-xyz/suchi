@@ -179,6 +179,33 @@ operator backup. If no live session survives to bind an occupied unbound OIDC
 email, stop and restore with the old binary/config; do not delete, merge, or
 recreate the account to bypass the conflict.
 
+## Desktop release packages
+
+| Target | Packages |
+| --- | --- |
+| macOS, universal arm64/x86-64 | notarized `.app` archive and `.dmg` |
+| Linux, amd64/arm64 glibc | signed `.deb` and `.rpm` |
+
+Windows and AppImage are not release targets. `desktop/src-tauri/tauri.conf.json`
+must carry the tag version without `v`. Published macOS jobs require
+`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`,
+`APPLE_PASSWORD`, and `APPLE_TEAM_ID`; Linux jobs require
+`LINUX_PACKAGE_SIGNING_KEY` and `LINUX_PACKAGE_SIGNING_KEY_ID`.
+
+Each matrix job verifies the packaged sidecar, allowlisted contents, signature,
+SBOM, and an installed/packaged launch. macOS additionally requires Gatekeeper
+acceptance and stapled notarization. The release collector publishes package
+checksums and includes them in the signed checksum/cosign output.
+
+Local packaging:
+
+```sh
+make desktop-check desktop-security desktop-build
+DESKTOP_LAUNCH_SMOKE=1 hack/smoke-desktop-package.sh
+```
+
+Local builds prove layout and launch, not release identity or notarization.
+
 ## Release checklist
 
 Suchi Companion has an independent version and signed tag. Its release gates,
@@ -223,6 +250,8 @@ do not duplicate them here.
    make check
    make security-check
    make smoke
+   make desktop-check
+   make desktop-security
    make bench-check
    docker build --check .
    docker compose config --quiet
@@ -257,9 +286,9 @@ do not duplicate them here.
    identical across every binary and image built from the tag. Zero thresholds
    do not cancel existing reminders, and explicit rescans remain available.
 
-The workflow builds standard and full multi-architecture images, cross-platform
-binaries, checksums, SBOMs, signatures, and GitHub release notes derived from
-the changelog. Tag pushes alone do not publish anything.
+The workflow builds container images, cross-platform binaries, native desktop
+packages, checksums, SBOMs, signatures, and changelog-derived release notes.
+Tag pushes alone do not publish anything.
 
 Release notes travel as a workflow artifact into the collector, rather than a
 multiline job output that GitHub's secret detection may silently suppress.

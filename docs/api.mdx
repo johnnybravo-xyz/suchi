@@ -299,6 +299,13 @@ read-only fields are not user profile settings.
   "instance_host": "suchi.example.com",
   "build_version": "v0.2.0",
   "build_revision": "1234567890ab",
+  "public_share_available": false,
+  "features": {
+    "llm_connections": true,
+    "email_ingestion": true,
+    "share_links": true,
+    "mobile_pairing": true
+  },
   "role": "admin|member",
   "authn_by": "local-auth|oidc",
   "email_change_mode": "password|oidc|disabled",
@@ -316,6 +323,16 @@ from the configured `PUBLIC_URL` and lets the SPA preview the identity shown on
 public share pages. **401** if anonymous. Row-backed responses reread canonical
 email, role, display name, and avatar state from `users`; stateless demo
 principals retain their constrained fallback identity.
+
+`features` is the effective, non-secret deployment policy. Clients must treat a
+missing key as false and check it before importing a feature UI or issuing its
+first request. It is independent of role and per-member `capabilities`: a
+deployment-disabled feature cannot be restored by granting a capability.
+Disabled route groups are not registered, disabled model-backed automation
+branches return `feature_disabled`, and user capability writes reject values
+disabled by deployment policy. The desktop-local profile reports all four
+flags false; its API remains session-only on loopback and does not become a
+general local token endpoint.
 
 `email_change_mode` is the authority for account-email controls:
 

@@ -37,6 +37,26 @@ writable enable setting. Tree, Inbox, mode and last-import provenance belong to
 each system. User/group directories, roles/capabilities, OCR/LLM settings, OAuth
 client registration, backup and server configuration remain instance-wide.
 
+## Deployment profile and feature gates
+
+`DEPLOYMENT_PROFILE` is normally unset. `desktop_local` is the only named
+profile and is reserved for the signed desktop app. It requires a matching
+literal IPv4 loopback `LISTEN_ADDR` and HTTP `PUBLIC_URL`; it rejects TLS, OIDC,
+share listeners, development mode, demo mode, and a disabled embedded UI.
+
+`USE_LLM_CONNECTIONS` and `USE_EMAIL_INGESTION_FEATURES` accept exactly `on` or
+`off` and default to `on` for an ordinary server deployment. Their effective
+values are exposed to authenticated clients, enforced while routes and
+capabilities are registered, and consumed by the SPA before feature imports or
+requests.
+
+The `desktop_local` profile is more restrictive than individual gates: model
+connections, email ingestion, share links, and mobile pairing are all disabled
+even if a file asks to enable them. The desktop launcher also clears inherited
+model, mail, OIDC, TLS, sharing, development, and demo environment values. Edit
+its `local-install.toml` only for compatible local settings such as processing
+limits or OCR languages. See [Desktop local install](/local-install).
+
 ## Config file (optional)
 
 **Recommended format: TOML.** Explicit typing and no indentation
