@@ -1,0 +1,32 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+:root {
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #17211b;
+  background: #f1f3ed;
+  font-synthesis: none;
+}
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 2rem; }
+main { width: min(38rem, 100%); padding: 2.25rem; border: 1px solid #cbd1c8; border-radius: 1.25rem; background: #fff; box-shadow: 0 1.5rem 4rem rgb(33 47 39 / 10%); }
+header { display: flex; align-items: center; gap: 1rem; }
+.mark { display: grid; place-items: center; width: 3rem; height: 3rem; border-radius: .8rem; color: #fff; background: #245b40; font: 700 1.25rem/1 ui-serif, Georgia, serif; }
+.eyebrow { margin: 0 0 .25rem; color: #597064; font-size: .72rem; font-weight: 700; letter-spacing: .14em; }
+h1 { margin: 0; font-size: 1.55rem; line-height: 1.2; }
+.message { margin: 1.5rem 0; color: #405149; line-height: 1.55; }
+.details, output { display: block; padding: .9rem 1rem; border-radius: .6rem; overflow-wrap: anywhere; white-space: pre-wrap; background: #edf0eb; color: #26352d; font: 500 .82rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.actions { display: flex; flex-wrap: wrap; gap: .65rem; margin-top: 1rem; }
+button { appearance: none; border: 1px solid #aeb8b0; border-radius: .55rem; padding: .65rem .9rem; color: #26352d; background: #fff; font: inherit; font-weight: 650; cursor: pointer; }
+button:hover { background: #f4f6f2; }
+button.primary { border-color: #245b40; color: #fff; background: #245b40; }
+button.primary:hover { background: #19482f; }
+footer { margin-top: 2rem; color: #718078; font-size: .78rem; line-height: 1.4; }
+[hidden] { display: none !important; }
+@media (prefers-color-scheme: dark) {
+  :root { color: #eef3ef; background: #17211b; }
+  main { border-color: #425047; background: #202c25; box-shadow: none; }
+  .message { color: #bdc9c1; }
+  .details, output { color: #e2e9e4; background: #17211b; }
+  button { border-color: #637269; color: #eef3ef; background: #26352d; }
+  button:hover { background: #314238; }
+  footer { color: #95a49a; }
+}

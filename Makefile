@@ -1,4 +1,4 @@
-.PHONY: help build test vet lint fmt fmt-check license-check tidy check security-check run clean smoke smoke-ingest smoke-mail install-hooks ui ui-dev ui-check ui-verify ui-tracked-check ui-e2e ui-clean docs-dev docs-metadata-check docs-check bench-check release
+.PHONY: help build test vet lint fmt fmt-check license-check tidy check security-check run clean smoke smoke-ingest smoke-mail install-hooks ui ui-dev ui-check ui-verify ui-tracked-check ui-e2e ui-clean desktop-sidecar desktop-check docs-dev docs-metadata-check docs-check bench-check release
 
 .DEFAULT_GOAL := help
 
@@ -39,6 +39,8 @@ help:
 	  '  ui-verify       Verify that generated SPA assets match current sources.' \
 	  '  ui-e2e          Run the Playwright browser suite.' \
 	  '  ui-clean        Remove UI dependencies and generated assets.' \
+	  '  desktop-sidecar Build the embedded-UI sidecar and identity manifest.' \
+	  '  desktop-check   Check and test the pinned Tauri desktop launcher.' \
 	  '  docs-dev        Run the Mintlify documentation server.' \
 	  '  docs-check      Check documentation for broken links.' \
 	  '  docs-metadata-check Check documented versions and image channels.' \
@@ -216,6 +218,36 @@ ui-e2e:
 
 ui-clean:
 	rm -rf core/ui/spa/dist ui/dist ui/node_modules
+
+# Tauri requires external binaries to carry the active Rust target suffix at
+# build time. The identity manifest is embedded in the launcher and checked
+# against the installed, suffix-free sidecar before every spawn.
+desktop-sidecar: ui
+	@set -eu; \
+	  target="$$(rustup run 1.99.0 rustc -vV | awk '/^host:/ { print $$2; exit }')"; \
+	  suffix=''; case "$$target" in *windows*) suffix='.exe';; esac; \
+	  version="$${SUCHI_DESKTOP_VERSION:-v0.3.0-dev}"; \
+	  revision="$${SUCHI_DESKTOP_REVISION:-$$(git rev-parse --short=12 HEAD)}"; \
+	  if test -z "$${SUCHI_DESKTOP_REVISION:-}" && ! git diff --quiet -- . ':!core/ui/spa/dist'; then revision="$$revision.dirty"; fi; \
+	  binary="desktop/src-tauri/binaries/suchi-sidecar-$$target$$suffix"; \
+	  mkdir -p desktop/src-tauri/binaries desktop/src-tauri/generated; \
+	  CGO_ENABLED=0 go build -tags=embedded_ui -trimpath \
+	    -ldflags="-s -w -X main.version=$$version -X main.revision=$$revision" \
+	    -o "$$binary" ./distro/cmd/suchi; \
+	  sha="$$(shasum -a 256 "$$binary" | cut -d ' ' -f 1)"; \
+	  printf '{\n  "schema_version": 1,\n  "version": "%s",\n  "revision": "%s",\n  "target": "%s",\n  "executable_type": "suchi-sidecar",\n  "filename": "suchi-sidecar%s",\n  "sha256": "%s"\n}\n' \
+	    "$$version" "$$revision" "$$target" "$$suffix" "$$sha" \
+	    > desktop/src-tauri/generated/sidecar-identity.json
+
+desktop-check: desktop-sidecar
+	@cd desktop && bun install --frozen-lockfile
+	@cd desktop/src-tauri && toolchain_bin="$$(dirname "$$(rustup which --toolchain 1.99.0 rustfmt)")"; \
+	  if test "$$(uname -s)" = Darwin; then \
+	    export CC="$$(xcrun --find clang)" SDKROOT="$$(xcrun --show-sdk-path)"; \
+	    export CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER="$$CC" CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER="$$CC"; \
+	  fi; \
+	  PATH="$$toolchain_bin:$$PATH" rustup run 1.99.0 cargo fmt --check && \
+	  PATH="$$toolchain_bin:$$PATH" rustup run 1.99.0 cargo test --all-targets
 
 docs-dev:
 	@cd docs && BUN_TMPDIR=$${BUN_TMPDIR:-/tmp} bunx mint@$(MINT_VERSION) dev

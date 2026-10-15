@@ -1,0 +1,39 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Suchi</title>
+    <link rel="stylesheet" href="./launcher.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <div class="mark" aria-hidden="true">S</div>
+        <div>
+          <p class="eyebrow">SUCHI DESKTOP</p>
+          <h1 id="title">Starting your archive</h1>
+        </div>
+      </header>
+      <p id="message" class="message">Preparing the local document service…</p>
+      <pre id="details" class="details" hidden></pre>
+      <section id="setup" hidden>
+        <p>Finish setup in the local app. The one-time token is available here only while setup is incomplete.</p>
+        <div class="actions">
+          <button id="reveal-token" type="button">Reveal setup token</button>
+          <button id="open-setup" type="button" class="primary">Open setup</button>
+        </div>
+        <output id="token" hidden></output>
+      </section>
+      <div id="actions" class="actions" hidden>
+        <button id="retry" type="button" class="primary">Retry</button>
+        <button id="open-app" type="button">Open archive</button>
+        <button id="stop" type="button">Stop processing</button>
+      </div>
+      <footer>Documents remain on this computer unless you explicitly export them.</footer>
+    </main>
+    <script src="./launcher.js"></script>
+  </body>
+</html>

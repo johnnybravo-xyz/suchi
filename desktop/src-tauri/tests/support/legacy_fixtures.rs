@@ -23,7 +23,13 @@ pub struct LegacyLinuxFixture {
 }
 
 impl LegacyLinuxFixture {
-    pub fn build(home: &Path, xdg_data: &Path, xdg_config: &Path, port: u16, login_enabled: bool) -> Self {
+    pub fn build(
+        home: &Path,
+        xdg_data: &Path,
+        xdg_config: &Path,
+        port: u16,
+        login_enabled: bool,
+    ) -> Self {
         let local_root = xdg_data.join("suchi-local");
         let program = local_root.join("program");
         let archive = local_root.join("archive");

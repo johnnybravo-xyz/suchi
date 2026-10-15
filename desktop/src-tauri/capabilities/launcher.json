@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "launcher",
+  "description": "Local lifecycle controls for the bundled launcher page only. Remote server URLs receive no capability.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

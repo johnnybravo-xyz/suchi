@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-start-processing"
+description = "Enables the start_processing command without any pre-configured scope."
+commands.allow = ["start_processing"]
+
+[[permission]]
+identifier = "deny-start-processing"
+description = "Denies the start_processing command without any pre-configured scope."
+commands.deny = ["start_processing"]

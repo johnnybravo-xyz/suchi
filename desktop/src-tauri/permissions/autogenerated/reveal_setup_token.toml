@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-reveal-setup-token"
+description = "Enables the reveal_setup_token command without any pre-configured scope."
+commands.allow = ["reveal_setup_token"]
+
+[[permission]]
+identifier = "deny-reveal-setup-token"
+description = "Denies the reveal_setup_token command without any pre-configured scope."
+commands.deny = ["reveal_setup_token"]
