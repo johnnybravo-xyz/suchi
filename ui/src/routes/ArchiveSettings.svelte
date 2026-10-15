@@ -3,21 +3,33 @@
   import { t as translate } from "../lib/i18n.svelte.js";
   import { formatNumber, plural } from '../lib/format.js'
   import { scopedHash as filingHref, systems } from '../lib/systems.svelte.js'
-  import { setupState, adminListUsers, getIngestSettings, getLLMSettings,
+  import { setupState, adminListUsers, getIngestSettings, getArchiveMatchingSettings, getLLMSettings,
            getPreferences, listEmailAccounts, listAutomations, listRenderedLayouts } from '../lib/api.js'
-  import { ARCHIVE_SETTINGS_GROUPS, ARCHIVE_SETTINGS_ITEMS, FILING_TREE_SETTINGS_ITEM } from '../lib/configuration.js'
+  import { archiveSettingsGroups, archiveSettingsItems, FILING_TREE_SETTINGS_ITEM } from '../lib/configuration.js'
+  import { hasFeature } from '../lib/capabilities.js'
+  import { session } from '../lib/session.svelte.js'
   import Icon from '../lib/Icon.svelte'
+  import Lazy from '../lib/Lazy.svelte'
   import SystemSettings from '../lib/SystemSettings.svelte'
-  import ConfigurationSection from './ConfigurationSection.svelte'
   import FilingTreeSettings from './FilingTreeSettings.svelte'
   import FolderLayoutsSettings from './FolderLayoutsSettings.svelte'
   import PeopleSettings from './PeopleSettings.svelte'
 
+  const CONFIGURATION_LOADERS = {
+    sources: () => import('./GeneralConfigurationSection.svelte'),
+    preferences: () => import('./GeneralConfigurationSection.svelte'),
+    matching: () => import('./ArchiveMatchingSettings.svelte'),
+    mail: () => import('./MailConfigurationSection.svelte'),
+    llm: () => import('./ConfigurationSection.svelte'),
+  }
+
   let { notify, initialSection = '', initialPeople = '', initialMetadata = '', onTaxonomyChanged } = $props()
 
-  const configurableSections = new Set(ARCHIVE_SETTINGS_ITEMS.map((item) => item.name))
-  const current = $derived(configurableSections.has(initialSection) ? initialSection : 'overview')
-  const currentItem = $derived(ARCHIVE_SETTINGS_ITEMS.find((item) => item.name === current))
+  const settingsGroups = $derived(archiveSettingsGroups(session.user))
+  const settingsItems = $derived(archiveSettingsItems(session.user))
+  const current = $derived(settingsItems.some((item) => item.name === initialSection) ? initialSection : 'overview')
+  const currentItem = $derived(settingsItems.find((item) => item.name === current))
+  const configurationLoader = $derived(CONFIGURATION_LOADERS[current])
   let statuses = $state({})
 
   function titleCase(value) {
@@ -33,47 +45,61 @@
   }
 
   async function loadOverview() {
-    const [setup, users, ingest, llm, preferences, mail, automations, layouts] = await Promise.allSettled([
-      setupState(), adminListUsers(), getIngestSettings(), getLLMSettings(),
-      getPreferences(), listEmailAccounts(), listAutomations(), listRenderedLayouts(),
-    ])
-    const next = Object.fromEntries(ARCHIVE_SETTINGS_ITEMS.map((item) => [
+    const requests = {
+      setup: setupState(),
+      users: adminListUsers(),
+      ingest: getIngestSettings(),
+      matching: getArchiveMatchingSettings(),
+      preferences: getPreferences(),
+      automations: listAutomations(),
+      layouts: listRenderedLayouts(),
+    }
+    if (hasFeature(session.user, 'email_ingestion')) requests.mail = listEmailAccounts()
+    if (hasFeature(session.user, 'llm_connections')) requests.llm = getLLMSettings()
+    const entries = Object.entries(requests)
+    const results = await Promise.allSettled(entries.map(([, request]) => request))
+    const settled = Object.fromEntries(entries.map(([name], index) => [name, results[index]]))
+    const next = Object.fromEntries(settingsItems.map((item) => [
       item.name, status(translate("archiveSettings.unavailable"), translate("archiveSettings.couldNotLoadStatus"), 'warn'),
     ]))
 
-    if (setup.status === 'fulfilled') {
-      const preset = setup.value?.current_preset
-      next['filing-tree'] = status(setup.value?.filing_tree_chosen ? translate("archiveSettings.configured") : translate("archiveSettings.notSet"), preset ? translate("archiveSettings.valueFilingTree", { "preset": titleCase(preset) }) : translate("archiveSettings.customFilingTree"), setup.value?.filing_tree_chosen ? 'ok' : 'warn')
+    if (settled.setup.status === 'fulfilled') {
+      const preset = settled.setup.value?.current_preset
+      next['filing-tree'] = status(settled.setup.value?.filing_tree_chosen ? translate("archiveSettings.configured") : translate("archiveSettings.notSet"), preset ? translate("archiveSettings.valueFilingTree", { "preset": titleCase(preset) }) : translate("archiveSettings.customFilingTree"), settled.setup.value?.filing_tree_chosen ? 'ok' : 'warn')
     }
-    if (users.status === 'fulfilled') {
-      const count = rows(users.value).length
+    if (settled.users.status === 'fulfilled') {
+      const count = rows(settled.users.value).length
       next.users = status(plural("archiveSettings.userCount", count), translate("archiveSettings.rolesAndArchiveCapabilities"))
     }
     next.metadata = status(translate("archiveSettings.3Catalogs"), translate("archiveSettings.tagsCorrespondentsAndCustomFields"))
-    if (layouts.status === 'fulfilled') {
-      const count = rows(layouts.value).length
+    if (settled.layouts.status === 'fulfilled') {
+      const count = rows(settled.layouts.value).length
       next['folder-layouts'] = status(translate("archiveSettings.valueSaved", { count: formatNumber(count) }), translate("archiveSettings.localRenderedFilesystemPaths"))
     }
-    if (ingest.status === 'fulfilled') {
-      const directory = ingest.value?.fs_watch_dir || ''
+    if (settled.ingest.status === 'fulfilled') {
+      const directory = settled.ingest.value?.fs_watch_dir || ''
       next.sources = status(directory ? translate("archiveSettings.active") : translate("archiveSettings.notSet"), directory || translate("archiveSettings.browserUploadsAndConnectedAppsRemainAvailable"), directory ? 'ok' : 'warn')
     }
-    if (mail.status === 'fulfilled') {
-      const accounts = rows(mail.value, 'accounts')
+    if (settled.mail?.status === 'fulfilled') {
+      const accounts = rows(settled.mail.value, 'accounts')
       const enabled = accounts.filter((account) => account.enabled).length
       next.mail = status(enabled ? translate("archiveSettings.valueActive", { enabled: formatNumber(enabled) }) : translate("archiveSettings.notSet"), enabled ? plural("archiveSettings.connectedMailboxCount", accounts.length) : translate("archiveSettings.noMailboxesConnected"), enabled ? 'ok' : 'warn')
     }
-    if (llm.status === 'fulfilled') {
-      const value = llm.value
-      next.llm = status(value?.active ? translate("archiveSettings.modelActive") : value?.archive_enabled ? translate("archiveSettings.localMatching") : translate("archiveSettings.manual"), value?.active ? value.model || translate("archiveSettings.configuredModel") : translate("archiveSettings.noExternalModel"), value?.active || value?.archive_enabled ? 'ok' : '')
+    if (settled.matching.status === 'fulfilled') {
+      const value = settled.matching.value
+      next.matching = status(value?.archive_enabled ? translate("archiveSettings.localMatching") : translate("archiveSettings.manual"), translate("archiveSettings.noExternalModel"), value?.archive_enabled ? 'ok' : '')
     }
-    if (automations.status === 'fulfilled') {
-      const active = rows(automations.value).filter((automation) => automation.enabled).length
+    if (settled.llm?.status === 'fulfilled') {
+      const value = settled.llm.value
+      next.llm = status(value?.active ? translate("archiveSettings.modelActive") : translate("archiveSettings.notSet"), value?.active ? value.model || translate("archiveSettings.configuredModel") : translate("archiveSettings.noExternalModel"), value?.active ? 'ok' : '')
+    }
+    if (settled.automations.status === 'fulfilled') {
+      const active = rows(settled.automations.value).filter((automation) => automation.enabled).length
       next.automations = status(translate("archiveSettings.valueActive2", { active: formatNumber(active) }), translate("archiveSettings.filingAndMetadataRules"))
     }
-    if (preferences.status === 'fulfilled') {
-      const languages = preferences.value?.ocr_languages || []
-      const interval = Number(preferences.value?.backup_interval_hours || 0)
+    if (settled.preferences.status === 'fulfilled') {
+      const languages = settled.preferences.value?.ocr_languages || []
+      const interval = Number(settled.preferences.value?.backup_interval_hours || 0)
       const languageSummary = languages.join(', ') || translate("archiveSettings.noOCRLanguages")
       const backupSummary = interval ? plural("archiveSettings.backupEveryHours", interval) : translate("archiveSettings.noScheduledBackups")
       next.preferences = status(interval ? translate("archiveSettings.scheduled") : translate("archiveSettings.backupsOff"), translate("archiveSettings.valueValue2", { languages: languageSummary, backups: backupSummary }), interval ? 'ok' : 'warn')
@@ -91,7 +117,7 @@
          href={filingHref("#/settings?tab=archive")}><Icon name="settings" size={15} /><span>{translate("archiveSettings.overview")}</span></a>
       <a class:on={current === FILING_TREE_SETTINGS_ITEM.name} aria-current={current === FILING_TREE_SETTINGS_ITEM.name ? 'page' : undefined}
          href={filingHref(FILING_TREE_SETTINGS_ITEM.href)}><Icon name={FILING_TREE_SETTINGS_ITEM.icon} size={15} /><span>{FILING_TREE_SETTINGS_ITEM.label}</span></a>
-      {#each ARCHIVE_SETTINGS_GROUPS as group (group.name)}
+      {#each settingsGroups as group (group.name)}
         <div class="rail-group">
           <span class="rail-group-label">{group.label}</span>
           {#each group.items as item (item.name)}
@@ -138,7 +164,7 @@
         </a>
       {/if}
       <div class="configuration-groups">
-        {#each ARCHIVE_SETTINGS_GROUPS as group (group.name)}
+        {#each settingsGroups as group (group.name)}
           <section class="configuration-group" aria-labelledby={`group-${group.name}`}>
             <header>
               <h3 id={`group-${group.name}`}>{group.label}</h3>
@@ -180,9 +206,9 @@
           </span>
           <a role="button" class="btn primary handoff-action" href={filingHref("#/automations")}>{translate("archiveSettings.openAutomations")} <Icon name="chev" size={13} /></a>
         </div>
-      {:else}
+      {:else if configurationLoader}
         <div class="card section-card">
-          <ConfigurationSection section={current} {notify} />
+          <Lazy load={configurationLoader} props={{ section: current, notify }} />
         </div>
       {/if}
     {/if}

@@ -1,16 +1,14 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
   import { t as translate } from "../lib/i18n.svelte.js";
-  import { scopedHash as filingHref, systems } from '../lib/systems.svelte.js'
-  import { tick, untrack, onDestroy } from 'svelte'
-  import { adminListUsers,
-           getLLMSettings, saveLLMSettings, testLLMSettings, subscriptionLoginAction, getSubscriptionModels, saveSubscriptionModel,
-           saveResearchContextMode, saveClassificationAutoApply, saveArchiveMatchingSettings,
-           getPreferences, savePreferences, getIngestSettings, saveIngestSettings } from '../lib/api.js'
+  import { tick, onDestroy } from 'svelte'
+  import {
+    getLLMSettings, saveLLMSettings, testLLMSettings, subscriptionLoginAction,
+    getSubscriptionModels, saveSubscriptionModel, saveResearchContextMode,
+  } from '../lib/api.js'
   import { isLocalEndpoint } from '../lib/net.js'
-  import EmailAccounts from '../lib/EmailAccounts.svelte'
 
-  let { section, notify } = $props()
+  let { notify } = $props()
   const RESEARCH_CONTEXT_MODES = [
     { id: 'focused', label: translate("configurationSection.focused"), bound: translate("configurationSection.1MatchingSectionUpTo1600Characters"), description: translate("configurationSection.lessTextForSmallerLocalModelsAndFaster") },
     { id: 'balanced', label: translate("configurationSection.balanced"), bound: translate("configurationSection.2MatchingSectionsUpTo3200Characters"), description: translate("configurationSection.recommendedForMostArchivesAndModels") },
@@ -20,10 +18,7 @@
   let loading = $state(new Set())
   let loadErrors = $state({})
   const LOAD_ERROR_MESSAGES = {
-    users: translate("configurationSection.couldNotLoadArchiveUsers"),
-    ingest: translate("configurationSection.couldNotLoadWatchedFolderSettings"),
     llm: translate("configurationSection.couldNotLoadClassificationSettings"),
-    preferences: translate("configurationSection.couldNotLoadOcrAndBackupSettings"),
   }
 
   function loadOnce(key, fn) {
@@ -47,18 +42,14 @@
   let err = $state('')
 
   // Section form state.
-  let mailUsers = $state([])
   let modelDialogOpen = $state(false)
-  let thresholdsOpen = $state(false)
   let researchOpen = $state(false)
   let researchOptions = $state()
   let llm = $state({
     enabled: false, endpoint_url: '', model: '', api_key: '', clear_api_key: false,
     egress_ack: false, confidence_threshold: 0.7,
-    archive_enabled: true, archive_review_threshold: 0.5, archive_auto_threshold: 0.9,
   })
   let researchContextMode = $state('balanced')
-  let autoApply = $state(false)
   let llmStatus = $state(null)
   let llmTesting = $state(false)
   let subscriptionProvider = $state('openai_chatgpt')
@@ -169,22 +160,6 @@
   let llmTestResult = $state(null)
   let llmTestError = $state('')
   let llmTestGeneration = 0
-  let prefs = $state({ backup_interval_hours: 24, ocr_languages: 'eng' })
-  let ingest = $state({ fs_watch_dir: '', fs_watch_owner_email: '', fs_watch_system: '' })
-  let ingestRecursive = $state(true)
-
-
-  async function loadUsers() {
-    const result = await adminListUsers()
-    mailUsers = result?.results || result || []
-    seedSourceOwner()
-  }
-
-  function seedSourceOwner() {
-    if (!ingest.fs_watch_owner_email) {
-      ingest.fs_watch_owner_email = mailUsers.find(u => !u.disabled)?.email || ''
-    }
-  }
 
 
   async function loadLLM() {
@@ -196,10 +171,6 @@
     llm.model = st?.model || 'qwen2.5:7b'
     llm.egress_ack = !!st?.egress_ack
     llm.confidence_threshold = st?.confidence_threshold ?? 0.7
-    llm.archive_enabled = st?.archive_enabled ?? true
-    llm.archive_review_threshold = st?.archive_review_threshold ?? 0.5
-    llm.archive_auto_threshold = st?.archive_auto_threshold ?? 0.9
-    autoApply = st?.auto_apply ?? true
     researchContextMode = RESEARCH_CONTEXT_MODES.some(mode => mode.id === st?.research_context_mode)
       ? st.research_context_mode : 'balanced'
     llm.api_key = ''
@@ -212,31 +183,8 @@
       if (st?.subscription_connected) void loadSubscriptionModels()
     }
   }
-  async function loadPreferences() {
-    const current = await getPreferences()
-    prefs.backup_interval_hours = current?.backup_interval_hours ?? 24
-    prefs.ocr_languages = (current?.ocr_languages || ['eng']).join(',')
-  }
-  async function loadIngest() {
-    const current = await getIngestSettings()
-    ingest.fs_watch_dir = current?.fs_watch_dir || ''
-    ingest.fs_watch_owner_email = current?.fs_watch_owner_email || ''
-    ingest.fs_watch_system = current?.fs_watch_system || ''
-    ingestRecursive = current?.fs_watch_recursive !== false
-    seedSourceOwner()
-  }
-  const loadFunctions = {
-    users: loadUsers,
-    ingest: loadIngest,
-    llm: loadLLM,
-    preferences: loadPreferences,
-  }
-  const requiredLoadKeys = $derived(({
-    sources: ['users', 'ingest'],
-    mail: ['users'],
-    llm: ['llm'],
-    preferences: ['preferences'],
-  })[section] || [])
+  const loadFunctions = { llm: loadLLM }
+  const requiredLoadKeys = ['llm']
   const activeLoadFailure = $derived.by(() => {
     const key = requiredLoadKeys.find((candidate) => loadErrors[candidate])
     return key ? { key, message: loadErrors[key] } : null
@@ -250,12 +198,7 @@
     loadOnce(key, loadFunctions[key])
   }
 
-  $effect(() => {
-    const keys = requiredLoadKeys
-    untrack(() => {
-      for (const key of keys) loadOnce(key, loadFunctions[key])
-    })
-  })
+  for (const key of requiredLoadKeys) loadOnce(key, loadFunctions[key])
 
   async function saveAnd(fn, label) {
     err = ''; busy = true
@@ -279,17 +222,6 @@
       clear_api_key: !!llm.clear_api_key,
       egress_ack: !!llm.egress_ack,
       confidence_threshold: Number(llm.confidence_threshold),
-      archive_enabled: llmStatus?.archive_enabled ?? true,
-      archive_review_threshold: llmStatus?.archive_review_threshold ?? 0.5,
-      archive_auto_threshold: llmStatus?.archive_auto_threshold ?? 0.9,
-    }
-  }
-
-  function matchingPayload() {
-    return {
-      archive_enabled: llm.archive_enabled,
-      archive_review_threshold: Number(llm.archive_review_threshold),
-      archive_auto_threshold: Number(llm.archive_auto_threshold),
     }
   }
 
@@ -340,17 +272,6 @@
     return result
   }
 
-  async function saveMatching() {
-    const payload = matchingPayload()
-    const result = await saveArchiveMatchingSettings(payload)
-    llmStatus = {
-      ...llmStatus,
-      archive_enabled: payload.archive_enabled,
-      archive_review_threshold: payload.archive_review_threshold,
-      archive_auto_threshold: payload.archive_auto_threshold,
-    }
-    return result
-  }
 
   async function saveResearchContext() {
     const result = await saveResearchContextMode(researchContextMode)
@@ -358,11 +279,6 @@
     return result
   }
 
-  async function saveApplicationMode() {
-    const result = await saveClassificationAutoApply(autoApply)
-    llmStatus = { ...llmStatus, auto_apply: result.auto_apply }
-    return result
-  }
 
 
   async function testClassifier() {
@@ -419,82 +335,18 @@
   {:else}
     {#if err}<div class="err">{err}</div>{/if}
 
-    {#if section === 'sources'}
-      <h3>{translate("configurationSection.watchedFolder")}</h3>
-      <p class="wiz-p">{translate("configurationSection.suchiReadsNewFilesFromThisServer", { configuration: translate(ingestRecursive ? "configurationSection.subfoldersIncluded" : "configurationSection.directFilesOnly") })}</p>
-      <div class="field"><label for="i-dir">{translate("configurationSection.watchedDirectoryOnTheServer")}</label>
-        <input id="i-dir" class="input mono" placeholder={translate("configurationSection.dataStaging")} bind:value={ingest.fs_watch_dir} /></div>
-      <p class="sub">{translate("configurationSection.theDirectoryMustAlreadyExistAndBe")} <span class="mono">{translate("configurationSection.errors")}</span> {translate("configurationSection.directoryAreIgnored")}</p>
-      <div class="field"><label for="i-owner">{translate("configurationSection.documentsFromItBelongTo")}</label>
-        <select id="i-owner" class="input" bind:value={ingest.fs_watch_owner_email}>
-          <option value="">{translate("configurationSection.selectOwner")}</option>
-          {#each mailUsers.filter(u => !u.disabled) as u}
-            <option value={u.email}>{u.display_name || u.email} · {u.email}</option>
-          {/each}
-        </select></div>
-      {#if systems.introduced}
-        <div class="field"><label for="i-system">{translate("configurationSection.watchedFolderFilingSystem")}</label>
-          <select id="i-system" class="input" bind:value={ingest.fs_watch_system}>
-            <option value="">{translate("configurationSection.originalArchiveDefault")}</option>
-            {#each systems.results as system (system.code)}<option value={system.code}>{system.code} · {system.name}</option>{/each}
-          </select>
-          <p class="sub">{translate("configurationSection.thisIsTheServerWideWatchedFolder")}</p>
+    <div class="cls-card">
+      <div class="cls-head"><h3>{translate("configurationSection.suggestions")}</h3><p>{translate("configurationSection.howSuggestionsAreMadeAndApplied")}</p></div>
+      <div class="cls-row">
+        <div class="cls-main">
+          <b>{translate("configurationSection.documentModel")}{#if llmStatus?.active}<span class="mdot"></span><em>{translate("configurationSection.active")}</em>{/if}</b>
+          {#if llmStatus?.active}<small><span class="mono">{llm.model}</span> · {llmMode === 'subscription' ? translate("configurationSection.accountSubscription2") : llmMode === 'hosted' ? translate("configurationSection.hostedModel2") : translate("configurationSection.localModel2")}</small>
+          {:else}<small>{translate("configurationSection.documentSuggestionsAndQuestionsOff")}</small>{/if}
         </div>
-      {/if}
-      <div class="toolbar">
-        <button class="btn primary sm" disabled={busy || !ingest.fs_watch_dir || !ingest.fs_watch_owner_email}
-                onclick={() => saveAnd(() => saveIngestSettings(ingest), translate("configurationSection.watchedFolderSaved"))}>{translate("configurationSection.saveFolder")}</button>
+        <div class="cls-right">{#if llmStatus?.active}<button class="act-link" onclick={() => (modelDialogOpen = true)}>{translate("configurationSection.manage")}</button>
+          {:else}<button class="btn sm" onclick={() => (modelDialogOpen = true)}>{translate("configurationSection.setUpModel")}</button>{/if}</div>
       </div>
-
-    {:else if section === 'mail'}
-      <h3>{translate("configurationSection.emailIntake")}</h3>
-      <p class="wiz-p">{translate("configurationSection.pointSuchiAtOneOrMoreMailboxes")}</p>
-      <EmailAccounts {notify} users={mailUsers} />
-
-    {:else if section === 'llm'}
-      <div class="cls-card">
-        <div class="cls-head"><h3>{translate("configurationSection.suggestions")}</h3><p>{translate("configurationSection.howSuggestionsAreMadeAndApplied")}</p></div>
-        <div class="cls-row">
-          <div class="apply-mode" role="radiogroup" aria-label={translate("configurationSection.suggestionApplication")} aria-describedby="application-mode-help">
-            <label class="apply-opt"><input type="radio" name="application-mode" value="review" checked={!autoApply} disabled={busy} onchange={() => (autoApply = false)} />
-              <span><b>{translate("configurationSection.reviewFirst")}</b><small>{translate("configurationSection.everySuggestionWaitsInApprovals")}</small></span></label>
-            <label class="apply-opt"><input type="radio" name="application-mode" value="auto" checked={autoApply} disabled={busy} onchange={() => (autoApply = true)} />
-              <span><b>{translate("configurationSection.applyWhenConfident")}</b><small>{translate("configurationSection.suggestionsAtOrAboveYourThresholdApply")}</small></span></label>
-          </div>
-          <p class="cls-note" id="application-mode-help">{translate("configurationSection.datesFollowTheSameChoiceIntoCalendar")}</p>
-          <button class="btn sm" disabled={busy} onclick={() => saveAnd(saveApplicationMode, translate("configurationSection.applicationModeSaved"))}>{translate("configurationSection.saveApplicationMode")}</button>
-        </div>
-        <div class="cls-row">
-          <button type="button" class="switch" role="switch" aria-checked={llm.archive_enabled}
-                  aria-label={translate("configurationSection.offerFilingSuggestionsFromSimilarDocuments")}
-                  onclick={() => (llm.archive_enabled = !llm.archive_enabled)}></button>
-          <div class="cls-main"><b>{translate("configurationSection.similarDocuments")}</b><small>{translate("configurationSection.learnsFromWhatIsAlreadyFiledNothing")}</small></div>
-          <div class="cls-right"><span class="mono-sum">{translate("configurationSection.reviewValueAutoValue", { "archive_review_threshold": Math.round(Number(llm.archive_review_threshold) * 100), "archive_auto_threshold": Math.round(Number(llm.archive_auto_threshold) * 100) })}</span>
-            <button class="act-link" onclick={() => (thresholdsOpen = !thresholdsOpen)}>{thresholdsOpen ? translate("configurationSection.hide") : translate("configurationSection.adjust")}</button></div>
-        </div>
-        {#if thresholdsOpen}
-          <div class="cls-disc">
-            <div class="field"><label for="archive-review">{translate("configurationSection.minimumSimilarityToSuggestForReviewValue", { "archive_review_threshold": Math.round(Number(llm.archive_review_threshold) * 100) })}</label>
-              <input id="archive-review" class="range" type="range" min="0.5" max="0.9" step="0.05" bind:value={llm.archive_review_threshold} /></div>
-            <div class="field"><label for="archive-auto">{translate("configurationSection.minimumSimilarityToApplyAutomaticallyValue", { "archive_auto_threshold": Math.round(Number(llm.archive_auto_threshold) * 100) })}</label>
-              <input id="archive-auto" class="range" type="range" min="0.55" max="0.95" step="0.05" bind:value={llm.archive_auto_threshold} disabled={!autoApply} /></div>
-            <p class="cls-note">{translate("configurationSection.theAutomaticLevelMustStayAboveThe")}</p>
-            {#if Number(llm.archive_review_threshold) >= Number(llm.archive_auto_threshold)}<p role="alert">{translate("configurationSection.theReviewLevelMustBeBelowThe")}</p>{/if}
-          </div>
-        {/if}
-        <div class="cls-row">
-          <div class="cls-main">
-            <b>{translate("configurationSection.documentModel")}{#if llmStatus?.active}<span class="mdot"></span><em>{translate("configurationSection.active")}</em>{/if}</b>
-            {#if llmStatus?.active}<small><span class="mono">{llm.model}</span> · {llmMode === 'subscription' ? translate("configurationSection.accountSubscription2") : llmMode === 'hosted' ? translate("configurationSection.hostedModel2") : translate("configurationSection.localModel2")}</small>
-            {:else}<small>{translate("configurationSection.documentSuggestionsAndQuestionsOff")}</small>{/if}
-          </div>
-          <div class="cls-right">{#if llmStatus?.active}<button class="act-link" onclick={() => (modelDialogOpen = true)}>{translate("configurationSection.manage")}</button>
-            {:else}<button class="btn sm" onclick={() => (modelDialogOpen = true)}>{translate("configurationSection.setUpModel")}</button>{/if}</div>
-        </div>
-        <div class="cls-foot"><span class="cls-note">{translate("configurationSection.newDocumentsOnlyUseRescanInDocuments")}</span>
-          <button class="btn primary sm" disabled={busy || Number(llm.archive_review_threshold) >= Number(llm.archive_auto_threshold)}
-                  onclick={() => saveAnd(saveMatching, translate("configurationSection.similarDocumentMatchingSaved"))}>{translate("configurationSection.saveMatchingOptions")}</button></div>
-      </div>
+    </div>
       <div class="cls-card" role="region" aria-label={translate("configurationSection.askYourDocumentsSettings")}>
         <div class="cls-head"><h3 id="research-context-title">{translate("configurationSection.askYourDocuments")}</h3><p>{translate("configurationSection.answersQuestionsFromYourDocuments")}</p><span class="cls-when">{translate("configurationSection.appliesToTheNextQuestion")}</span></div>
         <div class="cls-row"><div class="cls-main"><b>{translate("configurationSection.readingPerDocument")}</b>
@@ -613,7 +465,7 @@
       {/if}
 
       <div class="field model-confidence"><label for="l-confidence">{translate("configurationSection.minimumModelConfidenceToApplyAutomaticallyValue", { "confidence_threshold": Math.round(Number(llm.confidence_threshold) * 100) })}</label>
-        <input id="l-confidence" class="range" type="range" min="0.5" max="0.95" step="0.05" bind:value={llm.confidence_threshold} disabled={!autoApply} oninput={invalidateLLMTest} /></div>
+        <input id="l-confidence" class="range" type="range" min="0.5" max="0.95" step="0.05" bind:value={llm.confidence_threshold} oninput={invalidateLLMTest} /></div>
       {#if llmMode === 'subscription'}
         <div class="subscription-test" class:tested={!!llmTestResult}>
           <div class="subscription-test-main">
@@ -662,39 +514,11 @@
         </div>
       {/if}
 
-    {:else if section === 'automations'}
-      <h3>{translate("configurationSection.automations")}</h3>
-      <p class="wiz-p">{translate("configurationSection.yourPresetCanInstallStarterFilingAutomations")}</p>
-      <p class="wiz-p">{translate("configurationSection.automationsFileDocumentsByTitleContentSender")}</p>
-      <div class="toolbar">
-        <a role="button" class="btn primary sm" href={filingHref("#/automations")}>{translate("configurationSection.openAutomations")}</a>
-      </div>
-
-    {:else if section === 'preferences'}
-      <h3>{translate("configurationSection.ocrAndBackups")}</h3>
-      <div class="field"><label for="p-ocr">{translate("configurationSection.ocrLanguagesCommaSeparatedTesseractCodes")}</label>
-        <input id="p-ocr" class="input mono" placeholder={translate("configurationSection.engHinNep")} bind:value={prefs.ocr_languages} /></div>
-      <div class="field"><label for="p-bk">{translate("configurationSection.databaseSnapshotIntervalHours0Disables")}</label>
-        <input id="p-bk" class="input" type="number" min="0" bind:value={prefs.backup_interval_hours} /></div>
-      <p class="wiz-p sub" style="font-size:.8rem">{translate("configurationSection.snapshotsIncludeOnlyTheDatabaseAComplete")}</p>
-      <div class="toolbar">
-        <button class="btn primary sm" disabled={busy}
-                onclick={() => saveAnd(() => savePreferences({
-                  backup_interval_hours: Number(prefs.backup_interval_hours) || 0,
-                  ocr_languages: prefs.ocr_languages.split(',').map(x => x.trim()).filter(Boolean),
-                }), translate("configurationSection.preferencesSaved"))}>{translate("configurationSection.savePreferences")}</button>
-      </div>
-    {/if}
   {/if}
   </div>
 
 <style>
   .wiz-p { color: var(--muted); font-size: .92rem; margin: 6px 0 16px; max-width: 46em; }
-  .apply-mode { margin: 0 0 14px; display: flex; flex-direction: column; gap: 10px }
-  .apply-opt { display: flex; gap: 10px; align-items: flex-start; cursor: pointer }
-  .apply-opt input { margin-top: 3px }
-  .apply-opt b { display: block; font-size: .88rem; font-weight: 600; color: var(--ink) }
-  .apply-opt small { display: block; font-size: .78rem; color: var(--muted); margin-top: 2px }
   .wiz-check { display: flex; gap: 9px; align-items: baseline; font-size: .86rem; color: var(--muted); margin: 0 0 14px; }
   .wiz-check.attn { color: var(--warn); }
   .range { width: 100%; accent-color: var(--accent); }
@@ -731,11 +555,8 @@
   .cls-main em { font-style: normal; font-size: .76rem; font-weight: 600; color: var(--ok) }
   .mdot { width: 8px; height: 8px; border-radius: 4px; background: var(--ok) }
   .cls-right { margin-left: auto; display: flex; align-items: center; gap: 12px; flex: none }
-  .mono-sum { font-family: 'Spline Sans Mono', ui-monospace, Menlo, monospace; font-size: .76rem; color: var(--faint) }
   .cls-disc { margin: 0 20px 14px 20px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface-2); padding: 14px 16px }
   .cls-note { color: var(--muted); font-size: .76rem; margin: 6px 0 0 }
-  .cls-foot { display: flex; align-items: center; gap: 14px; padding: 12px 20px; border-top: 1px solid var(--line) }
-  .cls-foot .btn { margin-left: auto }
   .act-link { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-size: .8rem; font-weight: 600; cursor: pointer }
   .act-link:hover { text-decoration: underline }
   .mdl-dim { position: fixed; inset: 0; background: rgba(23,24,26,.4); z-index: 60 }

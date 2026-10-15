@@ -7,7 +7,8 @@
   import { session, refreshSession, initTheme, setTheme, signOut } from './lib/session.svelte.js'
   import { refreshSystems, enterRoute } from './lib/system-routing.js'
   import { listJDCategories, listDocuments, setupState, stats as fetchStats, getDemoMode, mintDemoSession, chatStatus } from './lib/api.js'
-  import { hasCapability } from './lib/capabilities.js'
+  import { hasCapability, hasFeature } from './lib/capabilities.js'
+  import { archiveSettingsSectionAvailable } from './lib/configuration.js'
   import Icon from './lib/Icon.svelte'
   import Omnibox from './lib/Omnibox.svelte'
   import Lazy from './lib/Lazy.svelte'
@@ -39,6 +40,7 @@
     .split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join('') || '?')
   const canShareViews = $derived(hasCapability(session.user, 'share_views'))
   const demoVisitor = $derived(session.user?.kind === 'demo-anon' || session.user?.kind === 'demo-scratch')
+  const canUseModel = $derived(hasFeature(session.user, 'llm_connections') && !demoVisitor)
   const canUseArchiveChat = $derived(hasCapability(session.user, 'archive_chat') && !demoVisitor)
   const canReviewIntelligence = $derived(hasCapability(session.user, 'archive_intelligence') && !demoVisitor)
   const canViewCalendar = $derived(canReviewIntelligence || demoVisitor)
@@ -185,10 +187,13 @@
     // Filing-tree selection is the only setup requirement. Keep its reminder
     // visible across navigation and reloads until the server reports a choice.
     const setup = refreshSetupState(scope)
-    const chat = pollChatStatus()
+    const chat = canUseModel ? pollChatStatus() : Promise.resolve()
     await Promise.all([pollStats(), categories, setup, chat])
     if (!scopeCurrent(scope)) return
-    pollTimer = setInterval(() => { pollStats(); pollChatStatus() }, 60_000)
+    pollTimer = setInterval(() => {
+      pollStats()
+      if (canUseModel) pollChatStatus()
+    }, 60_000)
   }
 
   async function loadTaxonomy() {
@@ -314,6 +319,7 @@
   }
 
   async function openArchiveChat(question = '', returnFocus = null, scope = currentChatScope()) {
+    if (!canUseArchiveChat || !chatEnabled) return
     const requestScope = captureScope()
     chatOpen = true
     chatParked = false
@@ -350,6 +356,7 @@
   }
 
   function askSelectedDocuments(ids) {
+    if (!canUseArchiveChat || !chatEnabled) return
     openArchiveChat('', null, {
       label: translate(ids.length === 1 ? "app.selectedDocumentCount.one" : "app.selectedDocumentCount.other", { count: ids.length }),
       document_ids: ids,
@@ -429,6 +436,14 @@
       if (!uploadRoute) uploadFiles = []
     })
   })
+  $effect(() => {
+    if (canUseModel) return
+    chatEnabled = false
+    chatStatusInfo = { enabled: false, provider: '', local: false }
+    chatOpen = false
+    chatParked = false
+    ChatDrawer = null
+  })
   const page = $derived(route.parts[0] || 'dashboard')
   const documentID = $derived(/^\d+$/.test(route.parts[1] || '') && Number(route.parts[1]) > 0 ? route.parts[1] : '')
   const jdCategories = $derived(jdTree.flatMap((area) => area.categories))
@@ -464,8 +479,12 @@
   $effect(() => {
     if (!session.user) return
     if (page === 'login') go('#/dashboard')
-    if (page === 'settings' && route.query.get('tab') === 'archive' && session.user.role !== 'admin') {
-      go('#/settings')
+    if (page === 'settings' && route.query.get('tab') === 'archive') {
+      if (session.user.role !== 'admin') {
+        go('#/settings')
+      } else if (!archiveSettingsSectionAvailable(session.user, route.query.get('section'))) {
+        go(filingHref('#/settings?tab=archive'))
+      }
     }
     if (page === 'calendar' && !canViewCalendar) go('#/dashboard')
   })
@@ -597,7 +616,7 @@
         {#if scopeReady}<Omnibox pages={session.user?.role === 'admin'
           ? [...PAGES, { href: '#/settings?tab=archive', label: translate("app.archiveConfiguration"), ico: 'settings' }, { href: '#/settings?tab=archive&section=users', label: translate("app.people"), ico: 'shield' }, { href: '#/settings?tab=archive&section=metadata', label: translate("app.metadata"), ico: 'tag' }]
           : PAGES} commands={COMMANDS} canAsk={chatEnabled && canUseArchiveChat} onAsk={openArchiveChat} />{/if}
-        {#if chatParked && ChatDrawer}
+        {#if canUseArchiveChat && chatParked && ChatDrawer}
           <button class="research-ribbon" bind:this={chatRibbon} onclick={resumeArchiveChat}
                   aria-label={translate("app.returnToYourDocumentQuestion")} title={translate("app.returnToYourDocumentQuestion")}>
             <span class="research-ribbon-dot"></span>
@@ -649,12 +668,12 @@
             <Lazy load={lazyRoutes.account} props={{ notify: scopedNotify, accountNotify, profileOnly: true }} />
           {/if}
         {:else if page === 'dashboard'}<Lazy load={lazyRoutes.dashboard} props={{ st, statsError, inboxCategory, taxonomyLoaded, taxonomyError, recent: recentDocs, recentError, onRetryRecent: loadRecentDocuments, setupNeeded, setupError, onRetrySetup: refreshSetupState }} />
-        {:else if page === 'documents'}<Lazy load={lazyRoutes.documents} props={{ notify: scopedNotify, jdCategories, canAskArchive: chatEnabled && canUseArchiveChat, canReviewIntelligence, onAskDocuments: askSelectedDocuments, onScopeChange: publishChatScope }} />
+        {:else if page === 'documents'}<Lazy load={lazyRoutes.documents} props={{ notify: scopedNotify, jdCategories, canAskArchive: chatEnabled && canUseArchiveChat, canReviewIntelligence, canUseModel, onAskDocuments: askSelectedDocuments, onScopeChange: publishChatScope }} />
         {:else if page === 'doc' && documentID}<Lazy load={lazyRoutes.detail} props={{ id: documentID, notify: scopedNotify, jdCategories }} />
-        {:else if page === 'inbox'}<Lazy load={lazyRoutes.documents} props={{ notify: scopedNotify, inbox: inboxCategory, inboxMode: true, taxonomyLoaded, jdCategories, canAskArchive: chatEnabled && canUseArchiveChat, canReviewIntelligence, onAskDocuments: askSelectedDocuments, onScopeChange: publishChatScope }} />
+        {:else if page === 'inbox'}<Lazy load={lazyRoutes.documents} props={{ notify: scopedNotify, inbox: inboxCategory, inboxMode: true, taxonomyLoaded, jdCategories, canAskArchive: chatEnabled && canUseArchiveChat, canReviewIntelligence, canUseModel, onAskDocuments: askSelectedDocuments, onScopeChange: publishChatScope }} />
         {:else if page === 'search'}<Lazy load={lazyRoutes.search} props={{ onScopeChange: publishChatScope }} />
-        {:else if page === 'tasks'}<Lazy load={lazyRoutes.tasks} props={{ notify: scopedNotify, onCount: pollStats, canReviewIntelligence, canManageJobs: session.user?.role === 'admin' }} />
-        {:else if page === 'automations'}<Lazy load={lazyRoutes.automations} props={{ notify: scopedNotify, readOnly: session.user?.role !== 'admin', jdCategories }} />
+        {:else if page === 'tasks'}<Lazy load={lazyRoutes.tasks} props={{ notify: scopedNotify, onCount: pollStats, canReviewIntelligence, canManageJobs: session.user?.role === 'admin', canUseModel }} />
+        {:else if page === 'automations'}<Lazy load={lazyRoutes.automations} props={{ notify: scopedNotify, readOnly: session.user?.role !== 'admin', jdCategories, canUseModel }} />
         {:else if page === 'upload'}
           <div class="upload-wrap">
             <Lazy load={lazyRoutes.upload} props={{ initialFiles: uploadFiles, onInitialFilesConsumed: () => (uploadFiles = []) }} />
@@ -674,7 +693,7 @@
   </div>
 
 
-  {#if ChatDrawer}
+  {#if canUseArchiveChat && ChatDrawer}
     <ChatDrawer open={chatOpen} request={chatRequest} status={chatStatusInfo}
       canReviewIntelligence={canReviewIntelligence} onClose={closeArchiveChat}
       onPark={parkArchiveChat} onReturnFocus={chatReturnFocus} />

@@ -8,7 +8,7 @@
            listDecryptionPasswords, renameDecryptionPassword, deleteDecryptionPassword } from '../lib/api.js'
   import { session, refreshSession } from '../lib/session.svelte.js'
   import { fmtDate } from '../lib/format.js'
-  import { hasCapability } from '../lib/capabilities.js'
+  import { hasCapability, hasFeature } from '../lib/capabilities.js'
   import Icon from '../lib/Icon.svelte'
   import EmailChangeDialog from '../lib/EmailChangeDialog.svelte'
   import Lazy from '../lib/Lazy.svelte'
@@ -34,6 +34,7 @@
   let destructiveBusy = $state(false)
   const demoVisitor = $derived(session.user?.kind === 'demo-anon' || session.user?.kind === 'demo-scratch')
   const accountToolsAvailable = $derived(!profileOnly && !demoVisitor)
+  const mobilePairingAvailable = $derived(hasFeature(session.user, 'mobile_pairing'))
   const emailChangeMode = $derived(session.user?.email_change_mode || 'disabled')
   const signInMethod = $derived(emailChangeMode === 'oidc'
     ? translate('accountSettings.identityProvider')
@@ -127,6 +128,10 @@
   })
 
   $effect(() => {
+    if (!mobilePairingAvailable) {
+      pairingOpen = false
+      return
+    }
     if (!pairingOpen) return
     const timer = setInterval(() => void load({ background: true }), 2000)
     return () => clearInterval(timer)
@@ -349,24 +354,26 @@
 
 
   {#if accountToolsAvailable}
-    <section class="settings-section" aria-labelledby="mobile-heading">
-      <div class="section-heading">
-        <div>
-          <h2 id="mobile-heading">{translate("accountSettings.mobileApp")}</h2>
-          <p>{translate("accountSettings.connectTheSuchiAppToThisArchive")}</p>
+    {#if mobilePairingAvailable}
+      <section class="settings-section" aria-labelledby="mobile-heading">
+        <div class="section-heading">
+          <div>
+            <h2 id="mobile-heading">{translate("accountSettings.mobileApp")}</h2>
+            <p>{translate("accountSettings.connectTheSuchiAppToThisArchive")}</p>
+          </div>
+          <button class="btn sm" onclick={() => pairingOpen = true}>{translate("accountSettings.pairMobileApp")}</button>
         </div>
-        <button class="btn sm" onclick={() => pairingOpen = true}>{translate("accountSettings.pairMobileApp")}</button>
-      </div>
-      {#if err}
-        <div class="err" role="alert">{err} <button class="btn sm" onclick={() => void load()}>{translate("common.retry")}</button></div>
-      {:else if tokensLoading && !tokens.length}
-        <p class="empty-setting" role="status">{translate("accountSettings.loadingConnectedApps")}</p>
+        {#if err}
+          <div class="err" role="alert">{err} <button class="btn sm" onclick={() => void load()}>{translate("common.retry")}</button></div>
+        {:else if tokensLoading && !tokens.length}
+          <p class="empty-setting" role="status">{translate("accountSettings.loadingConnectedApps")}</p>
+        {/if}
+        {@render tokenRows(mobileTokens, translate("accountSettings.noConnectedMobileAppsPairTheAppTo"), true)}
+      </section>
+      {#if pairingOpen}
+        <Lazy load={loadMobilePairing} props={{ notify, onClose: () => { pairingOpen = false; load() } }} />
       {/if}
-      {@render tokenRows(mobileTokens, translate("accountSettings.noConnectedMobileAppsPairTheAppTo"), true)}
-    </section>
-  {#if pairingOpen}
-    <Lazy load={loadMobilePairing} props={{ notify, onClose: () => { pairingOpen = false; load() } }} />
-  {/if}
+    {/if}
 
   <section class="settings-section" aria-labelledby="tokens-heading">
     <div class="section-heading">

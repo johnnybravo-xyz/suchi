@@ -12,10 +12,11 @@
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
   import UserCreateForm from '../lib/UserCreateForm.svelte'
   import Icon from '../lib/Icon.svelte'
-  import { USER_CAPABILITIES } from '../lib/capabilities.js'
+  import { availableCapabilities } from '../lib/capabilities.js'
   import { session } from '../lib/session.svelte.js'
 
   let { notify, view = 'people', initialPeople = '', initialMetadata = '' } = $props()
+  const configurableCapabilities = $derived(availableCapabilities(session.user))
   let deleteRequest = $state(null)
   let deleteBusy = $state(false)
   let activeDelete = null
@@ -62,7 +63,7 @@
 
 
   async function toggleUserCap(u, cap) {
-    if (userBusy) return
+    if (userBusy || !configurableCapabilities.some(candidate => candidate.key === cap.key)) return
     const has = (u.capabilities || []).includes(cap.key)
     const newCaps = has ? u.capabilities.filter(c => c !== cap.key) : [...(u.capabilities || []), cap.key]
     userBusy = true
@@ -72,6 +73,11 @@
       notify?.(has ? translate("peopleSettings.revokedValueFromValue", { "label": cap.label, "email": u.email }) : translate("peopleSettings.grantedValueToValue", { "label": cap.label, "email": u.email }))
     } catch (ex) { notify?.(ex.message || translate("peopleSettings.couldNotUpdateCapabilities")) }
     finally { userBusy = false }
+  }
+
+  function visibleCapabilityCount(user) {
+    const visible = new Set(configurableCapabilities.map(capability => capability.key))
+    return (user.capabilities || []).filter(capability => visible.has(capability)).length
   }
 
   async function toggleDisabled(u) {
@@ -531,9 +537,9 @@
             </div>
             {#if u.role !== 'admin'}
               <details class="user-access">
-                <summary>{translate("peopleSettings.additionalAccess")} <span class="quiet">{translate("peopleSettings.valueGranted", { "length": (u.capabilities || []).length })}</span></summary>
+                <summary>{translate("peopleSettings.additionalAccess")} <span class="quiet">{translate("peopleSettings.valueGranted", { "length": visibleCapabilityCount(u) })}</span></summary>
                 <div class="access-options">
-                  {#each USER_CAPABILITIES as cap (cap.key)}
+                  {#each configurableCapabilities as cap (cap.key)}
                     <label class="access-option">
                       <span><b>{cap.label}</b><small>{cap.description}</small></span>
                       <button type="button" class="switch" role="switch"

@@ -20,7 +20,7 @@
   import ISODateInput from '../lib/ISODateInput.svelte'
 
   let { notify, inbox = null, inboxMode = false, taxonomyLoaded = true, jdCategories = [],
-        canAskArchive = false, canReviewIntelligence = false, onAskDocuments, onScopeChange } = $props()
+        canAskArchive = false, canReviewIntelligence = false, canUseModel = false, onAskDocuments, onScopeChange } = $props()
 
   let docs = $state([])
   let count = $state(0)
@@ -36,7 +36,8 @@
   const fCorrMissing = $derived(route.query.get('correspondents__isnull') === 'true')
   const fSens = $derived(route.query.get('sensitivity') || '')
   const fDocumentIDs = $derived(route.query.get('document_ids') || '')
-  const fShareLink = $derived(route.query.get('share_link') || '')
+  const canShareLinks = $derived(hasCapability(session.user, 'share_links'))
+  const fShareLink = $derived(canShareLinks ? route.query.get('share_link') || '' : '')
   const ordering = $derived(route.query.get('ordering') || '-created_at')
   const dateFrom = $derived(dateFilterValue('created_at__gte'))
   const dateTo = $derived(dateFilterValue('created_at__lte'))
@@ -72,7 +73,6 @@
   const pageSize = 50
   const isInbox = $derived(inboxMode)
   const jdFilter = $derived(route.query.get('jd') || '')
-  const canShareLinks = $derived(hasCapability(session.user, 'share_links'))
   const publicShareAvailable = $derived(!!session.user?.public_share_available)
   let loadVersion = 0
   let disposed = false
@@ -408,8 +408,9 @@
   const bulkRescan = () => bulk(translate("documents.rescanStarted"), 'rescan_enqueue', {})
   const bulkTrash = () => (trashRequest = { kind: 'bulk', count: sel.size })
   function openBulkShare() {
-    if (bulkBusy || !sel.size) return
+    if (!canShareLinks || bulkBusy || !sel.size) return
     bulkShareVersion++
+    shareURL = ''
     bulkShareInput = { visibility: 'network', expiry: '0', password: '' }
     bulkShareOpen = true
   }
@@ -422,6 +423,7 @@
   }
 
   async function bulkShare() {
+    if (!canShareLinks || !bulkShareOpen) return
     const user = session.user
     const ids = [...sel]
     const version = bulkShareVersion
@@ -454,6 +456,7 @@
   }
 
   async function bulkExtractDates() {
+    if (!canUseModel || !canReviewIntelligence) return
     const ids = [...sel]
     bulkBusy = true
     try {
@@ -596,7 +599,7 @@
         <Icon name="ask" size={12} /> {translate("documents.askSelection")}
       </button>
     {/if}
-    {#if canReviewIntelligence}
+    {#if canUseModel && canReviewIntelligence}
       <button class="btn sm" disabled={bulkBusy} onclick={bulkExtractDates} title={translate("documents.extractDatesForReviewUsingTheConfigured")}>
         <Icon name="calendar" size={12} /> {translate("documents.extractDates")}
       </button>
@@ -635,7 +638,7 @@
   </div>
 {/if}
 
-{#if bulkShareOpen}
+{#if canShareLinks && bulkShareOpen}
   <div class="modal-veil" onclick={closeBulkShare} role="presentation">
     <div class="modal" style="width:min(560px,94vw)" onclick={(event) => event.stopPropagation()}
          onkeydown={(event) => { if (event.key === 'Escape') closeBulkShare() }}
@@ -704,10 +707,12 @@
             <option value={correspondent.id} selected={String(correspondent.id) === fCorr}>{correspondent.name}</option>
           {/each}
         </select>
-        <button type="button" class="btn sm document-share-filter" class:primary={fShareLink === 'active'}
-                aria-pressed={fShareLink === 'active'} onclick={toggleSharedByMe}>
-          <Icon name="link" size={14} /> {translate("documents.sharedByMe")}
-        </button>
+        {#if canShareLinks}
+          <button type="button" class="btn sm document-share-filter" class:primary={fShareLink === 'active'}
+                  aria-pressed={fShareLink === 'active'} onclick={toggleSharedByMe}>
+            <Icon name="link" size={14} /> {translate("documents.sharedByMe")}
+          </button>
+        {/if}
         <select class="input" aria-label={translate("documents.filterBySensitivity")} value={fSens}
                 onchange={(e) => setRouteFilter('sensitivity', e.target.value)}>
           <option value="">{translate("documents.anySensitivity")}</option>

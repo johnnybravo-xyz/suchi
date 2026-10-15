@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { t } from './i18n.svelte.js'
 
+const CAPABILITY_FEATURES = Object.freeze({
+  archive_chat: 'llm_connections',
+  mailboxes: 'email_ingestion',
+  share_links: 'share_links',
+})
+
 
 export const USER_CAPABILITIES = Object.freeze([
   Object.freeze({
@@ -30,6 +36,19 @@ export const USER_CAPABILITIES = Object.freeze([
   }),
 ])
 
+export function hasFeature(user, feature) {
+  return user?.features?.[feature] === true
+}
+
+export function availableCapabilities(user) {
+  return USER_CAPABILITIES.filter(({ key }) => {
+    const feature = CAPABILITY_FEATURES[key]
+    return !feature || hasFeature(user, feature)
+  })
+}
+
 export function hasCapability(user, capability) {
+  const feature = CAPABILITY_FEATURES[capability]
+  if (feature && !hasFeature(user, feature)) return false
   return user?.role === 'admin' || (user?.capabilities || []).includes(capability)
 }

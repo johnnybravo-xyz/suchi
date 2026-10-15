@@ -1077,6 +1077,7 @@
   }
 
   async function loadActiveShares(user, documentID, version) {
+    if (!canShareLinks) return
     shareLoading = true
     shareError = ''
     try {
@@ -1097,6 +1098,7 @@
   }
 
   async function openShare() {
+    if (!canShareLinks) return
     const user = session.user
     const documentID = id
     const version = ++shareLoadVersion
@@ -1119,6 +1121,7 @@
   }
 
   async function loadShareHistory(page = 1) {
+    if (!canShareLinks) return
     const user = session.user
     const documentID = id
     const version = shareLoadVersion
@@ -1146,12 +1149,13 @@
   }
 
   async function toggleShareHistory() {
+    if (!canShareLinks) return
     shareHistoryOpen = !shareHistoryOpen
     if (shareHistoryOpen && !shareHistoryLoaded) await loadShareHistory(1)
   }
 
   async function makeLink() {
-    if (shareBusy) return
+    if (!canShareLinks || !shareOpen || shareBusy) return
     const user = session.user
     const documentID = id
     const version = shareLoadVersion
@@ -2120,7 +2124,7 @@
   <DocumentLinkDialog {id} onClose={() => (documentLinkOpen = false)} />
 {/if}
 
-{#if shareOpen}
+{#if canShareLinks && shareOpen}
   <div class="modal-veil" onclick={closeShare} role="presentation">
     <div class="modal share-modal" onclick={(e) => e.stopPropagation()} onkeydown={(e) => { if (e.key === 'Escape') closeShare() }} role="dialog" aria-label={translate("documentDetail.shareDocument")} tabindex="-1">
       <div class="modal-head">

@@ -8,7 +8,7 @@
   import { DATE_ROLES, formatIntelligenceValue, canReviewDate, reviewFailure } from '../lib/intelligence.js'
   import Icon from '../lib/Icon.svelte'
 
-  let { notify, onCount, canReviewIntelligence = false, canManageJobs = false } = $props()
+  let { notify, onCount, canReviewIntelligence = false, canManageJobs = false, canUseModel = false } = $props()
   let tasks = $state([])
   let jobs = $state([])
   let loading = $state(true)
@@ -36,8 +36,10 @@
       ])
       // `include=approvals` skips the classic tasks branch; approval tasks
       // and generic intelligence candidates use their own response fields.
-      tasks = wf?.approval_tasks || []
-      jobs = jb?.results || jb || []
+      tasks = (wf?.approval_tasks || []).filter(task => canUseModel ||
+        !(task.approval_name === 'rescan-proposal' && task.vars?.kind === 'llm') &&
+        task.vars?.source !== 'llm')
+      jobs = (jb?.results || jb || []).filter(job => canUseModel || job.kind !== 'post-classify')
       intelligence = facts?.results || []
       intelligenceSelection = new Set()
       taskErrors = {}

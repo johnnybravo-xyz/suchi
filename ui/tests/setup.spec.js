@@ -537,7 +537,7 @@ test('taxonomy settings exports the filing tree', async ({ page }) => {
 // Mirror the server's strict decoder so payload drift fails in the browser suite.
 const llmInputFields = [
   'subscription_provider', 'enabled', 'endpoint_url', 'model', 'api_key', 'clear_api_key', 'egress_ack',
-  'confidence_threshold', 'archive_enabled', 'archive_review_threshold', 'archive_auto_threshold',
+  'confidence_threshold',
 ]
 
 function unexpectedFields(payload, allowed) {
@@ -545,6 +545,13 @@ function unexpectedFields(payload, allowed) {
 }
 
 async function mockAPI(page, options = {}) {
+  const features = {
+    llm_connections: true,
+    email_ingestion: true,
+    share_links: true,
+    mobile_pairing: true,
+    ...(options.features || {}),
+  }
   let taxonomyApplied = false
   let researchContextMode = options.researchContextMode || 'balanced'
   let autoApply = options.autoApply
@@ -619,8 +626,16 @@ async function mockAPI(page, options = {}) {
       await route.fulfill({ status: 503, json: { error: 'taxonomy unavailable' } })
       return
     }
+    if (path === '/api/admin/settings/archive-matching' && request.method() === 'PATCH' &&
+        request.postDataJSON().auto_apply !== undefined && options.applicationModeSaveFailure) {
+      await route.fulfill({
+        status: 503,
+        json: { code: 'save_failed', error: options.failureMessage || 'application mode unavailable' },
+      })
+      return
+    }
     if (path === '/api/admin/settings/llm' && request.method() === 'PATCH' &&
-        (request.postDataJSON().auto_apply !== undefined ? options.applicationModeSaveFailure : options.researchContextSaveFailure)) {
+        request.postDataJSON().research_context_mode !== undefined && options.researchContextSaveFailure) {
       await route.fulfill({
         status: 503,
         json: { code: 'save_failed', error: options.failureMessage || 'reading amount unavailable' },
@@ -653,6 +668,7 @@ async function mockAPI(page, options = {}) {
       instance_host: options.instanceHost || 'archive.example.test',
       public_share_available: options.publicShareAvailable ?? false,
       capabilities: options.capabilities ?? (options.demoSession ? [] : ['mailboxes']),
+      features,
       kind: options.demoSession ? `demo-${options.demoSession}` : 'user',
     }
     else if (path === '/api/jd/systems') body = options.systems || { introduced: false, default_system_code: '', results: [] }
@@ -745,39 +761,62 @@ async function mockAPI(page, options = {}) {
         actions: [{ id: 1, type: 'assign_tags', params: { tag_ids: [] } }],
       }],
     }
-    else if (path === '/api/automations/schema') body = {
-      triggers: [{ code: 2, type: 'document_added', name: 'After a new document lands' }],
-      actions: options.automationActions || [{ kind: 'assign_tags', name: 'Add tags', params: [{ name: 'tag_ids' }] }],
-      ask: {
-        max_enabled: 5,
-        trigger_type: 'document_added',
-        answers: [{ type: 'yes_no', name: 'Yes / No' }, { type: 'choice', name: 'Multiple choice', min_choices: 2, max_choices: 10 }],
-        action_kinds: ['assign_tags', 'assign_correspondent', 'assign_jd_category', 'assign_custom_field'],
-      },
+    else if (path === '/api/automations/schema') {
+      body = {
+        triggers: [{ code: 2, type: 'document_added', name: 'After a new document lands' }],
+        actions: options.automationActions || [{ kind: 'assign_tags', name: 'Add tags', params: [{ name: 'tag_ids' }] }],
+      }
+      if (features.llm_connections) {
+        body.ask = {
+          max_enabled: 5,
+          trigger_type: 'document_added',
+          answers: [{ type: 'yes_no', name: 'Yes / No' }, { type: 'choice', name: 'Multiple choice', min_choices: 2, max_choices: 10 }],
+          action_kinds: ['assign_tags', 'assign_correspondent', 'assign_jd_category', 'assign_custom_field'],
+        }
+      }
     }
-    else if (path === '/api/admin/settings/llm') {
+    else if (path === '/api/admin/settings/archive-matching') {
       if (request.method() === 'PATCH') {
         const payload = request.postDataJSON()
-        const unexpected = unexpectedFields(payload, ['research_context_mode', 'auto_apply', 'subscription_model', 'subscription_provider', 'archive_enabled', 'archive_auto_threshold', 'archive_review_threshold'])
+        const unexpected = unexpectedFields(payload, ['auto_apply', 'archive_enabled', 'archive_auto_threshold', 'archive_review_threshold'])
         const archivePatch = Object.keys(payload).some(key => key.startsWith('archive_'))
-        const valid = archivePatch || typeof payload.auto_apply === 'boolean' ||
-          ['focused', 'balanced', 'detailed'].includes(payload.research_context_mode) || typeof payload.subscription_model === 'string'
-        if (unexpected.length || (!archivePatch && Object.keys(payload).length !== (payload.subscription_model ? 2 : 1)) || !valid) {
+        const valid = archivePatch || (Object.keys(payload).length === 1 && typeof payload.auto_apply === 'boolean')
+        if (unexpected.length || !valid) {
           await route.fulfill({
             status: 400,
-            json: { code: 'bad_json', error: unexpected.length ? `unknown field ${unexpected[0]}` : 'invalid reading amount' },
+            json: { code: 'bad_json', error: unexpected.length ? `unknown field ${unexpected[0]}` : 'invalid archive matching settings' },
           })
           return
         }
         if (archivePatch) {
           options.archiveMatchingRequests?.push(payload)
           llmSettings = { ...llmSettings, ...payload }
-          body = { archive_enabled: llmSettings.archive_enabled, archive_auto_threshold: llmSettings.archive_auto_threshold, archive_review_threshold: llmSettings.archive_review_threshold }
-        } else if (typeof payload.auto_apply === 'boolean') {
+        } else {
           options.applicationModeRequests?.push(payload)
           autoApply = payload.auto_apply
-          body = { auto_apply: autoApply }
-        } else if (typeof payload.subscription_model === 'string') {
+        }
+      }
+      body = {
+        auto_apply: autoApply ?? true,
+        archive_enabled: llmSettings.archive_enabled,
+        archive_auto_threshold: llmSettings.archive_auto_threshold,
+        archive_review_threshold: llmSettings.archive_review_threshold,
+      }
+    }
+    else if (path === '/api/admin/settings/llm') {
+      if (request.method() === 'PATCH') {
+        const payload = request.postDataJSON()
+        const unexpected = unexpectedFields(payload, ['research_context_mode', 'subscription_model', 'subscription_provider'])
+        const valid = ['focused', 'balanced', 'detailed'].includes(payload.research_context_mode) ||
+          (typeof payload.subscription_model === 'string' && typeof payload.subscription_provider === 'string')
+        if (unexpected.length || !valid) {
+          await route.fulfill({
+            status: 400,
+            json: { code: 'bad_json', error: unexpected.length ? `unknown field ${unexpected[0]}` : 'invalid model settings' },
+          })
+          return
+        }
+        if (typeof payload.subscription_model === 'string') {
           options.subscriptionModelRequests?.push(payload)
           llmSettings.subscription_model = payload.subscription_model
           body = { subscription_provider: payload.subscription_provider, subscription_model: payload.subscription_model }
@@ -804,9 +843,14 @@ async function mockAPI(page, options = {}) {
         }
         body = { saved: true, active: payload.enabled }
       } else {
+        const {
+          archive_enabled: _archiveEnabled,
+          archive_auto_threshold: _archiveAutoThreshold,
+          archive_review_threshold: _archiveReviewThreshold,
+          ...modelSettings
+        } = llmSettings
         body = {
-          ...llmSettings,
-          auto_apply: autoApply,
+          ...modelSettings,
           research_context_mode: researchContextMode,
         }
       }
@@ -1240,6 +1284,55 @@ test('opens Archive configuration after choosing a filing tree', async ({ page }
   await expect(advanced.getByRole('link').nth(1)).toHaveText('OCR and backups')
 })
 
+test('disabled deployment features hide integrations and normalize hidden settings links without requests', async ({ page }) => {
+  const apiRequests = []
+  await mockAPI(page, {
+    apiRequests,
+    filingTreeChosen: true,
+    capabilities: ['archive_chat', 'archive_intelligence', 'mailboxes', 'share_links', 'share_views'],
+    features: {
+      llm_connections: false,
+      email_ingestion: false,
+      share_links: false,
+      mobile_pairing: false,
+    },
+  })
+
+  await page.goto('/#/settings?tab=archive&section=llm')
+  await expect(page).toHaveURL(/#\/settings\?tab=archive$/)
+  const configuration = page.getByRole('region', { name: 'Archive configuration' })
+  await expect(configuration.getByRole('link', { name: /Archive matching/ }).last()).toBeVisible()
+  await expect(configuration.getByRole('link', { name: /Classification/ })).toHaveCount(0)
+  await expect(configuration.getByRole('link', { name: /Email intake/ })).toHaveCount(0)
+
+  await page.goto('/#/settings')
+  await expect(page.getByRole('heading', { name: 'API tokens' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Mobile app' })).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'Mailboxes' })).toHaveCount(0)
+
+  await page.goto('/#/settings?tab=archive&section=users')
+  const member = page.locator('.user-entry').filter({ hasText: 'member@example.test' })
+  await member.getByText('Additional access').click()
+  await expect(member.getByText('Ask your documents', { exact: true })).toHaveCount(0)
+  await expect(member.getByText('Manage mailboxes', { exact: true })).toHaveCount(0)
+  await expect(member.getByText('Create share links', { exact: true })).toHaveCount(0)
+  await expect(member.getByText('Manage document dates', { exact: true })).toBeVisible()
+
+  await page.goto('/#/automations')
+  await page.getByRole('button', { name: 'New automation' }).click()
+  await expect(page.getByRole('switch', { name: 'Ask the document model' })).toHaveCount(0)
+
+  const forbidden = new Set([
+    '/api/chat/status',
+    '/api/admin/settings/llm',
+    '/api/email-accounts',
+    '/api/mobile/pairing',
+    '/api/share_links/',
+    '/api/intelligence/extract',
+  ])
+  expect(apiRequests.filter(request => forbidden.has(request.path))).toEqual([])
+})
+
 for (const userRole of ['admin', 'member']) {
   test(`shows the running build in ${userRole} settings`, async ({ page }) => {
     await mockAPI(page, {
@@ -1387,68 +1480,21 @@ test('separates completed archive administration from account settings', async (
   await expect(page).toHaveURL(/#\/settings\?tab=archive$/)
 })
 
-test('saves application mode independently and retains only saved choices after reload', async ({ page }) => {
+test('saves application mode independently on the archive-matching endpoint', async ({ page }) => {
   const applicationModeRequests = []
-  const llmSettingsRequests = []
-  const llmTestRequests = []
-  await mockAPI(page, {
-    filingTreeChosen: true,
-    applicationModeRequests, llmSettingsRequests, llmTestRequests,
-  })
-  await page.goto('/#/settings?tab=archive&section=llm')
-  await page.getByRole('button', { name: 'Adjust', exact: true }).click()
-  await page.getByRole('button', { name: 'Change', exact: true }).click()
+  await mockAPI(page, { filingTreeChosen: true, applicationModeRequests })
+  await page.goto('/#/settings?tab=archive&section=matching')
+
   const applyAuto = page.getByRole('radio', { name: /Apply when confident/ })
   const applyReview = page.getByRole('radio', { name: /Review first/ })
-  const localThreshold = page.getByLabel(/Minimum similarity to apply automatically/)
-  const modelThreshold = page.getByLabel(/Minimum model confidence to apply automatically/)
   await expect(applyAuto).toBeChecked()
-  await localThreshold.fill('0.95')
-  await page.getByRole('button', { name: /^(Set up model|Manage)$/ }).first().click()
-  await modelThreshold.fill('0.8')
-  await page.getByLabel('Model', { exact: true }).fill('unsaved-model')
-  await page.getByLabel('API key (blank for local)').fill('unsaved-key')
-  await page.getByRole('button', { name: 'Cancel', exact: true }).click()
-  await page.getByRole('radio', { name: /Detailed/ }).check()
   await applyReview.check()
-  await expect(localThreshold).toBeDisabled()
-  await page.getByRole('button', { name: /^(Set up model|Manage)$/ }).first().click()
-  await expect(modelThreshold).toBeDisabled()
-  if (await page.getByRole('dialog').count()) await page.getByRole('button', { name: 'Cancel', exact: true }).click()
   await page.getByRole('button', { name: 'Save application mode' }).click()
   await expect.poll(() => applicationModeRequests.length).toBe(1)
-  await expect(page.getByText('Document suggestions and questions. Off.', { exact: true })).toBeVisible()
-  if (!await page.getByRole('dialog').count()) await page.getByRole('button', { name: /^(Set up model|Manage)$/ }).first().click()
-  await expect(page.getByLabel('Model', { exact: true })).toHaveValue('unsaved-model')
-  await expect(page.getByLabel('API key (blank for local)')).toHaveValue('unsaved-key')
-  await expect(page.getByRole('radio', { name: /Detailed/ })).toBeChecked()
-  await expect(localThreshold).toHaveValue('0.95')
-  if (!await page.getByRole('dialog').count()) await page.getByRole('button', { name: /^(Set up model|Manage)$/ }).first().click()
-  await expect(modelThreshold).toHaveValue('0.8')
-  expect(llmSettingsRequests).toEqual([])
-  expect(llmTestRequests).toEqual([])
+  expect(applicationModeRequests[0]).toEqual({ auto_apply: false })
 
   await page.reload()
-  await page.getByRole('button', { name: 'Adjust', exact: true }).click()
-  await page.getByRole('button', { name: 'Change', exact: true }).click()
   await expect(applyReview).toBeChecked()
-  await expect(localThreshold).toBeDisabled()
-  await expect(localThreshold).toHaveValue('0.9')
-  if (!await page.getByRole('dialog').count()) await page.getByRole('button', { name: /^(Set up model|Manage)$/ }).first().click()
-  await expect(modelThreshold).toHaveValue('0.7')
-  if (!await page.getByRole('dialog').count()) await page.getByRole('button', { name: /^(Set up model|Manage)$/ }).first().click()
-  await expect(page.getByLabel('Model', { exact: true })).toHaveValue('qwen2.5:7b')
-  await expect(page.getByRole('radio', { name: /Balanced/ })).toBeChecked()
-  if (await page.getByRole('dialog').count()) await page.getByRole('button', { name: 'Cancel', exact: true }).click()
-  await applyAuto.check()
-  if (await page.getByRole('dialog').count()) await page.getByRole('button', { name: 'Cancel', exact: true }).click()
-  await page.getByRole('button', { name: 'Save application mode' }).click()
-  await expect.poll(() => applicationModeRequests.length).toBe(2)
-  await page.reload()
-  await page.getByRole('button', { name: 'Adjust', exact: true }).click()
-  await page.getByRole('button', { name: 'Change', exact: true }).click()
-  await expect(applyAuto).toBeChecked()
-  await expect(localThreshold).toBeEnabled()
 })
 
 test('keeps application mode editable after a failed save without changing persisted behavior', async ({ page }) => {
@@ -1457,92 +1503,20 @@ test('keeps application mode editable after a failed save without changing persi
     filingTreeChosen: true, autoApply: false,
     applicationModeSaveFailure: true, failureMessage: 'application mode unavailable',
   })
-  await page.goto('/#/settings?tab=archive&section=llm')
-  await page.getByRole('button', { name: 'Adjust', exact: true }).click()
-  await page.getByRole('button', { name: 'Change', exact: true }).click()
+  await page.goto('/#/settings?tab=archive&section=matching')
   const applyAuto = page.getByRole('radio', { name: /Apply when confident/ })
   const applyReview = page.getByRole('radio', { name: /Review first/ })
   await expect(applyReview).toBeChecked()
-  if (await page.getByRole('dialog').count()) await page.getByRole('button', { name: 'Cancel', exact: true }).click()
   await applyAuto.check()
-  if (await page.getByRole('dialog').count()) await page.getByRole('button', { name: 'Cancel', exact: true }).click()
   await page.getByRole('button', { name: 'Save application mode' }).click()
   await expect(page.getByText('application mode unavailable')).toBeVisible()
   await expect(applyAuto).toBeChecked()
   await expect(applyAuto).toBeEnabled()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   await page.reload()
-  await page.getByRole('button', { name: 'Adjust', exact: true }).click()
-  await page.getByRole('button', { name: 'Change', exact: true }).click()
   await expect(applyReview).toBeChecked()
 })
 
-test('model and matching saves preserve independent drafts and the persisted application mode', async ({ page }) => {
-  const llmSettingsRequests = []
-  const archiveMatchingRequests = []
-  await mockAPI(page, { filingTreeChosen: true, llmSettingsRequests, archiveMatchingRequests })
-  await page.goto('/#/settings?tab=archive&section=llm')
-  await page.getByRole('button', { name: 'Adjust', exact: true }).click()
-  await page.getByRole('button', { name: 'Change', exact: true }).click()
-  const applyAuto = page.getByRole('radio', { name: /Apply when confident/ })
-  const applyReview = page.getByRole('radio', { name: /Review first/ })
-  const localThreshold = page.getByLabel(/Minimum similarity to apply automatically/)
-  const modelThreshold = page.getByLabel(/Minimum model confidence to apply automatically/)
-  await localThreshold.fill('0.95')
-  await page.getByRole('button', { name: /^(Set up model|Manage)$/ }).first().click()
-  await modelThreshold.fill('0.8')
-  await page.getByRole('button', { name: 'Cancel', exact: true }).click()
-  await page.getByRole('radio', { name: /Detailed/ }).check()
-  await applyReview.check()
-  await page.getByRole('button', { name: /^(Set up model|Manage)$/ }).first().click()
-  await page.getByRole('button', { name: 'Test connection' }).click()
-  await page.getByRole('button', { name: 'Enable model' }).click()
-  await expect(page.getByText('Active', { exact: true })).toBeVisible()
-  await expect(page.getByText('Model enabled', { exact: true })).toBeVisible()
-  await expect(applyReview).toBeChecked()
-  await expect(localThreshold).toHaveValue('0.95')
-  await expect(page.getByRole('radio', { name: /Detailed/ })).toBeChecked()
-
-  await page.getByRole('button', { name: 'Manage' }).click()
-  await page.getByLabel('Model', { exact: true }).fill('unsaved-model')
-  if (await page.getByRole('dialog').count()) await page.getByRole('button', { name: 'Cancel', exact: true }).click()
-  await page.getByRole('button', { name: 'Save matching options' }).click()
-  await expect.poll(() => archiveMatchingRequests.length).toBe(1)
-  expect(llmSettingsRequests).toHaveLength(1)
-  if (!await page.getByRole('dialog').count()) await page.getByRole('button', { name: /^(Set up model|Manage)$/ }).first().click()
-  await expect(page.getByLabel('Model', { exact: true })).toHaveValue('unsaved-model')
-  await expect(applyReview).toBeChecked()
-  if (await page.getByRole('dialog').count()) await page.getByRole('button', { name: 'Cancel', exact: true }).click()
-  await page.getByRole('button', { name: 'Save reading amount' }).click()
-  await expect(page.getByText('Reading amount saved', { exact: true })).toBeVisible()
-  await expect(applyReview).toBeChecked()
-  await page.reload()
-  await page.getByRole('button', { name: 'Adjust', exact: true }).click()
-  await page.getByRole('button', { name: 'Change', exact: true }).click()
-  await expect(applyAuto).toBeChecked()
-  await expect(localThreshold).toHaveValue('0.95')
-  if (!await page.getByRole('dialog').count()) await page.getByRole('button', { name: /^(Set up model|Manage)$/ }).first().click()
-  await expect(modelThreshold).toHaveValue('0.8')
-  await expect(page.getByRole('radio', { name: /Detailed/ })).toBeChecked()
-  if (!await page.getByRole('dialog').count()) await page.getByRole('button', { name: /^(Set up model|Manage)$/ }).first().click()
-  await expect(page.getByLabel('Model', { exact: true })).toHaveValue('qwen2.5:7b')
-  await expect(page.getByText('Active', { exact: true })).toBeVisible()
-})
-
-test('keeps the similar-document switch contained and interactive', async ({ page }) => {
-  await mockAPI(page, { filingTreeChosen: true })
-  await page.goto('/#/settings?tab=archive&section=llm')
-  await page.getByRole('button', { name: 'Adjust', exact: true }).click()
-  await page.getByRole('button', { name: 'Change', exact: true }).click()
-
-  const toggle = page.getByRole('switch', { name: 'Offer filing suggestions from similar documents' })
-  await expect(toggle).toBeChecked()
-  const box = await toggle.boundingBox()
-  expect(Math.round(box.width)).toBe(38)
-  expect(Math.round(box.height)).toBe(22)
-  await toggle.click()
-  await expect(toggle).not.toBeChecked()
-})
 
 test('separates model-free matching saves from validated model settings', async ({ page }) => {
   const llmSettingsRequests = []
@@ -1553,9 +1527,7 @@ test('separates model-free matching saves from validated model settings', async 
     llmSettingsRequests, archiveMatchingRequests,
     llmHasAPIKey: true,
   })
-  await page.goto('/#/settings?tab=archive&section=llm')
-  await page.getByRole('button', { name: 'Adjust', exact: true }).click()
-  await page.getByRole('button', { name: 'Change', exact: true }).click()
+  await page.goto('/#/settings?tab=archive&section=matching')
 
   const saveMatching = page.getByRole('button', { name: 'Save matching options' })
   await page.getByRole('switch', { name: 'Offer filing suggestions from similar documents' }).click()
@@ -1564,6 +1536,7 @@ test('separates model-free matching saves from validated model settings', async 
   expect(llmSettingsRequests).toEqual([])
   expect(archiveMatchingRequests[0]).toEqual({ archive_enabled: false, archive_review_threshold: 0.5, archive_auto_threshold: 0.9 })
 
+  await page.goto('/#/settings?tab=archive&section=llm')
   await page.getByRole('button', { name: /^(Set up model|Manage)$/ }).first().click()
   const saveModel = page.getByRole('button', { name: 'Enable model' })
   const testConnection = page.getByRole('button', { name: 'Test connection' })
@@ -1609,22 +1582,20 @@ test('preserves an enabled model when saving archive matching', async ({ page })
     llmModel: 'archive-model',
     llmEgressAck: true,
   })
-  await page.goto('/#/settings?tab=archive&section=llm')
+  await page.goto('/#/settings?tab=archive&section=matching')
   await page.getByRole('button', { name: 'Adjust', exact: true }).click()
-  await page.getByRole('button', { name: 'Change', exact: true }).click()
 
   await page.getByLabel(/Minimum similarity to suggest for review/).fill('0.9')
   await expect(page.getByRole('button', { name: 'Save matching options' })).toBeDisabled()
   await expect(page.getByRole('alert')).toBeVisible()
   await page.getByLabel(/Minimum similarity to suggest for review/).fill('0.85')
-  if (await page.getByRole('dialog').count()) await page.getByRole('button', { name: 'Cancel', exact: true }).click()
   await page.getByRole('button', { name: 'Save matching options' }).click()
   await expect.poll(() => archiveMatchingRequests.length).toBe(1)
   expect(llmSettingsRequests).toEqual([])
   await page.reload()
   await page.getByRole('button', { name: 'Adjust', exact: true }).click()
-  await page.getByRole('button', { name: 'Change', exact: true }).click()
   await expect(page.getByLabel(/Minimum similarity to suggest for review/)).toHaveValue('0.85')
+  await page.goto('/#/settings?tab=archive&section=llm')
   await page.getByRole('button', { name: 'Manage', exact: true }).click()
   await expect(page.getByLabel('Model service URL')).toHaveValue('https://models.example.test/v1')
   if (!await page.getByRole('dialog').count()) await page.getByRole('button', { name: /^(Set up model|Manage)$/ }).first().click()
@@ -1661,7 +1632,6 @@ test('persists the reading amount independently without enabling the model', asy
     llmSettingsRequests,
   })
   await page.goto('/#/settings?tab=archive&section=llm')
-  await page.getByRole('button', { name: 'Adjust', exact: true }).click()
   await page.getByRole('button', { name: 'Change', exact: true }).click()
 
   const research = page.getByRole('region', { name: 'Ask your documents settings' })
@@ -1671,7 +1641,6 @@ test('persists the reading amount independently without enabling the model', asy
   await research.getByRole('button', { name: 'Save reading amount' }).click()
   await expect.poll(() => researchContextRequests.length).toBe(1)
   await page.reload()
-  await page.getByRole('button', { name: 'Adjust', exact: true }).click()
   await page.getByRole('button', { name: 'Change', exact: true }).click()
   await expect(research.getByRole('radio', { name: /Detailed/ })).toBeChecked()
   await expect(page.getByText('Document suggestions and questions. Off.', { exact: true })).toBeVisible()
@@ -1688,7 +1657,6 @@ test('keeps the reading amount out of model test, save, and disable payloads', a
     llmTestRequests,
   })
   await page.goto('/#/settings?tab=archive&section=llm')
-  await page.getByRole('button', { name: 'Adjust', exact: true }).click()
   await page.getByRole('button', { name: 'Change', exact: true }).click()
 
   await page.getByRole('radio', { name: /Detailed/ }).check()
@@ -1713,7 +1681,6 @@ test('keeps the reading amount out of model test, save, and disable payloads', a
     expect(payload).not.toHaveProperty('research_context_mode')
   }
   await page.reload()
-  await page.getByRole('button', { name: 'Adjust', exact: true }).click()
   await page.getByRole('button', { name: 'Change', exact: true }).click()
   await expect(page.getByRole('radio', { name: /Balanced/ })).toBeChecked()
 })
@@ -1727,7 +1694,6 @@ test('keeps the reading amount editable when its standalone save fails', async (
     failureMessage: 'reading amount unavailable',
   })
   await page.goto('/#/settings?tab=archive&section=llm')
-  await page.getByRole('button', { name: 'Adjust', exact: true }).click()
   await page.getByRole('button', { name: 'Change', exact: true }).click()
 
   const research = page.getByRole('region', { name: 'Ask your documents settings' })
@@ -7149,12 +7115,14 @@ test('Account subscription allows local matching saves after disconnect without 
   await page.getByRole('button', { name: 'Disconnect ChatGPT', exact: true }).click()
   await expect(page.getByRole('button', { name: 'Connect ChatGPT', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await page.goto('/#/settings?tab=archive&section=matching')
   await page.getByRole('button', { name: 'Adjust', exact: true }).click()
   await page.getByLabel(/Minimum similarity to suggest for review/).fill('0.6')
   await page.getByRole('button', { name: 'Save matching options', exact: true }).click()
   await expect(page.getByText('Similar-document matching saved', { exact: true })).toBeVisible()
   expect(archiveMatchingRequests).toEqual([{ archive_enabled: true, archive_review_threshold: 0.6, archive_auto_threshold: 0.9 }])
   expect(llmSettingsRequests).toEqual([])
+  await page.goto('/#/settings?tab=archive&section=llm')
   await page.getByRole('button', { name: 'Set up model', exact: true }).first().click()
   await expect(page.getByRole('button', { name: 'Test connection', exact: true })).toBeDisabled()
   await expect(page.getByRole('button', { name: 'Enable model', exact: true })).toBeDisabled()

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { t } from './i18n.svelte.js'
+import { hasFeature } from './capabilities.js'
 
 
 export const TAGS_SETTINGS_HASH = '#/settings?tab=archive&section=metadata&metadata=tags'
@@ -43,6 +44,7 @@ export const ARCHIVE_SETTINGS_GROUPS = [
         name: 'mail', get label() { return t('configuration.mail.label') }, icon: 'mail',
         get description() { return t('configuration.mail.description') },
         href: '#/settings?tab=archive&section=mail',
+        feature: 'email_ingestion',
       },
     ],
   },
@@ -52,9 +54,15 @@ export const ARCHIVE_SETTINGS_GROUPS = [
     get description() { return t('configuration.processing.description') },
     items: [
       {
+        name: 'matching', get label() { return t('configuration.matching.label') }, icon: 'search',
+        get description() { return t('configuration.matching.description') },
+        href: '#/settings?tab=archive&section=matching',
+      },
+      {
         name: 'llm', get label() { return t('configuration.classification.label') }, icon: 'zap',
         get description() { return t('configuration.classification.description') },
         href: '#/settings?tab=archive&section=llm',
+        feature: 'llm_connections',
       },
       {
         name: 'automations', get label() { return t('configuration.automations.label') }, icon: 'zap',
@@ -83,3 +91,20 @@ export const ARCHIVE_SETTINGS_GROUPS = [
 ]
 
 export const ARCHIVE_SETTINGS_ITEMS = [FILING_TREE_SETTINGS_ITEM, ...ARCHIVE_SETTINGS_GROUPS.flatMap((group) => group.items)]
+
+export function archiveSettingsGroups(user) {
+  return ARCHIVE_SETTINGS_GROUPS
+    .map(group => ({
+      ...group,
+      items: group.items.filter(item => !item.feature || hasFeature(user, item.feature)),
+    }))
+    .filter(group => group.items.length > 0)
+}
+
+export function archiveSettingsItems(user) {
+  return [FILING_TREE_SETTINGS_ITEM, ...archiveSettingsGroups(user).flatMap(group => group.items)]
+}
+
+export function archiveSettingsSectionAvailable(user, section) {
+  return !section || archiveSettingsItems(user).some(item => item.name === section)
+}

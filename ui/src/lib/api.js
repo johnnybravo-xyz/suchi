@@ -298,8 +298,9 @@ export const getLLMSettings = () => api.get('/api/admin/settings/llm')
 export const saveLLMSettings = (b) => api.post('/api/admin/settings/llm', b)
 export const saveResearchContextMode = (research_context_mode) =>
   api.patch('/api/admin/settings/llm', { research_context_mode })
+export const getArchiveMatchingSettings = () => api.get('/api/admin/settings/archive-matching')
 export const saveClassificationAutoApply = (auto_apply) =>
-  api.patch('/api/admin/settings/llm', { auto_apply })
+  api.patch('/api/admin/settings/archive-matching', { auto_apply })
 export const testLLMSettings = (b) => api.post('/api/admin/settings/llm/test', b)
 export const getPreferences = () => api.get('/api/admin/settings/preferences')
 export const savePreferences = (b) => api.post('/api/admin/settings/preferences', b)
@@ -329,6 +330,6 @@ export const subscriptionLoginAction = (provider, action) => api.post(`/api/admi
 
 export const getSubscriptionModels = (provider) => api.get(`/api/admin/settings/llm/subscriptions/${encodeURIComponent(provider)}/models`)
 
-export const saveArchiveMatchingSettings = (settings) => api.patch('/api/admin/settings/llm', settings)
+export const saveArchiveMatchingSettings = (settings) => api.patch('/api/admin/settings/archive-matching', settings)
 
 export const saveSubscriptionModel = (subscription_provider, subscription_model) => api.patch('/api/admin/settings/llm', { subscription_provider, subscription_model })

@@ -2,12 +2,14 @@
 <script>
   import { t as translate } from "./i18n.svelte.js";
   import { adminCreateUser } from './api.js'
-  import { USER_CAPABILITIES } from './capabilities.js'
+  import { availableCapabilities } from './capabilities.js'
+  import { session } from './session.svelte.js'
   import { systems } from './systems.svelte.js'
   import Icon from './Icon.svelte'
 
   let { notify, onCreated, onSkip } = $props()
   let user = $state({ email: '', display_name: '', password: '', role: 'member', capabilities: [] })
+  const configurableCapabilities = $derived(availableCapabilities(session.user))
   let busy = $state(false)
   let error = $state('')
 
@@ -23,7 +25,9 @@
     busy = true
     error = ''
     try {
-      await adminCreateUser({ ...user, capabilities: user.role === 'admin' ? [] : user.capabilities })
+      const visible = new Set(configurableCapabilities.map(capability => capability.key))
+      const capabilities = user.capabilities.filter(capability => visible.has(capability))
+      await adminCreateUser({ ...user, capabilities: user.role === 'admin' ? [] : capabilities })
       notify?.(translate("userCreateForm.createdValue", { "email": user.email }))
       user = { email: '', display_name: '', password: '', role: 'member', capabilities: [] }
       await onCreated?.()
@@ -60,7 +64,7 @@
       <details class="additional-access">
         <summary>{translate("userCreateForm.additionalAccess")} <span>{user.capabilities.length ? translate("userCreateForm.valueSelected", { "length": user.capabilities.length }) : translate("userCreateForm.optional")}</span></summary>
         <div class="capability-options">
-          {#each USER_CAPABILITIES as cap (cap.key)}
+          {#each configurableCapabilities as cap (cap.key)}
             <label class="capability-option">
               <input type="checkbox" checked={user.capabilities.includes(cap.key)} onchange={() => toggleCapability(cap.key)} />
               <span><b>{cap.label}</b><small>{cap.description}</small></span>

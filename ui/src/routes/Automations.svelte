@@ -13,7 +13,7 @@
   import RuleSection from '../lib/RuleSection.svelte'
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
 
-  let { notify, readOnly = false, jdCategories = [] } = $props()
+  let { notify, readOnly = false, jdCategories = [], canUseModel = false } = $props()
   let items = $state([])
   let loading = $state(true)
   let err = $state('')
@@ -66,6 +66,7 @@
     answers: [{ type: 'yes_no', name: translate("automations.yesNo") }, { type: 'choice', name: translate("automations.multipleChoice") }],
     action_kinds: ['assign_tags', 'assign_correspondent', 'assign_jd_category', 'assign_custom_field'],
   })
+  let askAvailable = $state(false)
 
   const FILTERS = [
     { kind: 'filename', key: 'filter_filename', label: translate("automations.filename"), operator: translate("automations.matches"), placeholder: '*.pdf' },
@@ -91,12 +92,15 @@
       label: ACTION_LABEL_KEYS[item.kind] ? translate(ACTION_LABEL_KEYS[item.kind]) : item.name || item.kind,
       params: item.params || [],
     }))
-    if (sc?.ask) ASK_SCHEMA = {
-      ...sc.ask,
-      answers: (sc.ask.answers || []).map(answer => ({
-        ...answer,
-        name: ASK_ANSWER_KEYS[answer.type] ? translate(ASK_ANSWER_KEYS[answer.type]) : answer.name || answer.type,
-      })),
+    if (canUseModel && sc?.ask) {
+      ASK_SCHEMA = {
+        ...sc.ask,
+        answers: (sc.ask.answers || []).map(answer => ({
+          ...answer,
+          name: ASK_ANSWER_KEYS[answer.type] ? translate(ASK_ANSWER_KEYS[answer.type]) : answer.name || answer.type,
+        })),
+      }
+      askAvailable = true
     }
   }).catch(ex => { err = ex.message || translate("automations.couldNotLoadTheAutomationOptions") })
 
@@ -159,6 +163,10 @@
   function openEditor(a, filters = null) {
     loadFacets()
     editing = a ? JSON.parse(JSON.stringify(a)) : blank()
+    if (!askAvailable && editing.ask) {
+      editing.ask = null
+      for (const action of editing.actions || []) delete action.when
+    }
     editing.triggers = editing.triggers?.length ? editing.triggers : [newTrigger()]
     editing.actions = editing.actions?.length ? editing.actions : [{ type: 'assign_tags', params: { tag_ids: [] } }]
     visibleFilters = filters || editing.triggers.map(configuredFilters)
@@ -282,6 +290,7 @@
   }
 
   function setAskEnabled(enabled) {
+    if (!askAvailable) return
     if (!enabled) {
       editing.ask = null
       for (const action of editing.actions || []) delete action.when
@@ -729,66 +738,68 @@
           </button>
         </RuleSection>
 
-        <RuleSection class="builder-section model-section" tone="quiet">
-          <div class="model-heading">
-            <button type="button" class="switch" role="switch" aria-checked={!!editing.ask}
-                    aria-label={translate("automations.askTheDocumentModel")}
-                    onclick={() => setAskEnabled(!editing.ask)}></button>
-            <div>
-              <h3 id="ask-heading">{translate("automations.askTheDocumentModel")}</h3>
-              <p>{translate("automations.oneClosedQuestionCanChooseWhichFixed")}</p>
-            </div>
-          </div>
-          {#if editing.ask}
-            <div class="question-grid">
-              <label class="question-field question-copy">
-                <span>{translate("automations.question")}</span>
-                <input class="input" aria-label={translate("automations.modelQuestion")} maxlength="1000"
-                       placeholder={translate("automations.isThisAUtilityBill")}
-                       bind:value={editing.ask.question} />
-              </label>
-              <label class="question-field answer-type">
-                <span>{translate("automations.answers")}</span>
-                <select class="input" aria-label={translate("automations.answerType")}
-                        bind:value={editing.ask.answer.type}
-                        onchange={askAnswerTypeChanged}>
-                  {#each ASK_SCHEMA.answers as answer}
-                    <option value={answer.type}>{answer.name || answer.type}</option>
-                  {/each}
-                </select>
-              </label>
-            </div>
-            {#if editing.ask.answer.type === 'yes_no'}
-              <p class="model-note">{translate("automations.chooseYesOrNoOnEachAction")}</p>
-            {:else}
-              <div class="choice-editor">
-                {#each editing.ask.answer.choices as choice, choiceIndex (choiceIndex)}
-                  <div class="choice-row">
-                    <input class="input" aria-label={translate("automations.answerChoiceValue", { "choiceIndex": choiceIndex + 1 })} maxlength="40"
-                           bind:value={editing.ask.answer.choices[choiceIndex]}
-                           onblur={normalizeActionBranches} />
-                    {#if editing.ask.answer.choices.length > (choiceAnswerSchema().min_choices || 2)}
-                      <button class="icon-button" type="button"
-                              aria-label={translate("automations.removeAnswerChoiceValue", { "choiceIndex": choiceIndex + 1 })}
-                              onclick={() => {
-                                editing.ask.answer.choices.splice(choiceIndex, 1)
-                                normalizeActionBranches()
-                              }}>
-                        <Icon name="x" size={12} />
-                      </button>
-                    {/if}
-                  </div>
-                {/each}
-                {#if editing.ask.answer.choices.length < (choiceAnswerSchema().max_choices || 10)}
-                  <button class="inline-add" type="button"
-                          onclick={() => editing.ask.answer.choices.push(translate("automations.optionValue", { "length": editing.ask.answer.choices.length + 1 }))}>
-                    <span aria-hidden="true">+</span> {translate("automations.addAnswer")}
-                  </button>
-                {/if}
+        {#if askAvailable}
+          <RuleSection class="builder-section model-section" tone="quiet">
+            <div class="model-heading">
+              <button type="button" class="switch" role="switch" aria-checked={!!editing.ask}
+                      aria-label={translate("automations.askTheDocumentModel")}
+                      onclick={() => setAskEnabled(!editing.ask)}></button>
+              <div>
+                <h3 id="ask-heading">{translate("automations.askTheDocumentModel")}</h3>
+                <p>{translate("automations.oneClosedQuestionCanChooseWhichFixed")}</p>
               </div>
+            </div>
+            {#if editing.ask}
+              <div class="question-grid">
+                <label class="question-field question-copy">
+                  <span>{translate("automations.question")}</span>
+                  <input class="input" aria-label={translate("automations.modelQuestion")} maxlength="1000"
+                         placeholder={translate("automations.isThisAUtilityBill")}
+                         bind:value={editing.ask.question} />
+                </label>
+                <label class="question-field answer-type">
+                  <span>{translate("automations.answers")}</span>
+                  <select class="input" aria-label={translate("automations.answerType")}
+                          bind:value={editing.ask.answer.type}
+                          onchange={askAnswerTypeChanged}>
+                    {#each ASK_SCHEMA.answers as answer}
+                      <option value={answer.type}>{answer.name || answer.type}</option>
+                    {/each}
+                  </select>
+                </label>
+              </div>
+              {#if editing.ask.answer.type === 'yes_no'}
+                <p class="model-note">{translate("automations.chooseYesOrNoOnEachAction")}</p>
+              {:else}
+                <div class="choice-editor">
+                  {#each editing.ask.answer.choices as choice, choiceIndex (choiceIndex)}
+                    <div class="choice-row">
+                      <input class="input" aria-label={translate("automations.answerChoiceValue", { "choiceIndex": choiceIndex + 1 })} maxlength="40"
+                             bind:value={editing.ask.answer.choices[choiceIndex]}
+                             onblur={normalizeActionBranches} />
+                      {#if editing.ask.answer.choices.length > (choiceAnswerSchema().min_choices || 2)}
+                        <button class="icon-button" type="button"
+                                aria-label={translate("automations.removeAnswerChoiceValue", { "choiceIndex": choiceIndex + 1 })}
+                                onclick={() => {
+                                  editing.ask.answer.choices.splice(choiceIndex, 1)
+                                  normalizeActionBranches()
+                                }}>
+                          <Icon name="x" size={12} />
+                        </button>
+                      {/if}
+                    </div>
+                  {/each}
+                  {#if editing.ask.answer.choices.length < (choiceAnswerSchema().max_choices || 10)}
+                    <button class="inline-add" type="button"
+                            onclick={() => editing.ask.answer.choices.push(translate("automations.optionValue", { "length": editing.ask.answer.choices.length + 1 }))}>
+                      <span aria-hidden="true">+</span> {translate("automations.addAnswer")}
+                    </button>
+                  {/if}
+                </div>
+              {/if}
             {/if}
-          {/if}
-        </RuleSection>
+          </RuleSection>
+        {/if}
 
         <RuleSection class="builder-section action-section" title={translate("automations.then")} headingId="then-heading">
           {#each editing.actions as action, actionIndex (actionIndex)}

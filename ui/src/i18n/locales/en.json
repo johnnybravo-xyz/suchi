@@ -470,6 +470,8 @@
   "configuration.intake.label": "Document intake",
   "configuration.mail.description": "Connect mailboxes and choose which messages become documents.",
   "configuration.mail.label": "Email intake",
+  "configuration.matching.description": "Control local similar-document matching and automatic suggestion application.",
+  "configuration.matching.label": "Archive matching",
   "configuration.metadata.description": "Manage document labels, correspondents, and custom fields.",
   "configuration.metadata.label": "Metadata",
   "configuration.preferences.description": "Set OCR languages and the automatic backup schedule.",
