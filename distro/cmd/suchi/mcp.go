@@ -41,6 +41,8 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/johnnybravo-xyz/suchi/core/config"
 )
 
 // debugReadBuildInfo aliases the stdlib call so the main package's
@@ -59,6 +61,15 @@ func runMCP(args []string) int {
 	)
 	if err := fs.Parse(args); err != nil {
 		return flagParseExit(err)
+	}
+	profile, err := config.LoadDeploymentProfile()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mcp: %v\n", err)
+		return 2
+	}
+	if *httpAddr != "" && profile == config.DeploymentProfileDesktopLocal {
+		fmt.Fprintln(os.Stderr, "mcp: --http is disabled by the desktop_local deployment profile")
+		return 2
 	}
 
 	// Auth + endpoint discovery. flags → env → error out cleanly.

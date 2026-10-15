@@ -152,3 +152,21 @@ func TestSafeAPIResponseErrorRedactsRequestAndBody(t *testing.T) {
 		}
 	}
 }
+
+func TestMCPHTTPIsRejectedBeforePingInDesktopProfile(t *testing.T) {
+	t.Setenv("DEPLOYMENT_PROFILE", "desktop_local")
+	var hits atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	t.Cleanup(target.Close)
+
+	if code := runMCP([]string{"--http", "127.0.0.1:0", "--url", target.URL, "--token", "private"}); code != 2 {
+		t.Fatalf("exit=%d, want 2", code)
+	}
+	if got := hits.Load(); got != 0 {
+		t.Fatalf("desktop HTTP rejection pinged target %d time(s)", got)
+	}
+}

@@ -994,3 +994,41 @@ func TestWhoami_capabilities(t *testing.T) {
 		t.Fatalf("anonymous whoami: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestDisabledCapabilitiesRejectChangesAndPreserveDormantGrants(t *testing.T) {
+	d := openTestDB(t)
+	s := &Server{
+		DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		PasswordHasher: func(string) (string, error) { return "unused-test-hash", nil },
+	}
+	s.setDeploymentFeatures(DeploymentFeatures{})
+	seedUser(t, d, 1)
+	seedMember(t, s, 2, `["archive_chat","mailboxes","share_links"]`)
+
+	rec := doAdmin(t, s, "PATCH", "/api/admin/users/2", `{"display_name":"Dormant"}`, adminPrincipal(1))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unrelated patch status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	rec = doAdmin(t, s, "PATCH", "/api/admin/users/2", `{"role":"admin"}`, adminPrincipal(1))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("promotion status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	stored, err := s.readAdminUser(context.Background(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(stored.Capabilities, ","); got != "archive_chat,mailboxes,share_links" {
+		t.Fatalf("dormant capabilities changed: %q", got)
+	}
+
+	rec = doAdmin(t, s, "PATCH", "/api/admin/users/2", `{"capabilities":["archive_chat","mailboxes"]}`, adminPrincipal(1))
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "feature_disabled") {
+		t.Fatalf("capability change status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	rec = doAdmin(t, s, "POST", "/api/admin/users",
+		`{"email":"blocked@example.test","password":"password","role":"member","capabilities":["share_links"]}`,
+		adminPrincipal(1))
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "feature_disabled") {
+		t.Fatalf("create status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}

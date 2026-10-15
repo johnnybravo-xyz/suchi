@@ -19,7 +19,7 @@ import (
 
 // EnumerateEgress is shared by the boot log and doctor so both report the
 // same effective, redacted surface, including integrations saved in SQLite.
-func EnumerateEgress(ctx context.Context, d *db.DB, cfg *config.Config, llmEndpointURL string) ([]string, error) {
+func EnumerateEgress(ctx context.Context, d *db.DB, cfg *config.Config, policy config.DeploymentPolicy, llmEndpointURL string) ([]string, error) {
 	seen := map[string]bool{}
 	var out []string
 	add := func(value string) {
@@ -32,22 +32,24 @@ func EnumerateEgress(ctx context.Context, d *db.DB, cfg *config.Config, llmEndpo
 		add("oidc.discovery " + redactURL(cfg.OIDCIssuerURL, true))
 	}
 	var queryErrs []error
-	accounts, err := emailaccounts.ListEnabled(ctx, d)
-	if err != nil {
-		queryErrs = append(queryErrs, fmt.Errorf("mailboxes: %w", err))
-	} else {
-		for _, account := range accounts {
-			add(fmt.Sprintf("imap %s (%s)", net.JoinHostPort(account.Host, fmt.Sprint(account.Port)), account.Name))
+	if policy.EmailIngestion {
+		accounts, err := emailaccounts.ListEnabled(ctx, d)
+		if err != nil {
+			queryErrs = append(queryErrs, fmt.Errorf("mailboxes: %w", err))
+		} else {
+			for _, account := range accounts {
+				add(fmt.Sprintf("imap %s (%s)", net.JoinHostPort(account.Host, fmt.Sprint(account.Port)), account.Name))
+			}
+		}
+		clientID := strings.TrimSpace(cfg.IngestIMAPOAuthClientIDMicrosoft)
+		if !oauth.UsableClientID(clientID) {
+			clientID = oauth.DefaultClientID
+		}
+		if oauth.UsableClientID(clientID) {
+			add("oauth.microsoft " + oauth.Authority)
 		}
 	}
-	clientID := strings.TrimSpace(cfg.IngestIMAPOAuthClientIDMicrosoft)
-	if !oauth.UsableClientID(clientID) {
-		clientID = oauth.DefaultClientID
-	}
-	if oauth.UsableClientID(clientID) {
-		add("oauth.microsoft " + oauth.Authority)
-	}
-	if llmEndpointURL != "" {
+	if policy.LLMConnections && llmEndpointURL != "" {
 		add("llm-classifier " + redactURL(llmEndpointURL, false))
 	}
 	sort.Strings(out)

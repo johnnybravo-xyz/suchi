@@ -69,6 +69,11 @@ func runDoctor(args []string) int {
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)
 		return 1
 	}
+	policy, err := cfg.EffectivePolicy()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "config: %v\n", err)
+		return 1
+	}
 	configuredDataDir := cfg.DataDir
 	_, dataDirExplicit := os.LookupEnv("DATA_DIR")
 	resolvedDataDir, usedFallback, err := resolveDoctorDataDir(cfg.DataDir, !dataDirExplicit, os.UserConfigDir)
@@ -97,7 +102,11 @@ func runDoctor(args []string) int {
 
 	// Egress surface
 	fmt.Println("== egress ==")
-	egress, egressErr := diagnostics.EnumerateEgress(ctx, d, cfg, resolveDoctorLLMEndpoint(ctx, d, cfg))
+	llmEndpoint := ""
+	if policy.LLMConnections {
+		llmEndpoint = resolveDoctorLLMEndpoint(ctx, d, cfg)
+	}
+	egress, egressErr := diagnostics.EnumerateEgress(ctx, d, cfg, policy, llmEndpoint)
 	if len(egress) == 0 {
 		fmt.Println("  outbound: none")
 	} else {

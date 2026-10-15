@@ -203,6 +203,22 @@ type Config struct {
 	UIDisabled bool
 }
 
+// LoadDeploymentProfile parses the deployment profile without requiring the
+// rest of the server configuration. Commands that do not start the server use
+// it to enforce profile-specific transport policy.
+func LoadDeploymentProfile() (string, error) {
+	raw, ok := os.LookupEnv("DEPLOYMENT_PROFILE")
+	if !ok {
+		return "", nil
+	}
+	switch strings.ToLower(raw) {
+	case DeploymentProfileDesktopLocal:
+		return DeploymentProfileDesktopLocal, nil
+	default:
+		return "", fmt.Errorf("DEPLOYMENT_PROFILE: unknown value %q (want %s or unset)", raw, DeploymentProfileDesktopLocal)
+	}
+}
+
 // Load reads env vars and returns a validated Config. It is intended to be
 // called exactly once at process start.
 func Load() (*Config, error) {
@@ -238,13 +254,9 @@ func Load() (*Config, error) {
 	if c.UseEmailIngestionFeatures, err = parseFeatureGate("USE_EMAIL_INGESTION_FEATURES"); err != nil {
 		return nil, err
 	}
-	if raw, ok := os.LookupEnv("DEPLOYMENT_PROFILE"); ok {
-		switch strings.ToLower(raw) {
-		case DeploymentProfileDesktopLocal:
-			c.DeploymentProfile = DeploymentProfileDesktopLocal
-		default:
-			return nil, fmt.Errorf("DEPLOYMENT_PROFILE: unknown value %q (want %s or unset)", raw, DeploymentProfileDesktopLocal)
-		}
+	c.DeploymentProfile, err = LoadDeploymentProfile()
+	if err != nil {
+		return nil, err
 	}
 
 	if c.IngestFSDir == "" && c.IngestFSOwnerEmail != "" {

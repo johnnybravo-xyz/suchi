@@ -141,7 +141,7 @@ func TestSaveLLMSettings_SealsKeyAndActivatesLive(t *testing.T) {
 			}, nil
 		},
 	}
-	body := `{"endpoint_url":"http://127.0.0.1:11434/v1","model":"qwen2.5:7b","api_key":"top-secret","confidence_threshold":0.8,"archive_enabled":false,"archive_review_threshold":0.6}`
+	body := `{"endpoint_url":"http://127.0.0.1:11434/v1","model":"qwen2.5:7b","api_key":"top-secret","confidence_threshold":0.8}`
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/settings/llm", strings.NewReader(body))
 	req = req.WithContext(auth.WithPrincipal(req.Context(), &pluginapi.Principal{
 		Kind: "user", UserID: 1, Role: "admin",
@@ -186,10 +186,6 @@ func TestSaveLLMSettings_SealsKeyAndActivatesLive(t *testing.T) {
 	if resolved.ConfidenceThreshold != 0.8 {
 		t.Fatalf("model score threshold = %v", resolved.ConfidenceThreshold)
 	}
-	archive := settings.ResolveArchiveClassifierConfig(req.Context(), d)
-	if archive.Enabled || archive.ReviewThreshold != 0.6 {
-		t.Fatalf("archive config = %#v", archive)
-	}
 	if _, ok := stored["ciphertext"]; !ok {
 		t.Fatalf("stored key is not a sealed envelope: %#v", stored)
 	}
@@ -212,9 +208,6 @@ func TestSaveLLMSettings_SealsKeyAndActivatesLive(t *testing.T) {
 	}
 	if !status.HasAPIKey || !status.Enabled || !status.Active {
 		t.Fatalf("unexpected masked status: %#v", status)
-	}
-	if status.ArchiveEnabled || status.ArchiveReview != 0.6 {
-		t.Fatalf("archive status = %#v", status)
 	}
 
 	clearBody := `{"endpoint_url":"http://127.0.0.1:11434/v1","model":"qwen2.5:7b","clear_api_key":true}`
@@ -355,7 +348,7 @@ func TestSaveLLMSettingsPreservesPendingDates(t *testing.T) {
 	}
 }
 
-func TestApplicationModeIsIndependentAndNeverAcceptsPendingDates(t *testing.T) {
+func TestArchiveMatchingSettingsAreIndependentAndNeverAcceptPendingDates(t *testing.T) {
 	s := newChatTestServer(t)
 	ctx := context.Background()
 	seedChatDoc(t, s, 17, 1, "Boarding pass", "Date 2026-08-06", "", false)
@@ -369,14 +362,14 @@ func TestApplicationModeIsIndependentAndNeverAcceptsPendingDates(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.LLMReloader = func(context.Context) error {
-		t.Fatal("application-mode save reloaded the provider")
+		t.Fatal("archive matching save reloaded the provider")
 		return nil
 	}
 	patch := func(body string, actor *pluginapi.Principal) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPatch, "/api/admin/settings/llm", strings.NewReader(body)).
+		req := httptest.NewRequest(http.MethodPatch, "/api/admin/settings/archive-matching", strings.NewReader(body)).
 			WithContext(auth.WithPrincipal(ctx, actor))
 		rec := httptest.NewRecorder()
-		s.PatchLLMSettings(rec, req)
+		s.PatchArchiveMatchingSettings(rec, req)
 		return rec
 	}
 	member := &pluginapi.Principal{Kind: "user", UserID: 2, Role: "member"}
@@ -384,25 +377,32 @@ func TestApplicationModeIsIndependentAndNeverAcceptsPendingDates(t *testing.T) {
 		t.Fatalf("member changed application mode: %d %s", rec.Code, rec.Body.String())
 	}
 	for _, body := range []string{`{}`, `{"auto_apply":null}`, `{"auto_apply":"false"}`,
-		`{"auto_apply":false,"research_context_mode":"focused"}`,
-		`{"auto_apply":false,"research_context_mode":null}`, `{"auto_apply":false,"enabled":true}`} {
+		`{"research_context_mode":"focused"}`, `{"enabled":true}`,
+		`{"archive_auto_threshold":0.6,"archive_review_threshold":0.7}`} {
 		if rec := patch(body, adminPrincipal(1)); rec.Code != http.StatusBadRequest {
-			t.Fatalf("invalid policy patch %s: %d %s", body, rec.Code, rec.Body.String())
+			t.Fatalf("invalid archive patch %s: %d %s", body, rec.Code, rec.Body.String())
 		}
 	}
 	for _, enabled := range []bool{false, true} {
 		body := fmt.Sprintf(`{"auto_apply":%t}`, enabled)
 		if rec := patch(body, adminPrincipal(1)); rec.Code != http.StatusOK {
-			t.Fatalf("policy patch failed: %d %s", rec.Code, rec.Body.String())
+			t.Fatalf("archive patch failed: %d %s", rec.Code, rec.Body.String())
 		}
-		status, err := s.loadLLMSettingsStatus(ctx)
+		archiveStatus, err := s.loadArchiveMatchingSettings(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if status.AutoApply != enabled || status.Enabled || status.EndpointURL != "https://models.example.test/v1" ||
-			status.Model != "saved-model" || !status.EgressAck || status.ArchiveAuto != 0.85 ||
-			status.ResearchContextMode != "detailed" {
-			t.Fatalf("policy patch changed unrelated state: %+v", status)
+		if archiveStatus.AutoApply != enabled || archiveStatus.ArchiveAuto != 0.85 {
+			t.Fatalf("archive patch changed unrelated matching state: %+v", archiveStatus)
+		}
+		modelStatus, err := s.loadLLMSettingsStatus(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if modelStatus.Enabled || modelStatus.EndpointURL != "https://models.example.test/v1" ||
+			modelStatus.Model != "saved-model" || !modelStatus.EgressAck ||
+			modelStatus.ResearchContextMode != "detailed" {
+			t.Fatalf("archive patch changed model state: %+v", modelStatus)
 		}
 		var statusDate string
 		var reviewed sql.NullInt64
@@ -558,16 +558,16 @@ func TestSaveLLMSettings_RejectsConfidenceOutsideWebBounds(t *testing.T) {
 	}
 }
 
-func TestSaveLLMSettingsRejectsInvalidArchiveThresholds(t *testing.T) {
+func TestPatchArchiveMatchingRejectsInvalidThresholds(t *testing.T) {
 	d := openTestDB(t)
 	s := &Server{Actions: testActions(t), DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	body := `{"enabled":false,"archive_review_threshold":0.95}`
-	req := httptest.NewRequest(http.MethodPost, "/api/admin/settings/llm", strings.NewReader(body))
+	body := `{"archive_review_threshold":0.95}`
+	req := httptest.NewRequest(http.MethodPatch, "/api/admin/settings/archive-matching", strings.NewReader(body))
 	req = req.WithContext(auth.WithPrincipal(req.Context(), &pluginapi.Principal{
 		Kind: "user", UserID: 1, Role: "admin",
 	}))
 	rec := httptest.NewRecorder()
-	s.SaveLLMSettings(rec, req)
+	s.PatchArchiveMatchingSettings(rec, req)
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "bad_archive_thresholds") {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -576,11 +576,14 @@ func TestSaveLLMSettingsRejectsInvalidArchiveThresholds(t *testing.T) {
 func TestLegacyReviewCeilingDoesNotBlockUnrelatedModelSave(t *testing.T) {
 	d := openTestDB(t)
 	ctx := context.Background()
-	if err := settings.Set(ctx, d, settings.KeyArchiveReview, 0.9); err != nil {
+	if err := settings.SetMany(ctx, d, map[string]any{
+		settings.KeyArchiveReview: 0.9,
+		settings.KeyArchiveAuto:   0.95,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	s := &Server{Actions: testActions(t), DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	req := httptest.NewRequest(http.MethodPost, "/api/admin/settings/llm", strings.NewReader(`{"enabled":false,"archive_enabled":true}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/settings/llm", strings.NewReader(`{"enabled":false}`))
 	req = req.WithContext(auth.WithPrincipal(req.Context(), &pluginapi.Principal{
 		Kind: "user", UserID: 1, Role: "admin",
 	}))
@@ -596,8 +599,8 @@ func TestLegacyReviewCeilingDoesNotBlockUnrelatedModelSave(t *testing.T) {
 	if err := settings.Get(ctx, d, settings.KeyArchiveAuto, &automatic); err != nil {
 		t.Fatal(err)
 	}
-	if review != 0.9 || automatic <= review || automatic > 0.95 {
-		t.Fatalf("legacy review threshold not preserved with valid automatic range: review=%v automatic=%v", review, automatic)
+	if review != 0.9 || automatic != 0.95 {
+		t.Fatalf("model save changed archive thresholds: review=%v automatic=%v", review, automatic)
 	}
 }
 
@@ -897,12 +900,12 @@ func TestPatchArchiveMatchingDoesNotTouchSubscription(t *testing.T) {
 		LLMReloader: func(context.Context) error { t.Fatal("matching save reloaded inference"); return nil },
 	}
 	patch := func(body string, principal *pluginapi.Principal) *httptest.ResponseRecorder {
-		r := httptest.NewRequest(http.MethodPatch, "/api/admin/settings/llm", strings.NewReader(body))
+		r := httptest.NewRequest(http.MethodPatch, "/api/admin/settings/archive-matching", strings.NewReader(body))
 		if principal != nil {
 			r = r.WithContext(auth.WithPrincipal(ctx, principal))
 		}
 		w := httptest.NewRecorder()
-		s.PatchLLMSettings(w, r)
+		s.PatchArchiveMatchingSettings(w, r)
 		return w
 	}
 	body := `{"archive_enabled":false,"archive_review_threshold":0.6,"archive_auto_threshold":0.85}`
@@ -915,7 +918,7 @@ func TestPatchArchiveMatchingDoesNotTouchSubscription(t *testing.T) {
 	for _, invalid := range []string{
 		`{"archive_enabled":null}`, `{"archive_enabled":"false"}`, `{"archive_review_threshold":0.95}`,
 		`{"archive_auto_threshold":0.5}`, `{"archive_review_threshold":0.9,"archive_auto_threshold":0.9}`,
-		`{"archive_enabled":false,"auto_apply":false}`, `{"archive_enabled":false,"subscription_provider":"openai_chatgpt"}`,
+		`{"archive_enabled":false,"subscription_provider":"openai_chatgpt"}`,
 		`{"archive_enabled":false,"subscription_model":"new-model","subscription_provider":"openai_chatgpt"}`,
 		`{"archive_enabled":false,"endpoint_url":"http://localhost/v1"}`,
 	} {

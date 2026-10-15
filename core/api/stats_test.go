@@ -249,3 +249,20 @@ func TestStats_PendingApprovalsMatchesActionableInbox(t *testing.T) {
 		t.Fatalf("admin stats: status=%d pending=%d, want 200/3", code, admin.PendingApprovals)
 	}
 }
+
+func TestStatsHidesDisabledModelDeadJobs(t *testing.T) {
+	s := newStatsServer(t)
+	s.setDeploymentFeatures(DeploymentFeatures{})
+	if _, err := s.DB.Write.ExecContext(context.Background(), `
+		INSERT INTO jobs(system_id, kind, state, attempts, next_run_at, created_at, updated_at)
+		VALUES
+			(1, 'post-classify', 'dead', 0, 0, 1, 1),
+			(1, 'post-ingest', 'dead', 0, 0, 1, 1)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	code, got := doStats(t, s, adminPrincipal(1))
+	if code != 200 || got.DeadJobs != 1 {
+		t.Fatalf("status=%d dead_jobs=%d", code, got.DeadJobs)
+	}
+}

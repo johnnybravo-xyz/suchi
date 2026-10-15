@@ -36,7 +36,8 @@ func TestSubscriptionEgressLog(t *testing.T) {
 	subscriptions := llmclassifier.NewSubscriptions(d, nil)
 	for _, enabled := range []bool{true, false} {
 		endpoint := resolveLLMEgressEndpoint(settings.LLMConfig{SubscriptionProvider: llmclassifier.OpenAIChatGPT}, enabled, subscriptions)
-		inventory, err := diagnostics.EnumerateEgress(ctx, d, &config.Config{}, endpoint)
+		inventory, err := diagnostics.EnumerateEgress(ctx, d, &config.Config{},
+			config.DeploymentPolicy{LLMConnections: true}, endpoint)
 		if err != nil {
 			t.Fatal(err)
 		}

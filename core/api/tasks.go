@@ -325,6 +325,9 @@ func (s *Server) mutateDeadJob(r *http.Request, id int64, dismiss bool) (deadJob
 // did not ask for or cannot see.
 func (s *Server) taskCounts(r *http.Request, filters taskFilters, visibility string, visibilityArgs []any) (map[string]int, error) {
 	from, where, args := taskQuery(filters, visibility, visibilityArgs, true)
+	if !s.deploymentFeatures().LLMConnections {
+		where += " AND j.kind != 'post-classify'"
+	}
 	rows, err := s.DB.Read.QueryContext(r.Context(),
 		"SELECT j.state, COUNT(*) "+from+where+" GROUP BY j.state", args...)
 	if err != nil {
@@ -355,6 +358,9 @@ func emptyTaskCounts() map[string]int {
 // want completed jobs pass ?state=done explicitly.
 func (s *Server) taskRows(r *http.Request, filters taskFilters, visibility string, visibilityArgs []any) ([]Task, error) {
 	from, where, args := taskQuery(filters, visibility, visibilityArgs, true)
+	if !s.deploymentFeatures().LLMConnections {
+		where += " AND j.kind != 'post-classify'"
+	}
 	args = append(args, filters.Limit)
 
 	q := `
@@ -450,6 +456,11 @@ func proposalEligibilityKey(vars map[string]any) (string, error) {
 }
 
 func (s *Server) proposalStillNeeded(ctx context.Context, vars map[string]any, cache proposalEligibilityCache) (bool, error) {
+	if !s.deploymentFeatures().LLMConnections {
+		if kind, _ := vars["kind"].(string); kind == "llm" {
+			return false, nil
+		}
+	}
 	key, err := proposalEligibilityKey(vars)
 	if err != nil {
 		return false, err

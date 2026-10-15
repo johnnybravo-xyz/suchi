@@ -51,7 +51,7 @@ func TestMobilePairingAssembledGuards(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var logs bytes.Buffer
 			log := slog.New(slog.NewJSONHandler(&logs, nil))
-			s := &api.Server{DB: d, Log: log}
+			s := &api.Server{DB: d, Log: log, Features: api.DeploymentFeatures{MobilePairing: true}}
 			mux := http.NewServeMux()
 			s.Register(mux)
 			h := buildHTTPHandler(mux, &config.Config{BodyLimit: 1024}, &auth.Chain{}, "", nil, httpx.NewMetrics(), log)
@@ -117,7 +117,10 @@ func TestMobilePairingRegistersConnectedApps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &api.Server{DB: d, Log: testLogger(), PublicURL: "https://archive.example", TokenIssuer: local.IssueAPIToken}
+	s := &api.Server{
+		DB: d, Log: testLogger(), PublicURL: "https://archive.example", TokenIssuer: local.IssueAPIToken,
+		Features: api.DeploymentFeatures{MobilePairing: true},
+	}
 	mux := http.NewServeMux()
 	s.Register(mux)
 	handler := buildHTTPHandler(mux, &config.Config{BodyLimit: 1024}, &auth.Chain{}, "", nil, httpx.NewMetrics(), testLogger())

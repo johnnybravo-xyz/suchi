@@ -37,7 +37,7 @@ func TestAutomationSchema_Anonymous(t *testing.T) {
 }
 
 func TestAutomationSchema_HasEveryTriggerCode(t *testing.T) {
-	s := &Server{Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
+	s := &Server{Log: slog.New(slog.NewTextHandler(os.Stderr, nil)), Features: allDeploymentFeatures()}
 	rec := httptest.NewRecorder()
 	ctx := auth.WithPrincipal(context.Background(),
 		&pluginapi.Principal{Kind: "user", UserID: 1, Role: "member"})
@@ -67,7 +67,7 @@ func TestAutomationSchema_HasEveryTriggerCode(t *testing.T) {
 }
 
 func TestAutomationSchema_DescribesBoundedAskBranch(t *testing.T) {
-	s := &Server{Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
+	s := &Server{Log: slog.New(slog.NewTextHandler(os.Stderr, nil)), Features: allDeploymentFeatures()}
 	rec := httptest.NewRecorder()
 	ctx := auth.WithPrincipal(context.Background(),
 		&pluginapi.Principal{Kind: "user", UserID: 1, Role: "member"})
@@ -86,7 +86,7 @@ func TestAutomationSchema_DescribesBoundedAskBranch(t *testing.T) {
 }
 
 func TestAutomationSchema_HasEveryActionKind(t *testing.T) {
-	s := &Server{Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
+	s := &Server{Log: slog.New(slog.NewTextHandler(os.Stderr, nil)), Features: allDeploymentFeatures()}
 	rec := httptest.NewRecorder()
 	ctx := auth.WithPrincipal(context.Background(),
 		&pluginapi.Principal{Kind: "user", UserID: 1, Role: "member"})

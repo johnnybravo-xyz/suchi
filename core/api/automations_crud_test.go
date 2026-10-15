@@ -50,3 +50,53 @@ func TestCreateAutomationAcceptsJSONNumberActionIDs(t *testing.T) {
 		})
 	}
 }
+
+func TestDisabledModelAutomationsStayDormant(t *testing.T) {
+	s := newBulkServer(t)
+	seedUser(t, s.DB, 1)
+	result, err := s.DB.Write.ExecContext(context.Background(), `
+		INSERT INTO automations(system_id, name, order_index, enabled, created_at, updated_at)
+		VALUES (1, 'Dormant ask', 0, 1, 0, 0)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Write.ExecContext(context.Background(), `
+		INSERT INTO automation_asks(automation_id, question, answer_type, choices)
+		VALUES (?, 'Is this relevant?', 'yes_no', '[]')`, id); err != nil {
+		t.Fatal(err)
+	}
+	s.setDeploymentFeatures(DeploymentFeatures{})
+	mux := http.NewServeMux()
+	s.Register(mux)
+	request := func(method, path, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, bytes.NewBufferString(body))
+		req = req.WithContext(auth.WithPrincipal(req.Context(), adminPrincipal(1)))
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		return rec
+	}
+
+	if rec := request(http.MethodGet, "/api/automations/", ""); rec.Code != http.StatusOK ||
+		bytes.Contains(rec.Body.Bytes(), []byte("Dormant ask")) {
+		t.Fatalf("list exposed dormant ask: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec := request(http.MethodGet, fmt.Sprintf("/api/automations/%d", id), ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("get status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec := request(http.MethodPatch, fmt.Sprintf("/api/automations/%d", id), `{"name":"changed"}`); rec.Code != http.StatusConflict {
+		t.Fatalf("patch status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec := request(http.MethodDelete, fmt.Sprintf("/api/automations/%d", id), ""); rec.Code != http.StatusConflict {
+		t.Fatalf("delete status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec := request(http.MethodPost, "/api/automations/", `{
+		"name":"new ask","enabled":true,"triggers":[{"type":2}],
+		"ask":{"question":"Relevant?","answer":{"type":"yes_no"}},"actions":[]
+	}`); rec.Code != http.StatusConflict {
+		t.Fatalf("create status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}

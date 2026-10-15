@@ -115,10 +115,14 @@ func Run(ctx context.Context, opts Options) error {
 	if err := rescan.ValidateProposalVersions(opts.PipelineProposalVersions, pipelineVersions); err != nil {
 		return fmt.Errorf("app.Run: pipeline proposal policy: %w", err)
 	}
+	proposalVersions := opts.PipelineProposalVersions
+	if !policy.LLMConnections {
+		proposalVersions.LLM = 0
+	}
 	log.Info("main.rescan.policy",
-		"ocr_version", opts.PipelineProposalVersions.OCR,
-		"llm_version", opts.PipelineProposalVersions.LLM,
-		"content_version", opts.PipelineProposalVersions.Content,
+		"ocr_version", proposalVersions.OCR,
+		"llm_version", proposalVersions.LLM,
+		"content_version", proposalVersions.Content,
 	)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -325,46 +329,54 @@ func Run(ctx context.Context, opts Options) error {
 		return fmt.Errorf("main.decrypt_key.load: %w", err)
 	}
 
-	// Stored LLM settings fill fields not pinned by file or environment.
-	envLLM := settings.LLMConfig{
-		EndpointURL:         cfg.LLMEndpointURL,
-		Model:               cfg.LLMModel,
-		APIKey:              cfg.LLMAPIKey,
-		EgressAck:           cfg.LLMEgressAck,
-		ConfidenceThreshold: cfg.LLMConfidenceThreshold,
-	}
-	resolvedLLM, err := settings.ResolveLLMConfig(ctx, d, envLLM, decryptKey)
-	if err != nil {
-		log.Error("main.llm.settings", "err", err.Error())
-		return fmt.Errorf("main.llm.settings: %w", err)
-	}
-	// Register a disabled shell even when no endpoint is configured. Its stable
-	// handler lets the setup API activate the classifier without a restart.
-	subscriptions := llmclassifier.NewSubscriptions(d, decryptKey)
-	subscriptionConnected := func(ctx context.Context, id string) bool {
-		provider, ok := subscriptions.Provider(id)
-		return ok && provider.Connected(ctx)
-	}
 	llm := llmclassifier.NewDisabled(log)
-	if !resolvedLLM.Disabled && (resolvedLLM.SubscriptionProvider == "" || subscriptionConnected(ctx, resolvedLLM.SubscriptionProvider)) {
-		configured, err := llmclassifier.New(llmclassifier.Config{
-			Subscriptions:        subscriptions,
-			SubscriptionProvider: resolvedLLM.SubscriptionProvider,
-			EndpointURL:          resolvedLLM.EndpointURL,
-			Model:                resolvedLLM.Model,
-			APIKey:               resolvedLLM.APIKey,
-			EgressAck:            resolvedLLM.EgressAck,
-			ConfidenceThreshold:  resolvedLLM.ConfidenceThreshold,
-		}, log)
-		if err != nil {
-			log.Error("main.llm.new", "err", err.Error())
-			return fmt.Errorf("main.llm.new: %w", err)
+	var (
+		envLLM                settings.LLMConfig
+		resolvedLLM           settings.LLMConfig
+		subscriptions         *llmclassifier.Subscriptions
+		subscriptionConnected func(context.Context, string) bool
+	)
+	if policy.LLMConnections {
+		// Stored LLM settings fill fields not pinned by file or environment.
+		envLLM = settings.LLMConfig{
+			EndpointURL:         cfg.LLMEndpointURL,
+			Model:               cfg.LLMModel,
+			APIKey:              cfg.LLMAPIKey,
+			EgressAck:           cfg.LLMEgressAck,
+			ConfidenceThreshold: cfg.LLMConfidenceThreshold,
 		}
-		if configured != nil {
-			llm = configured
+		resolvedLLM, err = settings.ResolveLLMConfig(ctx, d, envLLM, decryptKey)
+		if err != nil {
+			log.Error("main.llm.settings", "err", err.Error())
+			return fmt.Errorf("main.llm.settings: %w", err)
+		}
+		subscriptions = llmclassifier.NewSubscriptions(d, decryptKey)
+		subscriptionConnected = func(ctx context.Context, id string) bool {
+			provider, ok := subscriptions.Provider(id)
+			return ok && provider.Connected(ctx)
+		}
+		if !resolvedLLM.Disabled && (resolvedLLM.SubscriptionProvider == "" || subscriptionConnected(ctx, resolvedLLM.SubscriptionProvider)) {
+			configured, err := llmclassifier.New(llmclassifier.Config{
+				Subscriptions:        subscriptions,
+				SubscriptionProvider: resolvedLLM.SubscriptionProvider,
+				EndpointURL:          resolvedLLM.EndpointURL,
+				Model:                resolvedLLM.Model,
+				APIKey:               resolvedLLM.APIKey,
+				EgressAck:            resolvedLLM.EgressAck,
+				ConfidenceThreshold:  resolvedLLM.ConfidenceThreshold,
+			}, log)
+			if err != nil {
+				log.Error("main.llm.new", "err", err.Error())
+				return fmt.Errorf("main.llm.new: %w", err)
+			}
+			if configured != nil {
+				llm = configured
+			}
+		} else {
+			log.Info("llm-classifier.disabled", "reason", "disabled in settings")
 		}
 	} else {
-		log.Info("llm-classifier.disabled", "reason", "disabled in settings")
+		log.Info("llm-classifier.disabled", "reason", "disabled by deployment policy")
 	}
 	runtimePrefs := settings.ResolveRuntimePreferences(ctx, d, settings.RuntimePreferences{
 		BackupInterval: cfg.BackupInterval,
@@ -373,9 +385,11 @@ func Run(ctx context.Context, opts Options) error {
 	var liveOCRLanguages atomic.Value
 	liveOCRLanguages.Store(append([]string(nil), runtimePrefs.OCRLanguages...))
 
-	// Include the resolved settings-backed LLM endpoint in the egress log.
-	llmEgressEndpoint := resolveLLMEgressEndpoint(resolvedLLM, llm.Enabled(), subscriptions)
-	egress, egressErr := diagnostics.EnumerateEgress(ctx, d, cfg, llmEgressEndpoint)
+	llmEgressEndpoint := ""
+	if policy.LLMConnections {
+		llmEgressEndpoint = resolveLLMEgressEndpoint(resolvedLLM, llm.Enabled(), subscriptions)
+	}
+	egress, egressErr := diagnostics.EnumerateEgress(ctx, d, cfg, policy, llmEgressEndpoint)
 	if egressErr != nil {
 		log.Warn("main.egress.enumerate_failed", "err", egressErr.Error())
 	}
@@ -428,7 +442,7 @@ func Run(ctx context.Context, opts Options) error {
 	if err := apvEngine.EnsureSweepScheduled(ctx); err != nil {
 		log.Warn("approvals.sweep.schedule_failed", "err", err.Error())
 	}
-	apvEngine.RegisterHandler(rescan.NewHandler(d))
+	apvEngine.RegisterHandler(rescan.NewHandler(d, policy.LLMConnections))
 	apvEngine.SetAssigneeResolver(approvals.AdminAssigneeResolver{Engine: apvEngine, Log: log})
 	for _, systemID := range systemIDs {
 		if err := apvEngine.EnsureDef(ctx, systemID, approvals.DocumentChangeSlug, approvals.DocumentChangeSpec(), nil); err != nil {
@@ -436,7 +450,7 @@ func Run(ctx context.Context, opts Options) error {
 		}
 		if err := apvEngine.EnsureDef(ctx, systemID, rescan.ProposalSlug, rescan.ProposalSpec(), nil); err != nil {
 			log.Warn("main.rescan.seed", "system_id", systemID, "err", err)
-		} else if err := rescan.EnsureProposals(ctx, d, systemID, apvEngine, opts.PipelineProposalVersions); err != nil {
+		} else if err := rescan.EnsureProposals(ctx, d, systemID, apvEngine, proposalVersions); err != nil {
 			log.Warn("main.rescan.detect", "system_id", systemID, "err", err)
 		}
 	}
@@ -492,30 +506,36 @@ func Run(ctx context.Context, opts Options) error {
 	}
 
 	// The mail supervisor runs one worker per enabled database account.
-	var msalScopes []string
-	if s := strings.TrimSpace(cfg.IngestIMAPOAuthScopesMicrosoft); s != "" {
-		for _, p := range strings.Split(s, ",") {
-			if v := strings.TrimSpace(p); v != "" {
-				msalScopes = append(msalScopes, v)
+	var (
+		msalManager *oauth.Manager
+		sup         *emailwatch.Supervisor
+	)
+	if policy.EmailIngestion {
+		var msalScopes []string
+		if scopes := strings.TrimSpace(cfg.IngestIMAPOAuthScopesMicrosoft); scopes != "" {
+			for _, part := range strings.Split(scopes, ",") {
+				if value := strings.TrimSpace(part); value != "" {
+					msalScopes = append(msalScopes, value)
+				}
 			}
 		}
+		activeOAuthID := strings.TrimSpace(cfg.IngestIMAPOAuthClientIDMicrosoft)
+		if !oauth.UsableClientID(activeOAuthID) {
+			activeOAuthID = oauth.DefaultClientID
+		}
+		msalManager, err = oauth.NewManager(activeOAuthID, msalScopes)
+		if err != nil {
+			log.Error("emailwatch.oauth.init_failed", "err", err)
+			return fmt.Errorf("emailwatch.oauth.init_failed: %w", err)
+		}
+		if !msalManager.Ready() {
+			log.Warn("emailwatch.oauth.disabled",
+				"reason", "project Microsoft OAuth registration has not been planted")
+		}
+		sup = emailwatch.NewSupervisor(emailwatch.Config{
+			MaxAttachBytes: 0, // 0 = DefaultMaxAttach
+		}, d, cas, disp, decryptKey, msalManager, log)
 	}
-	activeOAuthID := strings.TrimSpace(cfg.IngestIMAPOAuthClientIDMicrosoft)
-	if !oauth.UsableClientID(activeOAuthID) {
-		activeOAuthID = oauth.DefaultClientID
-	}
-	msalManager, err := oauth.NewManager(activeOAuthID, msalScopes)
-	if err != nil {
-		log.Error("emailwatch.oauth.init_failed", "err", err)
-		return fmt.Errorf("emailwatch.oauth.init_failed: %w", err)
-	}
-	if !msalManager.Ready() {
-		log.Warn("emailwatch.oauth.disabled",
-			"reason", "project Microsoft OAuth registration has not been planted")
-	}
-	sup := emailwatch.NewSupervisor(emailwatch.Config{
-		MaxAttachBytes: 0, // 0 = DefaultMaxAttach
-	}, d, cas, disp, decryptKey, msalManager, log)
 
 	m := httpx.NewMetrics()
 	catalogs, err := i18n.NewRegistry(log)
@@ -553,30 +573,32 @@ func Run(ctx context.Context, opts Options) error {
 		return la.PrepareSession(r)
 	}
 	apiSrv.EmailChangeModeFor = emailChangeModeFor
-	apiSrv.LLMAEAD = decryptKey
-	apiSrv.SubscriptionProvider = func(id string) (settings.SubscriptionProvider, bool) {
-		provider, ok := subscriptions.Provider(id)
-		if !ok {
-			return nil, false
-		}
-		return subscriptionSettingsProvider{SubscriptionProvider: provider, disconnect: func(rctx context.Context) error {
-			if err := provider.Disconnect(rctx); err != nil {
-				return err
+	if policy.LLMConnections {
+		apiSrv.LLMAEAD = decryptKey
+		apiSrv.SubscriptionProvider = func(id string) (settings.SubscriptionProvider, bool) {
+			provider, ok := subscriptions.Provider(id)
+			if !ok {
+				return nil, false
 			}
-			if llm.Config().SubscriptionProvider == id {
-				llm.Disable()
-			}
-			return nil
-		}}, true
-	}
-	apiSrv.ChatEnabled = llm.Enabled
-	apiSrv.ChatRuntimeInfo = llm.RuntimeInfo
-	apiSrv.ChatCompletion = func(rctx context.Context, system string, messages []api.ChatCompletionMessage, maxTokens int) (string, error) {
-		pluginMessages := make([]llmclassifier.CompletionMessage, len(messages))
-		for i, message := range messages {
-			pluginMessages[i] = llmclassifier.CompletionMessage{Role: message.Role, Content: message.Content}
+			return subscriptionSettingsProvider{SubscriptionProvider: provider, disconnect: func(rctx context.Context) error {
+				if err := provider.Disconnect(rctx); err != nil {
+					return err
+				}
+				if llm.Config().SubscriptionProvider == id {
+					llm.Disable()
+				}
+				return nil
+			}}, true
 		}
-		return llm.CompleteJSON(rctx, system, pluginMessages, maxTokens)
+		apiSrv.ChatEnabled = llm.Enabled
+		apiSrv.ChatRuntimeInfo = llm.RuntimeInfo
+		apiSrv.ChatCompletion = func(rctx context.Context, system string, messages []api.ChatCompletionMessage, maxTokens int) (string, error) {
+			pluginMessages := make([]llmclassifier.CompletionMessage, len(messages))
+			for i, message := range messages {
+				pluginMessages[i] = llmclassifier.CompletionMessage{Role: message.Role, Content: message.Content}
+			}
+			return llm.CompleteJSON(rctx, system, pluginMessages, maxTokens)
+		}
 	}
 	apiSrv.RuntimePreferencesReader = func(rctx context.Context) (api.RuntimePreferencesStatus, error) {
 		fresh := settings.ResolveRuntimePreferences(rctx, d, settings.RuntimePreferences{
@@ -615,111 +637,117 @@ func Run(ctx context.Context, opts Options) error {
 		}, nil
 	}
 	apiSrv.FSWatchReloader = reloadFSWatch
-	apiSrv.LLMStatusReader = func(rctx context.Context) (api.LLMSettingsStatus, error) {
-		fresh, err := settings.ResolveLLMConfig(rctx, d, envLLM, decryptKey)
-		if err != nil {
-			return api.LLMSettingsStatus{}, err
-		}
-		enabled := !fresh.Disabled && (fresh.EndpointURL != "" || fresh.SubscriptionProvider != "")
-		runtimeCfg := llm.Config()
-		active := enabled && llm.Enabled() &&
-			runtimeCfg.SubscriptionProvider == fresh.SubscriptionProvider &&
-			(fresh.SubscriptionProvider != "" || runtimeCfg.EndpointURL == fresh.EndpointURL) &&
-			runtimeCfg.Model == fresh.Model &&
-			(fresh.SubscriptionProvider != "" || runtimeCfg.APIKey == fresh.APIKey) &&
-			runtimeCfg.EgressAck == fresh.EgressAck &&
-			runtimeCfg.ConfidenceThreshold == fresh.ConfidenceThreshold
-		selectedProvider := fresh.SubscriptionProvider
-		if selectedProvider == "" {
-			selectedProvider = llmclassifier.OpenAIChatGPT
-		}
-		connected := subscriptionConnected(rctx, selectedProvider)
-		mode := "local"
-		if fresh.SubscriptionProvider != "" {
-			mode = "subscription"
-			if !connected {
-				active = false
+	if policy.LLMConnections {
+		apiSrv.LLMStatusReader = func(rctx context.Context) (api.LLMSettingsStatus, error) {
+			fresh, err := settings.ResolveLLMConfig(rctx, d, envLLM, decryptKey)
+			if err != nil {
+				return api.LLMSettingsStatus{}, err
 			}
-		} else if host, err := url.Parse(fresh.EndpointURL); err == nil && host.Host != "" && !netutil.IsLocalHost(host.Host) {
-			mode = "hosted"
+			enabled := !fresh.Disabled && (fresh.EndpointURL != "" || fresh.SubscriptionProvider != "")
+			runtimeCfg := llm.Config()
+			active := enabled && llm.Enabled() &&
+				runtimeCfg.SubscriptionProvider == fresh.SubscriptionProvider &&
+				(fresh.SubscriptionProvider != "" || runtimeCfg.EndpointURL == fresh.EndpointURL) &&
+				runtimeCfg.Model == fresh.Model &&
+				(fresh.SubscriptionProvider != "" || runtimeCfg.APIKey == fresh.APIKey) &&
+				runtimeCfg.EgressAck == fresh.EgressAck &&
+				runtimeCfg.ConfidenceThreshold == fresh.ConfidenceThreshold
+			selectedProvider := fresh.SubscriptionProvider
+			if selectedProvider == "" {
+				selectedProvider = llmclassifier.OpenAIChatGPT
+			}
+			connected := subscriptionConnected(rctx, selectedProvider)
+			mode := "local"
+			if fresh.SubscriptionProvider != "" {
+				mode = "subscription"
+				if !connected {
+					active = false
+				}
+			} else if host, err := url.Parse(fresh.EndpointURL); err == nil && host.Host != "" && !netutil.IsLocalHost(host.Host) {
+				mode = "hosted"
+			}
+			return api.LLMSettingsStatus{
+				Enabled:             enabled,
+				Active:              active,
+				EndpointURL:         fresh.EndpointURL,
+				Model:               fresh.Model,
+				EgressAck:           fresh.EgressAck,
+				HasAPIKey:           fresh.APIKey != "",
+				SubscriptionStatus:  settings.SubscriptionStatus{Provider: selectedProvider, Connected: connected},
+				Mode:                mode,
+				ConfidenceThreshold: fresh.ConfidenceThreshold,
+			}, nil
 		}
-		return api.LLMSettingsStatus{
-			Enabled:             enabled,
-			Active:              active,
-			EndpointURL:         fresh.EndpointURL,
-			Model:               fresh.Model,
-			EgressAck:           fresh.EgressAck,
-			HasAPIKey:           fresh.APIKey != "",
-			SubscriptionStatus:  settings.SubscriptionStatus{Provider: selectedProvider, Connected: connected},
-			Mode:                mode,
-			ConfidenceThreshold: fresh.ConfidenceThreshold,
-		}, nil
-	}
-	apiSrv.LLMTester = func(rctx context.Context, candidate api.LLMTestConfig) (api.LLMTestResult, error) {
-		fresh, err := settings.ResolveLLMConfig(rctx, d, envLLM, decryptKey)
-		if err != nil {
-			return api.LLMTestResult{}, err
+		apiSrv.LLMTester = func(rctx context.Context, candidate api.LLMTestConfig) (api.LLMTestResult, error) {
+			fresh, err := settings.ResolveLLMConfig(rctx, d, envLLM, decryptKey)
+			if err != nil {
+				return api.LLMTestResult{}, err
+			}
+			apiKey := candidate.APIKey
+			if apiKey == "" && !candidate.ClearAPIKey {
+				apiKey = fresh.APIKey
+			}
+			probe, err := llmclassifier.New(llmclassifier.Config{
+				Subscriptions:        subscriptions,
+				SubscriptionProvider: candidate.SubscriptionProvider,
+				EndpointURL:          candidate.EndpointURL,
+				Model:                candidate.Model,
+				APIKey:               apiKey,
+				EgressAck:            candidate.EgressAck,
+				ConfidenceThreshold:  candidate.ConfidenceThreshold,
+			}, log)
+			if err != nil {
+				return api.LLMTestResult{}, err
+			}
+			if probe == nil {
+				return api.LLMTestResult{}, fmt.Errorf("classifier did not enable")
+			}
+			started := time.Now()
+			result, err := probe.Classify(rctx, "Suchi connection test",
+				"Connection test document. No user document content is included.", nil, nil,
+				llmclassifier.ClassificationVocabulary{}, nil)
+			if err != nil {
+				return api.LLMTestResult{}, err
+			}
+			return api.LLMTestResult{
+				Title: result.Title, Correspondent: result.Correspondent, Tags: result.Tags,
+				JDCategory: result.JDCategory, Confidence: result.Confidence,
+				Language: result.Language, ElapsedMS: time.Since(started).Milliseconds(),
+			}, nil
 		}
-		apiKey := candidate.APIKey
-		if apiKey == "" && !candidate.ClearAPIKey {
-			apiKey = fresh.APIKey
-		}
-		probe, err := llmclassifier.New(llmclassifier.Config{
-			Subscriptions:        subscriptions,
-			SubscriptionProvider: candidate.SubscriptionProvider,
-			EndpointURL:          candidate.EndpointURL,
-			Model:                candidate.Model,
-			APIKey:               apiKey,
-			EgressAck:            candidate.EgressAck,
-			ConfidenceThreshold:  candidate.ConfidenceThreshold,
-		}, log)
-		if err != nil {
-			return api.LLMTestResult{}, err
-		}
-		if probe == nil {
-			return api.LLMTestResult{}, fmt.Errorf("classifier did not enable")
-		}
-		started := time.Now()
-		result, err := probe.Classify(rctx, "Suchi connection test",
-			"Connection test document. No user document content is included.", nil, nil,
-			llmclassifier.ClassificationVocabulary{}, nil)
-		if err != nil {
-			return api.LLMTestResult{}, err
-		}
-		return api.LLMTestResult{
-			Title: result.Title, Correspondent: result.Correspondent, Tags: result.Tags,
-			JDCategory: result.JDCategory, Confidence: result.Confidence,
-			Language: result.Language, ElapsedMS: time.Since(started).Milliseconds(),
-		}, nil
 	}
 	// Keep token issuance behind the auth plugin boundary.
 	apiSrv.TokenIssuer = la.IssueAPIToken
-	apiSrv.LLMReloader = func(rctx context.Context) error {
-		fresh, err := settings.ResolveLLMConfig(rctx, d, envLLM, decryptKey)
-		if err != nil {
-			return err
-		}
-		if fresh.Disabled || (fresh.EndpointURL == "" && fresh.SubscriptionProvider == "") || (fresh.SubscriptionProvider != "" && !subscriptionConnected(rctx, fresh.SubscriptionProvider)) {
-			llm.Disable()
+	if policy.LLMConnections {
+		apiSrv.LLMReloader = func(rctx context.Context) error {
+			fresh, err := settings.ResolveLLMConfig(rctx, d, envLLM, decryptKey)
+			if err != nil {
+				return err
+			}
+			if fresh.Disabled || (fresh.EndpointURL == "" && fresh.SubscriptionProvider == "") || (fresh.SubscriptionProvider != "" && !subscriptionConnected(rctx, fresh.SubscriptionProvider)) {
+				llm.Disable()
+				return nil
+			}
+			if err := llm.SetConfig(llmclassifier.Config{
+				Subscriptions:        subscriptions,
+				SubscriptionProvider: fresh.SubscriptionProvider,
+				EndpointURL:          fresh.EndpointURL,
+				Model:                fresh.Model,
+				APIKey:               fresh.APIKey,
+				EgressAck:            fresh.EgressAck,
+				ConfidenceThreshold:  fresh.ConfidenceThreshold,
+			}); err != nil {
+				return err
+			}
 			return nil
 		}
-		if err := llm.SetConfig(llmclassifier.Config{
-			Subscriptions:        subscriptions,
-			SubscriptionProvider: fresh.SubscriptionProvider,
-			EndpointURL:          fresh.EndpointURL,
-			Model:                fresh.Model,
-			APIKey:               fresh.APIKey,
-			EgressAck:            fresh.EgressAck,
-			ConfidenceThreshold:  fresh.ConfidenceThreshold,
-		}); err != nil {
-			return err
-		}
-		return nil
 	}
-	// Mail-account writes reload the supervisor in place.
-	apiSrv.EmailwatchReload = sup.Reload
-	apiSrv.EmailwatchAEAD = decryptKey
-	apiSrv.EmailwatchMSAL = msalManager
+	// Mail-account writes reload the supervisor in place when enabled.
+	if sup != nil {
+		apiSrv.EmailwatchReload = sup.Reload
+		apiSrv.EmailwatchAEAD = decryptKey
+		apiSrv.EmailwatchMSAL = msalManager
+	}
 	apiSrv.WithJobs(disp).Register(mux)
 	demoRL, err := configureDemo(cfg, d, apiSrv, demoAnon, la.IssueDemoSession, log)
 	if err != nil {
@@ -742,7 +770,7 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	mainHandler := buildHTTPHandler(mux, cfg, authChain, oidcAuthorizationURL, demoRL, m, log)
 	var shareHandler http.Handler
-	if cfg.ShareListenAddr != "" {
+	if policy.ShareLinks && cfg.ShareListenAddr != "" {
 		shareMux := http.NewServeMux()
 		apiSrv.RegisterShareSurface(shareMux, api.ShareSurface{
 			PublicOnly: true,
@@ -780,7 +808,9 @@ func Run(ctx context.Context, opts Options) error {
 		}
 	}
 	defer fsSupervisor.Stop()
-	go sup.Run(ctx)
+	if sup != nil {
+		go sup.Run(ctx)
+	}
 	if cfg.DemoMode {
 		go demo.Loop(ctx, demo.TickerOptions{
 			DB: d, Log: log,

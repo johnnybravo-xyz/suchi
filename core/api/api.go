@@ -47,10 +47,6 @@ type LLMSettingsStatus struct {
 	Mode                string  `json:"mode"`
 	HasAPIKey           bool    `json:"has_api_key"`
 	ConfidenceThreshold float64 `json:"confidence_threshold"`
-	AutoApply           bool    `json:"auto_apply"`
-	ArchiveEnabled      bool    `json:"archive_enabled"`
-	ArchiveAuto         float64 `json:"archive_auto_threshold"`
-	ArchiveReview       float64 `json:"archive_review_threshold"`
 	ResearchContextMode string  `json:"research_context_mode"`
 }
 
@@ -117,26 +113,53 @@ func allDeploymentFeatures() DeploymentFeatures {
 	}
 }
 
+func (s *Server) deploymentFeatures() DeploymentFeatures {
+	if s.featuresConfigured || s.Features != (DeploymentFeatures{}) {
+		return s.Features
+	}
+	return allDeploymentFeatures()
+}
+
+func (s *Server) setDeploymentFeatures(features DeploymentFeatures) {
+	s.Features = features
+	s.featuresConfigured = true
+}
+
+func (s *Server) disabledCapabilities() authz.Set {
+	features := s.deploymentFeatures()
+	disabled := authz.NewSet()
+	if !features.LLMConnections {
+		disabled.Add(authz.CapArchiveChat)
+	}
+	if !features.EmailIngestion {
+		disabled.Add(authz.CapMailboxes)
+	}
+	if !features.ShareLinks {
+		disabled.Add(authz.CapShareLinks)
+	}
+	return disabled
+}
+
 // Server bundles the state every /api handler needs. Constructed once
 // at boot; safe for concurrent use.
 //
 // Jobs is optional — when set, the upload handler nudges the
 // dispatcher after enqueuing post-ingest work. Tests can leave it nil.
 type Server struct {
-	Actions        *automations.Registry
-	Approvals      *approvals.Engine
-	DB             *db.DB
-	CAS            *blob.CAS
-	Catalogs       *i18n.Registry
-	Log            *slog.Logger
-	Jobs           *jobs.Dispatcher
-	trash          *trash.Service
-	PublicURL      string // validated main-listener origin, wired from config at boot
-	SharePublicURL string // validated share-only origin; empty disables public-link creation
-	Features       DeploymentFeatures
-	// Build identity is injected by the executable, not frontend package metadata.
-	BuildVersion  string
-	BuildRevision string
+	Actions            *automations.Registry
+	Approvals          *approvals.Engine
+	DB                 *db.DB
+	CAS                *blob.CAS
+	Catalogs           *i18n.Registry
+	Log                *slog.Logger
+	Jobs               *jobs.Dispatcher
+	trash              *trash.Service
+	PublicURL          string // validated main-listener origin, wired from config at boot
+	SharePublicURL     string // validated share-only origin; empty disables public-link creation
+	Features           DeploymentFeatures
+	featuresConfigured bool
+	BuildVersion       string
+	BuildRevision      string
 	// EmailChangeModeFor is provided by distro/app because deployment mode and
 	// the fixed development identity are composition policy, not API state.
 	EmailChangeModeFor func(*pluginapi.Principal) string
@@ -231,6 +254,7 @@ func New(d *db.DB, cas *blob.CAS, retention *trash.Service, actions *automations
 		deviceOCRMinConfidence: 0.65,
 		Authz:                  authz.ACLAuthorizer{DB: d},
 		Features:               allDeploymentFeatures(),
+		featuresConfigured:     true,
 		trash:                  retention,
 		chatGate:               newChatGate(),
 	}, nil
@@ -262,9 +286,9 @@ func (s *Server) WithDeviceOCRMinConfidence(confidence float64) *Server {
 func (s *Server) Register(mux *http.ServeMux) {
 	// Public compatibility probe. Clients call this before sending credentials.
 	mux.HandleFunc("GET /api/handshake", s.GetHandshake)
-	mux.HandleFunc("POST /api/mobile/pairing", s.CreateMobilePairing)
-	mux.HandleFunc("DELETE /api/mobile/pairing", s.DeleteMobilePairing)
-	mux.HandleFunc("POST /api/mobile/pairing/exchange", s.ExchangeMobilePairing)
+	if s.deploymentFeatures().MobilePairing {
+		s.registerPairingRoutes(mux)
+	}
 
 	// Documents.
 	mux.HandleFunc("POST /api/documents/", s.UploadDocument)
@@ -334,11 +358,11 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// Search + autocomplete over FTS5.
 	mux.HandleFunc("GET /api/search/", s.Search)
 	mux.HandleFunc("GET /api/autocomplete/", s.Autocomplete)
-	mux.HandleFunc("GET /api/chat/status", s.GetChatStatus)
-	mux.HandleFunc("POST /api/chat", s.PostChat)
+	if s.deploymentFeatures().LLMConnections {
+		s.registerModelRoutes(mux)
+	}
 	mux.HandleFunc("GET /api/intelligence/schema", s.GetIntelligenceSchema)
-	mux.HandleFunc("GET /api/intelligence/", s.ListIntelligence)
-	mux.HandleFunc("POST /api/intelligence/extract", s.ExtractIntelligence)
+	mux.HandleFunc("GET /api/intelligence/{$}", s.ListIntelligence)
 	mux.HandleFunc("POST /api/intelligence/resolve", s.ResolveIntelligence)
 
 	// Language facet — distinct languages present in the archive
@@ -357,15 +381,9 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/trash/{id}", s.PurgeTrashDocument)
 	mux.HandleFunc("DELETE /api/trash/", s.EmptyTrash)
 
-	// Share links (creator-facing CRUD).
-	mux.HandleFunc("GET /api/share_links/", s.ListShareLinks)
-	mux.HandleFunc("POST /api/share_links/", s.CreateShareLink)
-	mux.HandleFunc("DELETE /api/share_links/{id}", s.RevokeShareLink)
-
-	// Anonymous recipient routes on the main listener serve both network and
-	// public links. A dedicated listener registers the same surface with
-	// PublicOnly set and a separate origin.
-	s.RegisterShareSurface(mux, ShareSurface{Origin: s.PublicURL})
+	if s.deploymentFeatures().ShareLinks {
+		s.registerShareRoutes(mux)
+	}
 
 	// Document versions (chain of previous_version_id).
 	mux.HandleFunc("GET /api/documents/{id}/versions/", s.ListVersions)
@@ -386,24 +404,16 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/admin/taxonomy/import", s.ImportTaxonomy)
 	mux.HandleFunc("GET /api/admin/taxonomy/export", s.ExportTaxonomy)
 
-	// Email accounts: one row per mailbox the in-process emailwatch
-	// poller pulls from. The supervisor Reload runs after every write
-	// so the running set matches the DB without a restart. Entry gate
-	// is the mailboxes capability — admins see all rows; members see
-	// their own only when granted.
-	mux.HandleFunc("GET /api/email-accounts", s.ListEmailAccounts)
-	mux.HandleFunc("POST /api/email-accounts", s.CreateEmailAccount)
-	mux.HandleFunc("GET /api/email-accounts/{id}", s.GetEmailAccount)
-	mux.HandleFunc("PATCH /api/email-accounts/{id}", s.PatchEmailAccount)
-	mux.HandleFunc("DELETE /api/email-accounts/{id}", s.DeleteEmailAccount)
-	mux.HandleFunc("POST /api/email-accounts/{id}/test", s.TestEmailAccount)
-	mux.HandleFunc("POST /api/email-accounts/{id}/preview", s.PreviewEmailAccount)
-	mux.HandleFunc("POST /api/email-accounts/oauth/start", s.StartEmailAccountOAuth)
-	mux.HandleFunc("POST /api/email-accounts/oauth/complete", s.CompleteEmailAccountOAuth)
-	mux.HandleFunc("POST /api/email-accounts/{id}/oauth/revoke", s.RevokeEmailAccountOAuth)
+	if s.deploymentFeatures().EmailIngestion {
+		s.registerMailRoutes(mux)
+	}
 
-	// Archive configuration surface (admin-only).
+	// Archive configuration has a local/common family and an optional model
+	// family so disabled integrations do not exist on the mux.
 	s.registerArchiveConfiguration(mux)
+	if s.deploymentFeatures().LLMConnections {
+		s.registerModelConfiguration(mux)
+	}
 
 	// Approvals engine surface — routing/sign-off state machines at
 	// /api/approvals/*. Distinct from automations below.
@@ -474,6 +484,38 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/tokens/", s.ListTokens)
 	mux.HandleFunc("POST /api/tokens/", s.CreateToken)
 	mux.HandleFunc("DELETE /api/tokens/{id}", s.DeleteToken)
+}
+
+func (s *Server) registerPairingRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/mobile/pairing", s.CreateMobilePairing)
+	mux.HandleFunc("DELETE /api/mobile/pairing", s.DeleteMobilePairing)
+	mux.HandleFunc("POST /api/mobile/pairing/exchange", s.ExchangeMobilePairing)
+}
+
+func (s *Server) registerModelRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/chat/status", s.GetChatStatus)
+	mux.HandleFunc("POST /api/chat", s.PostChat)
+	mux.HandleFunc("POST /api/intelligence/extract", s.ExtractIntelligence)
+}
+
+func (s *Server) registerMailRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/email-accounts", s.ListEmailAccounts)
+	mux.HandleFunc("POST /api/email-accounts", s.CreateEmailAccount)
+	mux.HandleFunc("GET /api/email-accounts/{id}", s.GetEmailAccount)
+	mux.HandleFunc("PATCH /api/email-accounts/{id}", s.PatchEmailAccount)
+	mux.HandleFunc("DELETE /api/email-accounts/{id}", s.DeleteEmailAccount)
+	mux.HandleFunc("POST /api/email-accounts/{id}/test", s.TestEmailAccount)
+	mux.HandleFunc("POST /api/email-accounts/{id}/preview", s.PreviewEmailAccount)
+	mux.HandleFunc("POST /api/email-accounts/oauth/start", s.StartEmailAccountOAuth)
+	mux.HandleFunc("POST /api/email-accounts/oauth/complete", s.CompleteEmailAccountOAuth)
+	mux.HandleFunc("POST /api/email-accounts/{id}/oauth/revoke", s.RevokeEmailAccountOAuth)
+}
+
+func (s *Server) registerShareRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/share_links/", s.ListShareLinks)
+	mux.HandleFunc("POST /api/share_links/", s.CreateShareLink)
+	mux.HandleFunc("DELETE /api/share_links/{id}", s.RevokeShareLink)
+	s.RegisterShareSurface(mux, ShareSurface{Origin: s.PublicURL})
 }
 
 // ---------- shared helpers ----------

@@ -26,7 +26,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/settings"
 )
 
-// registerArchiveConfiguration wires the archive administration routes.
+// registerArchiveConfiguration wires local archive administration routes.
 func (s *Server) registerArchiveConfiguration(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/admin/setup/state", s.SetupState)
 	mux.HandleFunc("GET /api/admin/users", s.ListUsers)
@@ -34,16 +34,21 @@ func (s *Server) registerArchiveConfiguration(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/admin/users/{id}", s.PatchUser)
 	mux.HandleFunc("POST /api/admin/setup/preset/preview", s.PreviewPresetChange)
 	mux.HandleFunc("POST /api/admin/setup/preset/apply", s.ApplyPresetChange)
+	mux.HandleFunc("GET /api/admin/settings/archive-matching", s.GetArchiveMatchingSettings)
+	mux.HandleFunc("PATCH /api/admin/settings/archive-matching", s.PatchArchiveMatchingSettings)
+	mux.HandleFunc("GET /api/admin/settings/preferences", s.GetPreferences)
+	mux.HandleFunc("POST /api/admin/settings/preferences", s.SavePreferences)
+	mux.HandleFunc("GET /api/admin/settings/ingest", s.GetIngestSettings)
+	mux.HandleFunc("POST /api/admin/settings/ingest", s.SaveIngestSettings)
+}
+
+func (s *Server) registerModelConfiguration(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/admin/settings/llm", s.GetLLMSettings)
 	mux.HandleFunc("PATCH /api/admin/settings/llm", s.PatchLLMSettings)
 	mux.HandleFunc("POST /api/admin/settings/llm", s.SaveLLMSettings)
 	mux.HandleFunc("POST /api/admin/settings/llm/test", s.TestLLMSettings)
 	mux.HandleFunc("POST /api/admin/settings/llm/subscriptions/{provider}/{action}", s.SubscriptionLoginAction)
 	mux.HandleFunc("GET /api/admin/settings/llm/subscriptions/{provider}/models", s.SubscriptionModels)
-	mux.HandleFunc("GET /api/admin/settings/preferences", s.GetPreferences)
-	mux.HandleFunc("POST /api/admin/settings/preferences", s.SavePreferences)
-	mux.HandleFunc("GET /api/admin/settings/ingest", s.GetIngestSettings)
-	mux.HandleFunc("POST /api/admin/settings/ingest", s.SaveIngestSettings)
 }
 
 // ---------- state ----------
@@ -121,6 +126,13 @@ func (s *Server) CreateUser(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_capability", err.Error())
 		return
+	}
+	for capability := range s.disabledCapabilities() {
+		if caps.Has(capability) {
+			s.writeError(w, http.StatusConflict, "feature_disabled",
+				"capability is disabled by deployment policy: "+string(capability))
+			return
+		}
 	}
 	if body.Role == "admin" {
 		caps = nil
@@ -280,6 +292,101 @@ func (s *Server) writePresetChangeError(w http.ResponseWriter, operation string,
 	}
 }
 
+// ---------- archive matching settings ----------
+
+type ArchiveMatchingSettingsStatus struct {
+	ArchiveEnabled bool    `json:"archive_enabled"`
+	ArchiveAuto    float64 `json:"archive_auto_threshold"`
+	ArchiveReview  float64 `json:"archive_review_threshold"`
+	AutoApply      bool    `json:"auto_apply"`
+}
+
+func (s *Server) loadArchiveMatchingSettings(ctx context.Context) (ArchiveMatchingSettingsStatus, error) {
+	archive := settings.ResolveArchiveClassifierConfig(ctx, s.DB)
+	autoApply, err := settings.ResolveAutoApply(ctx, s.DB.Read)
+	if err != nil {
+		return ArchiveMatchingSettingsStatus{}, err
+	}
+	return ArchiveMatchingSettingsStatus{
+		ArchiveEnabled: archive.Enabled,
+		ArchiveAuto:    archive.AutoThreshold,
+		ArchiveReview:  archive.ReviewThreshold,
+		AutoApply:      autoApply,
+	}, nil
+}
+
+func (s *Server) validateArchiveMatchingSettings(w http.ResponseWriter, cfg settings.ArchiveClassifierConfig) bool {
+	if cfg.ReviewThreshold < 0.5 || cfg.ReviewThreshold > 0.9 ||
+		cfg.AutoThreshold < 0.55 || cfg.AutoThreshold > 0.95 ||
+		cfg.ReviewThreshold >= cfg.AutoThreshold {
+		s.writeError(w, http.StatusBadRequest, "bad_archive_thresholds",
+			"archive review threshold must be 0.50-0.90 and below the 0.55-0.95 auto-apply threshold")
+		return false
+	}
+	return true
+}
+
+func (s *Server) GetArchiveMatchingSettings(w http.ResponseWriter, r *http.Request) {
+	if s.requireAdmin(w, r) == nil {
+		return
+	}
+	status, err := s.loadArchiveMatchingSettings(r.Context())
+	if err != nil {
+		s.serverErr(w, "settings.archive_matching.status", err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, status)
+}
+
+func (s *Server) PatchArchiveMatchingSettings(w http.ResponseWriter, r *http.Request) {
+	if s.requireAdmin(w, r) == nil {
+		return
+	}
+	var body struct {
+		ArchiveEnabled *bool    `json:"archive_enabled"`
+		ArchiveAuto    *float64 `json:"archive_auto_threshold"`
+		ArchiveReview  *float64 `json:"archive_review_threshold"`
+		AutoApply      *bool    `json:"auto_apply"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	if body.ArchiveEnabled == nil && body.ArchiveAuto == nil && body.ArchiveReview == nil && body.AutoApply == nil {
+		s.writeError(w, http.StatusBadRequest, "bad_settings_patch", "provide at least one archive matching setting")
+		return
+	}
+	cfg := settings.ResolveArchiveClassifierConfig(r.Context(), s.DB)
+	if body.ArchiveEnabled != nil {
+		cfg.Enabled = *body.ArchiveEnabled
+	}
+	if body.ArchiveAuto != nil {
+		cfg.AutoThreshold = *body.ArchiveAuto
+	}
+	if body.ArchiveReview != nil {
+		cfg.ReviewThreshold = *body.ArchiveReview
+	}
+	if !s.validateArchiveMatchingSettings(w, cfg) {
+		return
+	}
+	if err := settings.SaveArchiveClassifierConfig(r.Context(), s.DB, cfg); err != nil {
+		s.serverErr(w, "settings.archive_matching.save", err)
+		return
+	}
+	if body.AutoApply != nil {
+		if err := settings.Set(r.Context(), s.DB, settings.KeyClassificationAutoApply, *body.AutoApply); err != nil {
+			s.serverErr(w, "settings.archive_matching.auto_apply", err)
+			return
+		}
+	}
+	status, err := s.loadArchiveMatchingSettings(r.Context())
+	if err != nil {
+		s.serverErr(w, "settings.archive_matching.status_after_save", err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, status)
+}
+
 // ---------- LLM settings ----------
 
 var modelSafe = regexp.MustCompile(`^[A-Za-z0-9._/:\-]{1,128}$`)
@@ -293,9 +400,6 @@ type llmSettingsInput struct {
 	ClearAPIKey          bool     `json:"clear_api_key"`
 	EgressAck            bool     `json:"egress_ack"`
 	ConfidenceThreshold  *float64 `json:"confidence_threshold,omitempty"`
-	ArchiveEnabled       *bool    `json:"archive_enabled,omitempty"`
-	ArchiveAuto          *float64 `json:"archive_auto_threshold,omitempty"`
-	ArchiveReview        *float64 `json:"archive_review_threshold,omitempty"`
 }
 
 func (in *llmSettingsInput) normalize() {
@@ -379,30 +483,11 @@ func (s *Server) validateLLMSettings(ctx context.Context, w http.ResponseWriter,
 			"confidence_threshold must be between 0.50 and 0.95")
 		return false
 	}
-	archive := settings.ResolveArchiveClassifierConfig(ctx, s.DB)
-	if in.ArchiveAuto != nil {
-		archive.AutoThreshold = *in.ArchiveAuto
-	}
-	if in.ArchiveReview != nil {
-		archive.ReviewThreshold = *in.ArchiveReview
-	}
-	if archive.ReviewThreshold < 0.5 || archive.ReviewThreshold > 0.9 ||
-		archive.AutoThreshold < 0.55 || archive.AutoThreshold > 0.95 ||
-		archive.ReviewThreshold >= archive.AutoThreshold {
-		s.writeError(w, http.StatusBadRequest, "bad_archive_thresholds",
-			"archive review threshold must be 0.50-0.90 and below the 0.55-0.95 auto-apply threshold")
-		return false
-	}
 	return true
 }
 
 func (s *Server) loadLLMSettingsStatus(ctx context.Context) (LLMSettingsStatus, error) {
-	archive := settings.ResolveArchiveClassifierConfig(ctx, s.DB)
 	researchContextMode := settings.ResolveResearchContextMode(ctx, s.DB)
-	autoApply, err := settings.ResolveAutoApply(ctx, s.DB.Read)
-	if err != nil {
-		return LLMSettingsStatus{}, err
-	}
 	if s.LLMStatusReader != nil {
 		status, err := s.LLMStatusReader(ctx)
 		if status.Provider != "" {
@@ -410,10 +495,6 @@ func (s *Server) loadLLMSettingsStatus(ctx context.Context) (LLMSettingsStatus, 
 				return LLMSettingsStatus{}, err
 			}
 		}
-		status.AutoApply = autoApply
-		status.ArchiveEnabled = archive.Enabled
-		status.ArchiveAuto = archive.AutoThreshold
-		status.ArchiveReview = archive.ReviewThreshold
 		status.ResearchContextMode = string(researchContextMode)
 		return status, err
 	}
@@ -438,10 +519,6 @@ func (s *Server) loadLLMSettingsStatus(ctx context.Context) (LLMSettingsStatus, 
 		EgressAck:           cfg.EgressAck,
 		HasAPIKey:           cfg.APIKey != "",
 		ConfidenceThreshold: cfg.ConfidenceThreshold,
-		AutoApply:           autoApply,
-		ArchiveEnabled:      archive.Enabled,
-		ArchiveAuto:         archive.AutoThreshold,
-		ArchiveReview:       archive.ReviewThreshold,
 		ResearchContextMode: string(researchContextMode),
 	}, nil
 }
@@ -458,76 +535,44 @@ func (s *Server) GetLLMSettings(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, status)
 }
 
-// PatchLLMSettings independently saves local matching, a policy, research preset,
-// or subscription model preference without touching activation, credentials, or existing reviews.
+// PatchLLMSettings independently saves a research preset or subscription model
+// preference without touching activation, credentials, archive matching, or
+// existing reviews.
 func (s *Server) PatchLLMSettings(w http.ResponseWriter, r *http.Request) {
 	if s.requireAdmin(w, r) == nil {
 		return
 	}
 	var body struct {
-		AutoApply            json.RawMessage `json:"auto_apply"`
 		ResearchContextMode  json.RawMessage `json:"research_context_mode"`
 		SubscriptionModel    json.RawMessage `json:"subscription_model"`
 		SubscriptionProvider string          `json:"subscription_provider"`
-		ArchiveEnabled       *bool           `json:"archive_enabled"`
-		ArchiveAuto          *float64        `json:"archive_auto_threshold"`
-		ArchiveReview        *float64        `json:"archive_review_threshold"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
 	fields := 0
-	for _, value := range []json.RawMessage{body.AutoApply, body.ResearchContextMode, body.SubscriptionModel} {
+	for _, value := range []json.RawMessage{body.ResearchContextMode, body.SubscriptionModel} {
 		if value != nil {
 			fields++
 		}
 	}
-	archivePatch := body.ArchiveEnabled != nil || body.ArchiveAuto != nil || body.ArchiveReview != nil
-	if archivePatch {
-		fields++
-	}
 	if fields != 1 {
 		s.writeError(w, http.StatusBadRequest, "bad_settings_patch",
-			"provide one settings group: local matching, auto_apply, research_context_mode or subscription_model")
+			"provide exactly one settings group: research_context_mode or subscription_model")
 		return
 	}
 	if body.SubscriptionModel == nil && body.SubscriptionProvider != "" {
-		s.writeError(w, 400, "bad_settings_patch", "subscription_provider requires subscription_model")
-		return
-	}
-	if archivePatch {
-		if !s.validateLLMSettings(r.Context(), w, llmSettingsInput{ArchiveAuto: body.ArchiveAuto, ArchiveReview: body.ArchiveReview}, false) {
-			return
-		}
-		cfg := settings.ResolveArchiveClassifierConfig(r.Context(), s.DB)
-		if body.ArchiveEnabled != nil {
-			cfg.Enabled = *body.ArchiveEnabled
-		}
-		if body.ArchiveAuto != nil {
-			cfg.AutoThreshold = *body.ArchiveAuto
-		}
-		if body.ArchiveReview != nil {
-			cfg.ReviewThreshold = *body.ArchiveReview
-		}
-		if err := settings.SaveArchiveClassifierConfig(r.Context(), s.DB, cfg); err != nil {
-			s.serverErr(w, "settings.archive_classifier.save", err)
-			return
-		}
-		s.writeJSON(w, http.StatusOK, struct {
-			Enabled bool    `json:"archive_enabled"`
-			Auto    float64 `json:"archive_auto_threshold"`
-			Review  float64 `json:"archive_review_threshold"`
-		}{cfg.Enabled, cfg.AutoThreshold, cfg.ReviewThreshold})
+		s.writeError(w, http.StatusBadRequest, "bad_settings_patch", "subscription_provider requires subscription_model")
 		return
 	}
 	if body.SubscriptionModel != nil {
 		if s.SubscriptionProvider == nil {
-			s.writeError(w, 503, "subscription_unavailable", "Account subscriptions are unavailable")
+			s.writeError(w, http.StatusServiceUnavailable, "subscription_unavailable", "Account subscriptions are unavailable")
 			return
 		}
 		if _, ok := s.SubscriptionProvider(body.SubscriptionProvider); !ok {
-			s.writeError(w, 400, "bad_subscription_provider", "Unknown subscription provider")
+			s.writeError(w, http.StatusBadRequest, "bad_subscription_provider", "Unknown subscription provider")
 			return
 		}
 		var model string
@@ -540,20 +585,6 @@ func (s *Server) PatchLLMSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.writeJSON(w, http.StatusOK, map[string]string{"subscription_provider": body.SubscriptionProvider, "subscription_model": model})
-		return
-	}
-	if body.AutoApply != nil {
-		value := strings.TrimSpace(string(body.AutoApply))
-		if value != "true" && value != "false" {
-			s.writeError(w, http.StatusBadRequest, "bad_auto_apply", "auto_apply must be a boolean")
-			return
-		}
-		enabled := value == "true"
-		if err := settings.Set(r.Context(), s.DB, settings.KeyClassificationAutoApply, enabled); err != nil {
-			s.serverErr(w, "settings.classification.auto_apply", err)
-			return
-		}
-		s.writeJSON(w, http.StatusOK, map[string]bool{"auto_apply": enabled})
 		return
 	}
 	var mode settings.ResearchContextMode
@@ -610,20 +641,6 @@ func (s *Server) SaveLLMSettings(w http.ResponseWriter, r *http.Request) {
 		Disabled:             !enabled,
 	}, s.LLMAEAD, apiKeyUpdate); err != nil {
 		s.serverErr(w, "settings.llm.save", err)
-		return
-	}
-	archive := settings.ResolveArchiveClassifierConfig(r.Context(), s.DB)
-	if body.ArchiveEnabled != nil {
-		archive.Enabled = *body.ArchiveEnabled
-	}
-	if body.ArchiveAuto != nil {
-		archive.AutoThreshold = *body.ArchiveAuto
-	}
-	if body.ArchiveReview != nil {
-		archive.ReviewThreshold = *body.ArchiveReview
-	}
-	if err := settings.SaveArchiveClassifierConfig(r.Context(), s.DB, archive); err != nil {
-		s.serverErr(w, "settings.archive_classifier.save", err)
 		return
 	}
 	if s.LLMReloader != nil {

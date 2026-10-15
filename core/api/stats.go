@@ -137,8 +137,11 @@ func (s *Server) GetStats(w http.ResponseWriter, r *http.Request) {
 	// Dead jobs — admin only. Members see 0 so the dashboard doesn't
 	// leak "the archive is broken" to non-admins.
 	if isAdmin {
-		_ = s.DB.Read.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM jobs WHERE state='dead' AND system_id = ?`, systemID).Scan(&out.DeadJobs)
+		query := `SELECT COUNT(*) FROM jobs WHERE state='dead' AND system_id = ?`
+		if !s.deploymentFeatures().LLMConnections {
+			query += ` AND kind != 'post-classify'`
+		}
+		_ = s.DB.Read.QueryRowContext(ctx, query, systemID).Scan(&out.DeadJobs)
 	}
 
 	s.writeJSON(w, http.StatusOK, out)

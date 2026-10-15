@@ -23,13 +23,15 @@ import (
 // Handler implements approvals.Handler. Kind() returns HandlerKind
 // so the engine's registry routes rescan_enqueue states here.
 type Handler struct {
-	db *db.DB
+	db       *db.DB
+	allowLLM bool
 }
 
 // NewHandler constructs a handler bound to the given DB. Register with
-// `engine.RegisterHandler(h)`.
-func NewHandler(d *db.DB) Handler {
-	return Handler{db: d}
+// `engine.RegisterHandler(h)`. When allowLLM is false, approved model
+// rescans complete successfully without enqueueing work.
+func NewHandler(d *db.DB, allowLLM bool) Handler {
+	return Handler{db: d, allowLLM: allowLLM}
 }
 
 // Kind implements approvals.Handler.
@@ -51,6 +53,12 @@ func (h Handler) Handle(ctx context.Context, run approvals.Run, state approvals.
 		return approvals.HandlerResult{
 			Event: "fail",
 			Vars:  map[string]any{"error": "rescan handler: run.Vars is missing kind"},
+		}, nil
+	}
+	if kind == "llm" && !h.allowLLM {
+		return approvals.HandlerResult{
+			Event: "success",
+			Vars:  map[string]any{"enqueued": 0},
 		}, nil
 	}
 	proposalVersion, err := proposalTargetVersion(run.Vars)

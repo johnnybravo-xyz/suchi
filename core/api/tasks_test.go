@@ -777,3 +777,34 @@ func TestApprovalResolveTask_TerminalConflictAndUnavailableNotFound(t *testing.T
 		})
 	}
 }
+
+func TestDisabledModelJobsAndProposalsStayHidden(t *testing.T) {
+	d := openTestDB(t)
+	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
+	s.setDeploymentFeatures(DeploymentFeatures{})
+	if _, err := d.Write.ExecContext(context.Background(), `
+		INSERT INTO jobs(system_id, id, kind, state, attempts, next_run_at, created_at, updated_at)
+		VALUES
+			(1, 901, 'post-classify', 'dead', 0, 0, 1, 1),
+			(1, 902, 'post-ingest', 'dead', 0, 0, 1, 1)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/tasks/?state=dead", nil)
+	filters := taskFilters{State: "dead", Limit: 50}
+	counts, err := s.taskCounts(req, filters, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.taskRows(req, filters, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts["dead"] != 1 || len(rows) != 1 || rows[0].ID != 902 {
+		t.Fatalf("counts=%v rows=%+v", counts, rows)
+	}
+	needed, err := s.proposalStillNeeded(context.Background(), map[string]any{"kind": "llm"}, nil)
+	if err != nil || needed {
+		t.Fatalf("disabled LLM proposal needed=%t err=%v", needed, err)
+	}
+}

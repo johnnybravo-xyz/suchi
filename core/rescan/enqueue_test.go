@@ -505,7 +505,7 @@ func TestHandler_EnqueuesOnlyRunnableDocuments(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := rescan.NewHandler(d)
+	h := rescan.NewHandler(d, true)
 	result, err := h.Handle(ctx,
 		approvals.Run{SystemID: 1, Vars: map[string]any{"kind": "ocr", "current_version": 1}},
 		approvals.State{}, "")
@@ -530,5 +530,28 @@ func TestHandler_EnqueuesOnlyRunnableDocuments(t *testing.T) {
 	}
 	if currentJobs != 0 {
 		t.Fatalf("handler enqueued %d jobs for a document already at the proposal revision", currentJobs)
+	}
+}
+
+func TestHandler_DisabledLLMCompletesWithoutEnqueue(t *testing.T) {
+	ctx := context.Background()
+	d, owner := setupDB(t)
+	seedDoc(t, ctx, d, owner, "sha-disabled-llm", 0)
+
+	result, err := rescan.NewHandler(d, false).Handle(ctx,
+		approvals.Run{SystemID: 1, Vars: map[string]any{"kind": "llm", "current_version": 1}},
+		approvals.State{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Event != "success" || result.Vars["enqueued"] != 0 {
+		t.Fatalf("handler result = %#v, want successful no-op", result)
+	}
+	var count int
+	if err := d.Read.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs WHERE kind = 'post-ingest'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("disabled LLM rescan enqueued %d jobs", count)
 	}
 }

@@ -80,6 +80,15 @@ func runRescan(args []string) int {
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)
 		return 1
 	}
+	policy, err := cfg.EffectivePolicy()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "config: %v\n", err)
+		return 1
+	}
+	if opts.Stale == "llm" && !policy.LLMConnections {
+		fmt.Fprintln(os.Stderr, "rescan: --stale llm is disabled by deployment policy")
+		return 2
+	}
 	log := logx.Setup(os.Stdout, cfg.LogLevel)
 	slog.SetDefault(log)
 

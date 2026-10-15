@@ -14,6 +14,8 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/automations"
 )
 
+var errFeatureDisabled = errors.New("feature disabled")
+
 func (s *Server) ListAutomations(w http.ResponseWriter, r *http.Request) {
 	if s.requireAuth(w, r) == nil {
 		return
@@ -27,6 +29,15 @@ func (s *Server) ListAutomations(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.serverErr(w, "automations.list", err)
 		return
+	}
+	if !s.deploymentFeatures().LLMConnections {
+		visible := atms[:0]
+		for _, atm := range atms {
+			if atm.Ask == nil {
+				visible = append(visible, atm)
+			}
+		}
+		atms = visible
 	}
 	if atms == nil {
 		atms = []automations.Automation{}
@@ -58,6 +69,10 @@ func (s *Server) GetAutomation(w http.ResponseWriter, r *http.Request) {
 		s.serverErr(w, "automations.get", err)
 		return
 	}
+	if !s.deploymentFeatures().LLMConnections && atm.Ask != nil {
+		s.writeError(w, http.StatusNotFound, "not_found", "automation not found")
+		return
+	}
 	s.writeJSON(w, http.StatusOK, atm)
 }
 
@@ -72,6 +87,10 @@ func (s *Server) CreateAutomation(w http.ResponseWriter, r *http.Request) {
 	var body automations.Automation
 	if err := decodeJSON(r, &body); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_body", "invalid JSON")
+		return
+	}
+	if !s.deploymentFeatures().LLMConnections && body.Ask != nil {
+		s.writeError(w, http.StatusConflict, "feature_disabled", "model-backed automations are disabled")
 		return
 	}
 	store := automations.New(s.DB, s.Actions)
@@ -152,6 +171,10 @@ func (s *Server) UpdateAutomation(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_body", "invalid JSON")
 		return
 	}
+	if !s.deploymentFeatures().LLMConnections && patch.Ask != nil {
+		s.writeError(w, http.StatusConflict, "feature_disabled", "model-backed automations are disabled")
+		return
+	}
 	store := automations.New(s.DB, s.Actions)
 	var resultID int64
 	err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
@@ -161,6 +184,16 @@ func (s *Server) UpdateAutomation(w http.ResponseWriter, r *http.Request) {
 		}
 		if current.Role != "admin" {
 			return errForbidden
+		}
+		if !s.deploymentFeatures().LLMConnections {
+			var hasAsk bool
+			if err := tx.QueryRowContext(r.Context(),
+				`SELECT EXISTS(SELECT 1 FROM automation_asks WHERE automation_id = ?)`, id).Scan(&hasAsk); err != nil {
+				return err
+			}
+			if hasAsk {
+				return errFeatureDisabled
+			}
 		}
 		resultID, err = store.UpdateInTx(r.Context(), tx, systemID, id, patch)
 		return err
@@ -175,6 +208,10 @@ func (s *Server) UpdateAutomation(w http.ResponseWriter, r *http.Request) {
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "automation not found")
+		return
+	}
+	if errors.Is(err, errFeatureDisabled) {
+		s.writeError(w, http.StatusConflict, "feature_disabled", "model-backed automations are disabled")
 		return
 	}
 	if err != nil {
@@ -216,6 +253,16 @@ func (s *Server) DeleteAutomation(w http.ResponseWriter, r *http.Request) {
 		if current.Role != "admin" {
 			return errForbidden
 		}
+		if !s.deploymentFeatures().LLMConnections {
+			var hasAsk bool
+			if err := tx.QueryRowContext(r.Context(),
+				`SELECT EXISTS(SELECT 1 FROM automation_asks WHERE automation_id = ?)`, id).Scan(&hasAsk); err != nil {
+				return err
+			}
+			if hasAsk {
+				return errFeatureDisabled
+			}
+		}
 		return store.DeleteInTx(r.Context(), tx, systemID, id)
 	})
 	if errors.Is(err, errSystemUnavailable) {
@@ -229,7 +276,12 @@ func (s *Server) DeleteAutomation(w http.ResponseWriter, r *http.Request) {
 	if errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "automation not found")
 		return
-	} else if err != nil {
+	}
+	if errors.Is(err, errFeatureDisabled) {
+		s.writeError(w, http.StatusConflict, "feature_disabled", "model-backed automations are disabled")
+		return
+	}
+	if err != nil {
 		s.serverErr(w, "automations.delete", err)
 		return
 	}

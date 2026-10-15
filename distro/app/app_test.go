@@ -28,6 +28,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
 	"github.com/johnnybravo-xyz/suchi/core/rescan"
+	"github.com/johnnybravo-xyz/suchi/core/settings"
 	"github.com/johnnybravo-xyz/suchi/distro/app"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
@@ -73,6 +74,103 @@ func TestRunRejectsInvalidDesktopProfileBeforeArchiveOpen(t *testing.T) {
 	}
 	if _, statErr := os.Stat(opts.Config.DataDir); !os.IsNotExist(statErr) {
 		t.Fatalf("invalid desktop profile touched archive path: %v", statErr)
+	}
+}
+
+func TestDesktopProfileKeepsDormantIntegrationsInert(t *testing.T) {
+	seedOpts := options(t)
+	seedOpts.Config.DevMode = false
+	stop := errors.New("dormant fixtures seeded")
+	seedOpts.Configure = func(services *app.Services) error {
+		ctx := t.Context()
+		if _, err := services.DB.Write.ExecContext(ctx, `
+			INSERT INTO users(id, email, display_name, role, created_at, updated_at)
+			VALUES (1, 'admin@example.test', 'Admin', 'admin', 0, 0);
+			INSERT INTO email_accounts(
+				system_id, name, owner_id, provider, host, port, use_tls, folder,
+				poll_interval_min, auth_method, username, sealed_secret,
+				intake_policy, enabled, created_at, updated_at
+			) VALUES (
+				1, 'Dormant mailbox', 1, 'custom', '127.0.0.1', 9, 1, 'INBOX',
+				10, 'password', 'dormant', X'01',
+				'{"rules":[{"selection":"files","content":"files_only"}]}', 1, 0, 0
+			);
+			INSERT INTO automations(id, system_id, name, order_index, enabled, created_at, updated_at)
+			VALUES (71, 1, 'Dormant ask', 0, 1, 0, 0);
+			INSERT INTO automation_asks(automation_id, question, answer_type, choices)
+			VALUES (71, 'Is this relevant?', 'yes_no', '[]')
+		`); err != nil {
+			return err
+		}
+		if err := settings.SetMany(ctx, services.DB, map[string]any{
+			settings.KeyLLMEndpointURL:  "http://127.0.0.1:9/v1",
+			settings.KeyLLMModel:        "dormant-model",
+			settings.KeyLLMDisabled:     false,
+			settings.KeyLLMAPIKeySealed: map[string]any{"version": 0, "ciphertext": "AA=="},
+		}); err != nil {
+			return err
+		}
+		if err := services.DB.WriteTx(ctx, func(tx *sql.Tx) error {
+			return jobs.Enqueue(ctx, tx, "post-classify", 0, 1, `{}`)
+		}); err != nil {
+			return err
+		}
+		if _, err := services.Approvals.Start(ctx, 1, rescan.ProposalSlug, 0,
+			map[string]any{"kind": "llm", "current_version": 1},
+			&pluginapi.Principal{Kind: "user", UserID: 1, Role: "admin"}); err != nil {
+			return err
+		}
+		return stop
+	}
+	if err := app.Run(t.Context(), seedOpts); !errors.Is(err, stop) {
+		t.Fatalf("seed dormant fixtures: %v", err)
+	}
+
+	desktop := seedOpts
+	desktop.Configure = nil
+	desktop.Config.DeploymentProfile = config.DeploymentProfileDesktopLocal
+	desktop.Config.UseLLMConnections = config.FeatureGateOff
+	desktop.Config.UseEmailIngestionFeatures = config.FeatureGateOff
+	desktop.PipelineProposalVersions = rescan.Versions{LLM: 1}
+	running := startAppWithoutLogin(t, desktop)
+	for _, route := range []string{
+		"/api/chat/status",
+		"/api/admin/settings/llm",
+		"/api/email-accounts",
+		"/api/share_links/",
+		"/api/mobile/pairing",
+	} {
+		running.request(t, http.MethodGet, route, "", http.StatusNotFound)
+	}
+
+	database, err := db.Open(t.Context(), filepath.Join(desktop.Config.DataDir, "suchi.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	until(t, func() bool {
+		var state string
+		return database.Read.QueryRowContext(t.Context(),
+			`SELECT state FROM jobs WHERE kind = 'post-classify'`).Scan(&state) == nil && state == "done"
+	})
+	var postClassify, mailboxEnabled, askRows, llmProposals int
+	if err := database.Read.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM jobs WHERE kind='post-classify'`).Scan(&postClassify); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Read.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM email_accounts WHERE enabled=1`).Scan(&mailboxEnabled); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Read.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM automation_asks`).Scan(&askRows); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Read.QueryRowContext(t.Context(), `
+		SELECT COUNT(*) FROM approval_runs
+		WHERE json_extract(vars_json, '$.kind') = 'llm'`).Scan(&llmProposals); err != nil {
+		t.Fatal(err)
+	}
+	if postClassify != 1 || mailboxEnabled != 1 || askRows != 1 || llmProposals != 1 {
+		t.Fatalf("dormant state changed: post-classify=%d mailboxes=%d asks=%d proposals=%d",
+			postClassify, mailboxEnabled, askRows, llmProposals)
 	}
 }
 

@@ -54,7 +54,9 @@ func TestEnumerateEgressIncludesDatabaseRowsAndRedactsSecrets(t *testing.T) {
 		IngestIMAPOAuthClientIDMicrosoft: "11111111-1111-1111-1111-111111111111",
 		IngestIMAPOAuthScopesMicrosoft:   "offline_access",
 	}
-	got, err := diagnostics.EnumerateEgress(ctx, d, cfg, "https://api.openai.com/v1?key=secret")
+	got, err := diagnostics.EnumerateEgress(ctx, d, cfg,
+		config.DeploymentPolicy{LLMConnections: true, EmailIngestion: true},
+		"https://api.openai.com/v1?key=secret")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +121,8 @@ func TestResolveDoctorSubscriptionEgress(t *testing.T) {
 		}
 	}
 	endpoint := resolveDoctorLLMEndpoint(ctx, d, &config.Config{})
-	inventory, err := diagnostics.EnumerateEgress(ctx, d, &config.Config{}, endpoint)
+	inventory, err := diagnostics.EnumerateEgress(ctx, d, &config.Config{},
+		config.DeploymentPolicy{LLMConnections: true}, endpoint)
 	if err != nil {
 		t.Fatal(err)
 	}

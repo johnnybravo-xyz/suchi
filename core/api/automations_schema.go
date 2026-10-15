@@ -15,7 +15,7 @@ import (
 type AutomationSchema struct {
 	Triggers []AutomationTrigger `json:"triggers"`
 	Actions  []AutomationAction  `json:"actions"`
-	Ask      AutomationAsk       `json:"ask"`
+	Ask      *AutomationAsk      `json:"ask,omitempty"`
 }
 
 // AutomationTrigger names one event that can fire an automation.
@@ -70,7 +70,11 @@ func (s *Server) GetAutomationSchema(w http.ResponseWriter, r *http.Request) {
 	if s.requireAuth(w, r) == nil {
 		return
 	}
-	s.writeJSON(w, http.StatusOK, automationSchema)
+	schema := automationSchema
+	if !s.deploymentFeatures().LLMConnections {
+		schema.Ask = nil
+	}
+	s.writeJSON(w, http.StatusOK, schema)
 }
 
 // automationSchema is the builder's supported surface. Trigger codes stay in
@@ -82,7 +86,7 @@ var automationSchema = AutomationSchema{
 		{Code: 2, Type: "document_added", Name: "After a new document lands"},
 		{Code: 3, Type: "document_updated", Name: "After a document metadata update"},
 	},
-	Ask: AutomationAsk{
+	Ask: &AutomationAsk{
 		MaxEnabled: automations.MaxEnabledAsks, TriggerType: "document_added",
 		Answers: []AutomationAskAnswer{
 			{Type: "yes_no", Name: "Yes / No"},

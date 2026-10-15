@@ -28,7 +28,7 @@ func detectorEngine(t *testing.T, d *db.DB) *approvals.Engine {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	e := approvals.New(d, log)
-	e.RegisterHandler(rescan.NewHandler(d))
+	e.RegisterHandler(rescan.NewHandler(d, true))
 	e.SetAssigneeResolver(approvals.AdminAssigneeResolver{Engine: e, Log: log})
 	if err := e.EnsureDef(context.Background(), 1, rescan.ProposalSlug, rescan.ProposalSpec(), sysActor()); err != nil {
 		t.Fatalf("seed proposal def: %v", err)

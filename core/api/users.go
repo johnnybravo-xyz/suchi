@@ -348,6 +348,7 @@ func (s *Server) PatchUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	disabledCaps := s.disabledCapabilities()
 
 	actor := auth.FromContext(r.Context())
 	defer func() {
@@ -380,6 +381,23 @@ func (s *Server) PatchUser(w http.ResponseWriter, r *http.Request) {
 		// Admin grants are implicit. Demotion must not revive legacy hidden grants.
 		if nextRole == "admin" || (priorRole == "admin" && body.Capabilities == nil) {
 			nextSet = nil
+		}
+		if body.Capabilities != nil {
+			for capability := range disabledCaps {
+				if requestedCaps.Has(capability) != priorSet.Has(capability) {
+					return errFeatureDisabled
+				}
+			}
+		}
+		for capability := range disabledCaps {
+			if priorSet.Has(capability) {
+				if nextSet == nil {
+					nextSet = authz.NewSet()
+				}
+				nextSet.Add(capability)
+			} else {
+				delete(nextSet, capability)
+			}
 		}
 		updateSets, updateArgs := sets, args
 		if capsWereTouched || priorRole == "admin" {
@@ -484,6 +502,11 @@ func (s *Server) PatchUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if errors.Is(err, errLastActiveAdmin) {
 		s.writeError(w, http.StatusConflict, "last_active_admin", errLastActiveAdmin.Error())
+		return
+	}
+	if errors.Is(err, errFeatureDisabled) {
+		s.writeError(w, http.StatusConflict, "feature_disabled",
+			"capability changes are disabled by deployment policy")
 		return
 	}
 	if err != nil {
@@ -602,7 +625,7 @@ func (s *Server) loadSelf(ctx context.Context, p *pluginapi.Principal) (UserSelf
 		Role:            p.Role,
 		AuthNBy:         p.AuthNBy,
 		EmailChangeMode: EmailChangeModeDisabled,
-		Features:        s.Features,
+		Features:        s.deploymentFeatures(),
 		Capabilities:    []string{},
 		Scopes:          []string{},
 	}

@@ -209,10 +209,10 @@ func TestWhoamiReturnsEffectiveDeploymentFeatures(t *testing.T) {
 		MobilePairing:  false,
 	}
 	s := &Server{
-		DB:       d,
-		Log:      slog.New(slog.NewTextHandler(os.Stderr, nil)),
-		Features: want,
+		DB:  d,
+		Log: slog.New(slog.NewTextHandler(os.Stderr, nil)),
 	}
+	s.setDeploymentFeatures(want)
 
 	code, self := doWhoami(t, s, memberPrincipal(1))
 	if code != http.StatusOK {
