@@ -59,6 +59,7 @@ h1 { margin: 0; font-size: 1.5rem; line-height: 1.2; letter-spacing: -.02em; }
   font: 500 .82rem/1.5 "Spline Sans Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .actions { display: flex; flex-wrap: wrap; gap: .65rem; margin-top: 1rem; }
+#token { margin-top: .65rem; }
 button {
   appearance: none;
   padding: .65rem .9rem;
