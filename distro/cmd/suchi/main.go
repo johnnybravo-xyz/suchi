@@ -9,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -123,7 +124,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `suchi — document management, one binary
 
 Usage:
-  suchi serve [--setup-token-file PATH]
+  suchi serve [--setup-token-file PATH] [--ready-file PATH --ready-nonce NONCE] [--exit-on-stdin-close]
                                   run the HTTP server
   suchi healthcheck               probe /readyz on LISTEN_ADDR (for Docker HEALTHCHECK)
   suchi import [flags]            point --from at your existing DMS's export bundle
@@ -191,7 +192,10 @@ func buildIdentity(info *debug.BuildInfo) (string, string) {
 }
 
 type serveOptions struct {
-	setupTokenFile string
+	setupTokenFile   string
+	readyFile        string
+	readyNonce       string
+	exitOnStdinClose bool
 }
 
 func parseServeOptions(args []string) (serveOptions, error) {
@@ -199,13 +203,40 @@ func parseServeOptions(args []string) (serveOptions, error) {
 	flags := flag.NewFlagSet("suchi serve", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	flags.StringVar(&options.setupTokenFile, "setup-token-file", "", "publish the first-run token to a private runtime file")
+	flags.StringVar(&options.readyFile, "ready-file", "", "atomically publish launcher readiness JSON")
+	flags.StringVar(&options.readyNonce, "ready-nonce", "", "nonce paired with --ready-file")
+	flags.BoolVar(&options.exitOnStdinClose, "exit-on-stdin-close", false, "shut down gracefully when stdin closes")
 	if err := flags.Parse(args); err != nil {
 		return serveOptions{}, err
 	}
 	if flags.NArg() != 0 {
 		return serveOptions{}, fmt.Errorf("suchi serve: unexpected positional arguments: %s", strings.Join(flags.Args(), " "))
 	}
+	if (options.readyFile == "") != (options.readyNonce == "") {
+		return serveOptions{}, errors.New("suchi serve: --ready-file and --ready-nonce must be provided together")
+	}
+	if err := validateReadyNonceIfSet(options.readyNonce); err != nil {
+		return serveOptions{}, fmt.Errorf("suchi serve: %w", err)
+	}
+	for name, path := range map[string]string{
+		"--setup-token-file": options.setupTokenFile,
+		"--ready-file":       options.readyFile,
+	} {
+		if path != "" && !filepath.IsAbs(path) {
+			return serveOptions{}, fmt.Errorf("suchi serve: %s must be an absolute path", name)
+		}
+	}
+	if options.readyFile != "" && options.readyFile == options.setupTokenFile {
+		return serveOptions{}, errors.New("suchi serve: --ready-file and --setup-token-file must be different paths")
+	}
 	return options, nil
+}
+
+func validateReadyNonceIfSet(nonce string) error {
+	if nonce == "" {
+		return nil
+	}
+	return validateReadyNonce(nonce)
 }
 
 func runServe(args []string) int {
@@ -228,8 +259,39 @@ func runServe(args []string) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	if options.exitOnStdinClose {
+		go func() {
+			_, _ = io.Copy(io.Discard, os.Stdin)
+			stop()
+		}()
+	}
 	info, _ := debug.ReadBuildInfo()
 	buildVersion, buildRevision := buildIdentity(info)
+	record := readyFileRecord{
+		Version: readyFileVersion, Nonce: options.readyNonce, PID: os.Getpid(),
+		PublicURL: cfg.PublicURL, BuildVersion: buildVersion, BuildRevision: buildRevision,
+	}
+	readyPublished := false
+	if options.readyFile != "" {
+		defer func() {
+			if !readyPublished {
+				return
+			}
+			if err := removeMatchingReadyFile(options.readyFile, record); err != nil {
+				log.Warn("main.ready.cleanup_failed", "err", err)
+			}
+		}()
+	}
+	var notifyReady func() error
+	if options.readyFile != "" {
+		notifyReady = func() error {
+			if err := publishReadyFile(options.readyFile, record); err != nil {
+				return err
+			}
+			readyPublished = true
+			return nil
+		}
+	}
 	if err := app.Run(ctx, app.Options{
 		Config:                   *cfg,
 		Log:                      log,
@@ -237,6 +299,7 @@ func runServe(args []string) int {
 		BuildRevision:            buildRevision,
 		PipelineProposalVersions: configuredPipelineProposalVersions(),
 		SetupTokenFile:           options.setupTokenFile,
+		NotifyReady:              notifyReady,
 	}); err != nil {
 		return 1
 	}

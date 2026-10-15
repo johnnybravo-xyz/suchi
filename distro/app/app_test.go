@@ -77,6 +77,22 @@ func TestRunRejectsInvalidDesktopProfileBeforeArchiveOpen(t *testing.T) {
 	}
 }
 
+func TestRunReportsReadinessAfterStartup(t *testing.T) {
+	opts := options(t)
+	stop := errors.New("readiness observed")
+	var calls atomic.Int32
+	opts.NotifyReady = func() error {
+		calls.Add(1)
+		return stop
+	}
+	if err := app.Run(t.Context(), opts); !errors.Is(err, stop) {
+		t.Fatalf("Run error = %v, want readiness callback error", err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("readiness callback calls = %d, want 1", got)
+	}
+}
+
 func TestDesktopProfileKeepsDormantIntegrationsInert(t *testing.T) {
 	seedOpts := options(t)
 	seedOpts.Config.DevMode = false

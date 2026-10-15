@@ -69,6 +69,9 @@ type Options struct {
 	// SetupTokenFile publishes the first-run token privately for a local
 	// launcher instead of writing it to logs.
 	SetupTokenFile string
+	// NotifyReady runs after listeners, workers, and startup audit are ready,
+	// immediately before HTTP serving begins.
+	NotifyReady func() error
 }
 
 // Services is the small boot-time surface available to a compiled
@@ -822,6 +825,13 @@ func Run(ctx context.Context, opts Options) error {
 		Action:     "server.start",
 		ObjectKind: "server",
 	})
+
+	if opts.NotifyReady != nil {
+		if err := opts.NotifyReady(); err != nil {
+			log.Error("main.ready.notify_failed", "err", err)
+			return fmt.Errorf("main.ready.notify: %w", err)
+		}
+	}
 
 	return runHTTPEndpoints(ctx, cancel, endpoints, log)
 }
