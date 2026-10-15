@@ -31,7 +31,6 @@ func TestNativeTakeoutAllOwnersStaysInSelectedSystem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
 	migs, err := db.LoadMigrations(migrations.FS, ".")
 	if err != nil {
 		t.Fatal(err)
@@ -55,6 +54,9 @@ func TestNativeTakeoutAllOwnersStaysInSelectedSystem(t *testing.T) {
  INSERT INTO tags(system_id,id,name,slug,created_at,updated_at) VALUES(1,1,'Private audit label','same-name',0,0),(2,2,'Advisory label','same-name',0,0);
  INSERT INTO documents(system_id,id,owner_id,original_blob,original_size,title,title_owner,mime_type,jd_category_id,created_at,updated_at) VALUES(1,147,1,?,22,'Excluded audit file','human','text/plain',1,0,0),(2,148,1,?,22,'First owner','rule','text/plain',2,0,0),(2,149,2,?,22,'Second owner','human','text/plain',2,0,0);`, ref.SHA256, ref.SHA256, ref.SHA256)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
 		t.Fatal(err)
 	}
 	ambiguous := filepath.Join(base, "ambiguous.zip")
@@ -149,7 +151,6 @@ func TestExportProtectsDestinationAndIncompleteArchives(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
 	migs, err := db.LoadMigrations(migrations.FS, ".")
 	if err != nil {
 		t.Fatal(err)
@@ -168,6 +169,9 @@ func TestExportProtectsDestinationAndIncompleteArchives(t *testing.T) {
 		VALUES(1,147,1,?,1,'Missing original','text/plain',1,0,0);`,
 		strings.Repeat("0", 64))
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
 		t.Fatal(err)
 	}
 

@@ -53,6 +53,9 @@ func main() {
 	if command == "prerequisites" {
 		os.Exit(runPrerequisites(os.Args[2:]))
 	}
+	if command == "backup" && len(os.Args) > 2 && os.Args[2] == "verify" {
+		os.Exit(runBackup(os.Args[2:]))
+	}
 	if command != "version" && command != "help" && command != "-h" && command != "--help" &&
 		!commandHelpRequested(os.Args[2:]) {
 		var err error
@@ -71,6 +74,8 @@ func main() {
 			return
 		}
 		os.Exit(runHealthcheck())
+	case "backup":
+		os.Exit(runBackup(os.Args[2:]))
 	case "import":
 		os.Exit(runImport(os.Args[2:]))
 	case "gc":
@@ -131,6 +136,7 @@ Usage:
                                   run the HTTP server
   suchi prerequisites --json     inspect local parser prerequisites without loading server configuration
   suchi healthcheck               probe /readyz on LISTEN_ADDR (for Docker HEALTHCHECK)
+  suchi backup <command>          preflight, create, verify, restore, or recover a complete archive
   suchi import [flags]            point --from at your existing DMS's export bundle
   suchi gc [flags]                reclaim unreferenced blobs (dry-run default)
   suchi taxonomy <command>        validate, import, export, or merge taxonomy
