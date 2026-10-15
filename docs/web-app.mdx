@@ -73,11 +73,12 @@ On wide screens the preview and detail column keep one viewport-filling height;
 longer metadata, notes, and extracted text scroll inside the detail column
 instead of resizing the document view.
 
-PDF previews use Suchi's bundled offline renderer instead of relying on a
-browser or WebView PDF plugin. The preview toolbar moves between pages, fits the
-page width and adjusts zoom. Rendering still reads the protected preview
-endpoint; it does not send document bytes to an external service. **Download
-original** remains available if a PDF cannot be rendered.
+Suchi Desktop uses the bundled offline renderer because native WebViews do not
+consistently provide a PDF plugin. Its toolbar moves between pages, fits the page
+width and adjusts zoom. Browser access keeps the browser's native PDF preview.
+Both paths read the protected preview endpoint and do not send document bytes to
+an external service. **Download original** remains available if a desktop PDF
+cannot be rendered.
 
 The top bar provides search, **Upload** and theme controls. The search menu matches
 **Commands** and **Pages**; **Search everything for** submits its complete text.

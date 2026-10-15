@@ -24,6 +24,7 @@
   import { parseDocumentReference } from '../lib/documentReferences.js'
 
   let { id, notify, jdCategories = [] } = $props()
+  const desktopShell = typeof window !== 'undefined' && window.__SUCHI_DESKTOP__ === true
 
   let doc = $state(null)
   let versionHistory = $state({ count: 0, results: [], head_id: null, can_upload: false, next: null, previous: null })
@@ -189,9 +190,9 @@
   const availableDocumentLinkFields = $derived(documentLinkFields.filter(field => !documentLinkValue(field.id)?.value))
   const selectedNewReferenceField = $derived(documentLinkFields.find(field => Number(field.id) === Number(newReferenceFieldID)))
   const linkedDocumentCount = $derived(backlinks.count + outgoingDocumentLinkFields.length)
-  // Archive blobs and uploaded PDFs use the bundled renderer. Common media
-  // renders natively, and the server turns stored email bodies into sandboxed
-  // HTML. Other formats swap the preview for a download panel.
+  // Browsers keep their native PDF preview. The desktop shell marks its WebView
+  // before application code runs so PDFs can use the bundled renderer there.
+  // Common media renders natively, and stored email bodies use sandboxed HTML.
   const previewable = $derived.by(() => {
     if (!doc) return false
     if (doc.archive_blob) return true
@@ -204,7 +205,7 @@
     if (m === 'text/plain' || m === 'text/html' || m === 'text/csv' || m === 'text/markdown') return true
     return false
   })
-  const pdfPreviewable = $derived(Boolean(doc && (
+  const desktopPDFPreviewable = $derived(desktopShell && Boolean(doc && (
     doc.archive_blob ||
     (doc.mime_type || '').toLowerCase().split(';')[0].trim() === 'application/pdf'
   )))
@@ -1399,7 +1400,7 @@
           <span class="pill danger">{sensitivityLabel(doc.sensitivity)}</span>
           <button class="btn" onclick={() => (revealed = true)}><Icon name="eye" size={14} /> {translate("documentDetail.revealPreview")}</button>
         </div>
-      {:else if pdfPreviewable}
+      {:else if desktopPDFPreviewable}
         <PdfPreview
           src={previewPath(id, highSensitivity)}
           downloadSrc={downloadPath(id)}

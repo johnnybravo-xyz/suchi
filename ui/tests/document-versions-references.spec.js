@@ -82,7 +82,7 @@ async function openVersions(page) {
   return page.getByRole('tabpanel', { name: /^Versions/ })
 }
 
-test('renders PDFs with the bundled offline viewer', async ({ page }) => {
+async function installPDFDetail(page) {
   const pdf = onePagePDF('Suchi PDF preview')
   await installDetailAPI(page, async ({ route, path }) => {
     if (path !== '/api/documents/77') return false
@@ -93,8 +93,29 @@ test('renders PDFs with the bundled offline viewer', async ({ page }) => {
     body: pdf,
     headers: { 'Accept-Ranges': 'bytes' },
   })
+}
 
+test('keeps browser-native PDF previews outside the desktop shell', async ({ page }) => {
+  await installPDFDetail(page)
   await page.goto('/#/doc/77')
+
+  const preview = page.locator('.preview')
+  await expect(preview.getByRole('toolbar', { name: 'PDF controls' })).toHaveCount(0)
+  await expect(preview.locator('canvas')).toHaveCount(0)
+  await expect(preview.locator('iframe')).toHaveAttribute('src', '/preview/77')
+})
+
+test('renders PDFs with the bundled offline viewer in the desktop shell', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window, '__SUCHI_DESKTOP__', {
+      value: true,
+      writable: false,
+      configurable: false,
+    })
+  })
+  await installPDFDetail(page)
+  await page.goto('/#/doc/77')
+
   const preview = page.locator('.preview')
   await expect(preview.getByRole('toolbar', { name: 'PDF controls' })).toBeVisible()
   await expect(preview.getByText('Page 1 of 1', { exact: true })).toBeVisible()

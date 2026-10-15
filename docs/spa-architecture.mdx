@@ -252,16 +252,22 @@ links](/document-versions-and-links) owns their user-facing vocabulary and
 semantic contract. Populated ordinary custom fields remain in the metadata card;
 unset definitions stay behind its single add-field selector.
 
-`PdfPreview.svelte` owns PDF loading, one-page-at-a-time canvas rendering,
-page/fit/zoom controls and render cancellation. It lazy-loads the Apache-2.0
-PDF.js runtime only for PDF or generated archive previews; non-PDF previews keep
-the sandboxed direct-URL iframe. PDF.js requests the existing same-origin
-`/preview/{id}` URL with the session cookie, so server document ACLs,
-sensitivity reveal and range streaming remain authoritative. Vite bundles the
-worker as a hashed application asset; the `pdfjs-assets` plugin emits CMaps,
-standard fonts, the ICC profile, JavaScript decoder fallbacks and their licenses
-under `assets/pdfjs/`. No viewer asset or document byte uses a CDN. The
-canvas-only integration does not install PDF scripting or annotation actions.
+`desktop/src-tauri/src/window.rs` injects an immutable
+`window.__SUCHI_DESKTOP__` marker before application code runs.
+`DocumentDetail.svelte` mounts `PdfPreview.svelte` only for a PDF or generated
+archive preview when that marker is present; ordinary browser sessions keep the
+sandboxed direct-URL iframe and native PDF handling. The marker selects
+presentation only and grants no Tauri command capability.
+
+`PdfPreview.svelte` owns one-page-at-a-time canvas rendering, page/fit/zoom
+controls and render cancellation. It lazy-loads the Apache-2.0 PDF.js runtime
+and requests the existing same-origin `/preview/{id}` URL with the session
+cookie, so server document ACLs, sensitivity reveal and range streaming remain
+authoritative. Vite bundles the worker as a hashed application asset; the
+`pdfjs-assets` plugin emits CMaps, standard fonts, the ICC profile, JavaScript
+decoder fallbacks and their licenses under `assets/pdfjs/`. No viewer asset or
+document byte uses a CDN. The canvas-only integration does not install PDF
+scripting or annotation actions.
 
 `api.js:uploadDocumentVersion` uses private multipart assembly so `source_mtime`
 and the caller's idempotency key are preserved. The screen keeps the selected
