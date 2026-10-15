@@ -19,6 +19,12 @@
 
 public_url: "http://127.0.0.1:8000"
 
+# Independent deployment gates. Unset defaults to on. desktop_local forces
+# both off and also disables share links and mobile pairing.
+use_llm_connections: "on"
+use_email_ingestion_features: "on"
+# deployment_profile: "desktop_local"
+
 # --------------------------------------------------------------------
 # Storage & runtime
 # --------------------------------------------------------------------

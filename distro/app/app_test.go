@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/cookiejar"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -59,6 +60,20 @@ func options(t *testing.T) app.Options {
 	_ = listener.Close()
 	dir := t.TempDir()
 	return app.Options{Config: config.Config{PublicURL: "http://" + addr, ListenAddr: addr, DataDir: dir, DecryptKeyPath: filepath.Join(dir, "decrypt.key"), DevMode: true, BodyLimit: 1 << 20, OCRLanguages: []string{"eng"}}, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), BuildVersion: "assembly-test", BuildRevision: "test-revision"}
+}
+
+func TestRunRejectsInvalidDesktopProfileBeforeArchiveOpen(t *testing.T) {
+	opts := options(t)
+	opts.Config.DeploymentProfile = config.DeploymentProfileDesktopLocal
+	opts.Config.DevMode = true
+	opts.Config.DataDir = filepath.Join(t.TempDir(), "must-not-be-created")
+	err := app.Run(t.Context(), opts)
+	if err == nil || !strings.Contains(err.Error(), "deployment policy") || !strings.Contains(err.Error(), "development and demo") {
+		t.Fatalf("Run error = %v, want desktop policy validation", err)
+	}
+	if _, statErr := os.Stat(opts.Config.DataDir); !os.IsNotExist(statErr) {
+		t.Fatalf("invalid desktop profile touched archive path: %v", statErr)
+	}
 }
 
 func startApp(t *testing.T, opts app.Options) runningApp {

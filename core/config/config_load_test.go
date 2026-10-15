@@ -293,3 +293,143 @@ func TestInvalidRuntimeSettings(t *testing.T) {
 		})
 	}
 }
+
+func TestDeploymentFeatureGates(t *testing.T) {
+	t.Run("ordinary defaults", func(t *testing.T) {
+		isolateConfigEnv(t)
+		t.Setenv("PUBLIC_URL", "http://localhost")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		policy, err := cfg.EffectivePolicy()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !policy.LLMConnections || !policy.EmailIngestion || !policy.ShareLinks || !policy.MobilePairing {
+			t.Fatalf("ordinary policy = %+v, want every feature enabled", policy)
+		}
+	})
+
+	t.Run("independent case-insensitive gates", func(t *testing.T) {
+		isolateConfigEnv(t)
+		t.Setenv("PUBLIC_URL", "http://localhost")
+		t.Setenv("USE_LLM_CONNECTIONS", "OFF")
+		t.Setenv("USE_EMAIL_INGESTION_FEATURES", "On")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		policy, err := cfg.EffectivePolicy()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if policy.LLMConnections || !policy.EmailIngestion || !policy.ShareLinks || !policy.MobilePairing {
+			t.Fatalf("independent policy = %+v", policy)
+		}
+	})
+
+	for _, tc := range []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{name: "empty model gate", key: "USE_LLM_CONNECTIONS", value: ""},
+		{name: "unknown model gate", key: "USE_LLM_CONNECTIONS", value: "true"},
+		{name: "empty email gate", key: "USE_EMAIL_INGESTION_FEATURES", value: ""},
+		{name: "unknown email gate", key: "USE_EMAIL_INGESTION_FEATURES", value: "disabled"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateConfigEnv(t)
+			t.Setenv("PUBLIC_URL", "http://127.0.0.1:8000")
+			t.Setenv("LISTEN_ADDR", "127.0.0.1:8000")
+			t.Setenv("DEPLOYMENT_PROFILE", DeploymentProfileDesktopLocal)
+			t.Setenv(tc.key, tc.value)
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), tc.key) || !strings.Contains(err.Error(), "on|off") {
+				t.Fatalf("Load error = %v, want strict %s gate error", err, tc.key)
+			}
+		})
+	}
+}
+
+func TestDesktopLocalDeploymentPolicy(t *testing.T) {
+	validConfig := func() Config {
+		return Config{
+			DeploymentProfile:         DeploymentProfileDesktopLocal,
+			PublicURL:                 "http://127.0.0.1:18765",
+			ListenAddr:                "127.0.0.1:18765",
+			UseLLMConnections:         FeatureGateOn,
+			UseEmailIngestionFeatures: FeatureGateOn,
+		}
+	}
+
+	t.Run("forces every remote deployment feature off", func(t *testing.T) {
+		cfg := validConfig()
+		policy, err := cfg.EffectivePolicy()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if policy != (DeploymentPolicy{}) {
+			t.Fatalf("desktop policy = %+v, want every restricted feature off", policy)
+		}
+	})
+
+	for _, tc := range []struct {
+		name   string
+		mutate func(*Config)
+		want   string
+	}{
+		{name: "wildcard listener", mutate: func(c *Config) { c.ListenAddr = ":18765" }, want: "literal IPv4 loopback"},
+		{name: "LAN listener", mutate: func(c *Config) { c.ListenAddr = "192.168.1.5:18765" }, want: "literal IPv4 loopback"},
+		{name: "IPv6 listener", mutate: func(c *Config) { c.ListenAddr = "[::1]:18765" }, want: "literal IPv4 loopback"},
+		{name: "hostname public URL", mutate: func(c *Config) { c.PublicURL = "http://localhost:18765" }, want: "literal IPv4 loopback"},
+		{name: "TLS public URL", mutate: func(c *Config) { c.PublicURL = "https://127.0.0.1:18765" }, want: "must use http"},
+		{name: "port mismatch", mutate: func(c *Config) { c.PublicURL = "http://127.0.0.1:18766" }, want: "ports must match"},
+		{name: "TLS files", mutate: func(c *Config) { c.TLSCertFile = "/tmp/cert" }, want: "TLS configuration"},
+		{name: "OIDC", mutate: func(c *Config) { c.OIDCIssuerURL = "https://id.example" }, want: "OIDC configuration"},
+		{name: "share listener", mutate: func(c *Config) { c.ShareListenAddr = "127.0.0.1:9000" }, want: "share listener"},
+		{name: "development", mutate: func(c *Config) { c.DevMode = true }, want: "development and demo"},
+		{name: "demo", mutate: func(c *Config) { c.DemoMode = true }, want: "development and demo"},
+		{name: "headless", mutate: func(c *Config) { c.UIDisabled = true }, want: "embedded UI"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := validConfig()
+			tc.mutate(&cfg)
+			if _, err := cfg.EffectivePolicy(); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("EffectivePolicy error = %v, want text %q", err, tc.want)
+			}
+		})
+	}
+
+	for _, value := range []string{"", "server", "DESKTOP"} {
+		t.Run("invalid profile "+value, func(t *testing.T) {
+			isolateConfigEnv(t)
+			t.Setenv("PUBLIC_URL", "http://127.0.0.1:8000")
+			t.Setenv("LISTEN_ADDR", "127.0.0.1:8000")
+			t.Setenv("DEPLOYMENT_PROFILE", value)
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), "DEPLOYMENT_PROFILE") {
+				t.Fatalf("Load error = %v, want deployment profile error", err)
+			}
+		})
+	}
+
+	t.Run("load accepts valid custom port and overrides explicit gates", func(t *testing.T) {
+		isolateConfigEnv(t)
+		t.Setenv("PUBLIC_URL", "http://127.0.0.1:18765")
+		t.Setenv("LISTEN_ADDR", "127.0.0.1:18765")
+		t.Setenv("DEPLOYMENT_PROFILE", "DESKTOP_LOCAL")
+		t.Setenv("USE_LLM_CONNECTIONS", "on")
+		t.Setenv("USE_EMAIL_INGESTION_FEATURES", "ON")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		policy, err := cfg.EffectivePolicy()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if policy != (DeploymentPolicy{}) {
+			t.Fatalf("desktop policy = %+v", policy)
+		}
+	})
+}

@@ -99,6 +99,24 @@ type PreparedBrowserSession interface {
 	Rotate(context.Context, *sql.Tx, int64) (int64, error)
 }
 
+// DeploymentFeatures is the non-secret effective capability policy returned to
+// authenticated clients. Missing JSON keys remain false in browser helpers.
+type DeploymentFeatures struct {
+	LLMConnections bool `json:"llm_connections"`
+	EmailIngestion bool `json:"email_ingestion"`
+	ShareLinks     bool `json:"share_links"`
+	MobilePairing  bool `json:"mobile_pairing"`
+}
+
+func allDeploymentFeatures() DeploymentFeatures {
+	return DeploymentFeatures{
+		LLMConnections: true,
+		EmailIngestion: true,
+		ShareLinks:     true,
+		MobilePairing:  true,
+	}
+}
+
 // Server bundles the state every /api handler needs. Constructed once
 // at boot; safe for concurrent use.
 //
@@ -115,6 +133,7 @@ type Server struct {
 	trash          *trash.Service
 	PublicURL      string // validated main-listener origin, wired from config at boot
 	SharePublicURL string // validated share-only origin; empty disables public-link creation
+	Features       DeploymentFeatures
 	// Build identity is injected by the executable, not frontend package metadata.
 	BuildVersion  string
 	BuildRevision string
@@ -211,6 +230,7 @@ func New(d *db.DB, cas *blob.CAS, retention *trash.Service, actions *automations
 		Log:                    log.With("component", "api"),
 		deviceOCRMinConfidence: 0.65,
 		Authz:                  authz.ACLAuthorizer{DB: d},
+		Features:               allDeploymentFeatures(),
 		trash:                  retention,
 		chatGate:               newChatGate(),
 	}, nil

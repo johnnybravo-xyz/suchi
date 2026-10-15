@@ -102,6 +102,10 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	cfgValue := opts.Config
 	cfg := &cfgValue
+	policy, err := cfg.EffectivePolicy()
+	if err != nil {
+		return fmt.Errorf("app.Run: deployment policy: %w", err)
+	}
 	log := opts.Log
 	pipelineVersions := rescan.Versions{
 		OCR:     postingest.PipelineVersionOCR,
@@ -533,6 +537,12 @@ func Run(ctx context.Context, opts Options) error {
 	apiSrv.PublicURL = cfg.PublicURL
 	apiSrv.Catalogs = catalogs
 	apiSrv.SharePublicURL = cfg.SharePublicURL
+	apiSrv.Features = api.DeploymentFeatures{
+		LLMConnections: policy.LLMConnections,
+		EmailIngestion: policy.EmailIngestion,
+		ShareLinks:     policy.ShareLinks,
+		MobilePairing:  policy.MobilePairing,
+	}
 	apiSrv.BuildVersion, apiSrv.BuildRevision = opts.BuildVersion, opts.BuildRevision
 	apiSrv.Approvals = apvEngine
 	apiSrv.WithDeviceOCRMinConfidence(cfg.DeviceOCRMinConfidence)

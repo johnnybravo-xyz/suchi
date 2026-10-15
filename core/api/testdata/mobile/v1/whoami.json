@@ -5,6 +5,12 @@
   "display_name": "Reader",
   "instance_host": "suchi.example.com",
   "public_share_available": false,
+  "features": {
+    "llm_connections": true,
+    "email_ingestion": true,
+    "share_links": true,
+    "mobile_pairing": true
+  },
   "role": "member",
   "authn_by": "local-auth",
   "email_change_mode": "password",

@@ -40,6 +40,24 @@ func newUploadTestServer(t *testing.T, d *db.DB, cas *blob.CAS) *Server {
 	return s
 }
 
+func TestNewDefaultsDeploymentFeaturesOn(t *testing.T) {
+	d := openTestDB(t)
+	cas, err := blob.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := newUploadTestServer(t, d, cas)
+	want := DeploymentFeatures{
+		LLMConnections: true,
+		EmailIngestion: true,
+		ShareLinks:     true,
+		MobilePairing:  true,
+	}
+	if s.Features != want {
+		t.Fatalf("features=%+v, want ordinary deployment defaults %+v", s.Features, want)
+	}
+}
+
 func TestParseUploadMetadata(t *testing.T) {
 	t.Run("absent", func(t *testing.T) {
 		metadata, failure := parseUploadMetadata(metadataOnlyRequest(nil))

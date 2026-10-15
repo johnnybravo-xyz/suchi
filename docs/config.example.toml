@@ -30,6 +30,13 @@
 # and Network share links. Behind a reverse proxy, this is what the proxy exposes.
 public_url = "http://127.0.0.1:8000"
 
+# Independent deployment gates. Unset defaults to on; values are strictly
+# on|off. The desktop_local profile always forces both off and also disables
+# share links and mobile pairing.
+use_llm_connections = "on"
+use_email_ingestion_features = "on"
+# deployment_profile = "desktop_local"
+
 # --------------------------------------------------------------------
 # Storage & runtime
 # --------------------------------------------------------------------

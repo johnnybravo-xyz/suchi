@@ -20,17 +20,41 @@ import (
 	"time"
 )
 
+// FeatureGate is an operator-controlled deployment switch. Its zero value is
+// enabled so Config literals created by compiled callers retain ordinary
+// deployment behavior unless they explicitly opt out.
+type FeatureGate uint8
+
+const (
+	FeatureGateOn FeatureGate = iota
+	FeatureGateOff
+)
+
+// DeploymentPolicy is the immutable capability policy derived once at startup.
+// It contains effective values after deployment-profile restrictions.
+type DeploymentPolicy struct {
+	LLMConnections bool
+	EmailIngestion bool
+	ShareLinks     bool
+	MobilePairing  bool
+}
+
+const DeploymentProfileDesktopLocal = "desktop_local"
+
 // Config is the fully-resolved runtime configuration.
 type Config struct {
-	PublicURL       string
-	DataDir         string
-	ListenAddr      string
-	SharePublicURL  string
-	ShareListenAddr string
-	LogLevel        string
-	PprofEnabled    bool
-	BodyLimit       int64
-	BackupInterval  time.Duration
+	PublicURL                 string
+	DataDir                   string
+	ListenAddr                string
+	SharePublicURL            string
+	ShareListenAddr           string
+	LogLevel                  string
+	DeploymentProfile         string
+	UseLLMConnections         FeatureGate
+	UseEmailIngestionFeatures FeatureGate
+	PprofEnabled              bool
+	BodyLimit                 int64
+	BackupInterval            time.Duration
 	// TrustedProxyCIDRs enables forwarded client addresses for rate limiting
 	// only when the direct TCP peer belongs to an explicitly trusted network.
 	TrustedProxyCIDRs []netip.Prefix
@@ -207,6 +231,22 @@ func Load() (*Config, error) {
 		LLMModel:                         env("LLM_MODEL", ""),
 		LLMEgressAck:                     env("LLM_EGRESS_ACK", "") == "true",
 	}
+	var err error
+	if c.UseLLMConnections, err = parseFeatureGate("USE_LLM_CONNECTIONS"); err != nil {
+		return nil, err
+	}
+	if c.UseEmailIngestionFeatures, err = parseFeatureGate("USE_EMAIL_INGESTION_FEATURES"); err != nil {
+		return nil, err
+	}
+	if raw, ok := os.LookupEnv("DEPLOYMENT_PROFILE"); ok {
+		switch strings.ToLower(raw) {
+		case DeploymentProfileDesktopLocal:
+			c.DeploymentProfile = DeploymentProfileDesktopLocal
+		default:
+			return nil, fmt.Errorf("DEPLOYMENT_PROFILE: unknown value %q (want %s or unset)", raw, DeploymentProfileDesktopLocal)
+		}
+	}
+
 	if c.IngestFSDir == "" && c.IngestFSOwnerEmail != "" {
 		c.IngestFSDir = filepath.Join(c.DataDir, "staging")
 	}
@@ -220,7 +260,8 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("INGEST_FS_RECURSIVE: unknown value %q (want on|off)", value)
 	}
 
-	var err error
+	// Keep parsing below profile-independent: malformed configuration must not
+	// be hidden by desktop_local's effective capability overrides.
 	// BODY_LIMIT applies to every HTTP request body and watched file. 500M by
 	// default because scanned PDFs routinely exceed the old 100M ceiling. Zero
 	// disables the cap.
@@ -377,8 +418,120 @@ func Load() (*Config, error) {
 			return nil, errors.New("ADMIN_EMAIL is required when OIDC is enabled")
 		}
 	}
+	if _, err := c.EffectivePolicy(); err != nil {
+		return nil, err
+	}
 
 	return c, nil
+}
+
+// EffectivePolicy validates deployment gates and returns their startup-time
+// effective values. desktop_local is restrictive regardless of explicit on
+// gates. Calling this from app.Run also protects compiled callers that bypass
+// Load and construct Config values directly.
+func (c Config) EffectivePolicy() (DeploymentPolicy, error) {
+	gateEnabled := func(name string, gate FeatureGate) (bool, error) {
+		switch gate {
+		case FeatureGateOn:
+			return true, nil
+		case FeatureGateOff:
+			return false, nil
+		default:
+			return false, fmt.Errorf("%s: invalid compiled gate value %d", name, gate)
+		}
+	}
+	llm, err := gateEnabled("USE_LLM_CONNECTIONS", c.UseLLMConnections)
+	if err != nil {
+		return DeploymentPolicy{}, err
+	}
+	email, err := gateEnabled("USE_EMAIL_INGESTION_FEATURES", c.UseEmailIngestionFeatures)
+	if err != nil {
+		return DeploymentPolicy{}, err
+	}
+	policy := DeploymentPolicy{
+		LLMConnections: llm,
+		EmailIngestion: email,
+		ShareLinks:     true,
+		MobilePairing:  true,
+	}
+	switch c.DeploymentProfile {
+	case "":
+		return policy, nil
+	case DeploymentProfileDesktopLocal:
+		if err := validateDesktopLocal(c); err != nil {
+			return DeploymentPolicy{}, err
+		}
+		return DeploymentPolicy{}, nil
+	default:
+		return DeploymentPolicy{}, fmt.Errorf("DEPLOYMENT_PROFILE: unknown value %q (want %s or unset)", c.DeploymentProfile, DeploymentProfileDesktopLocal)
+	}
+}
+
+func parseFeatureGate(name string) (FeatureGate, error) {
+	raw, ok := os.LookupEnv(name)
+	if !ok {
+		return FeatureGateOn, nil
+	}
+	switch strings.ToLower(raw) {
+	case "on":
+		return FeatureGateOn, nil
+	case "off":
+		return FeatureGateOff, nil
+	default:
+		return FeatureGateOn, fmt.Errorf("%s: unknown value %q (want on|off)", name, raw)
+	}
+}
+
+func validateDesktopLocal(c Config) error {
+	const prefix = "DEPLOYMENT_PROFILE=desktop_local"
+	if c.DevMode || c.DemoMode {
+		return fmt.Errorf("%s: development and demo modes are not allowed", prefix)
+	}
+	if c.UIDisabled {
+		return fmt.Errorf("%s: embedded UI must be enabled", prefix)
+	}
+	if c.TLSCertFile != "" || c.TLSKeyFile != "" {
+		return fmt.Errorf("%s: TLS configuration is not allowed", prefix)
+	}
+	if c.OIDCIssuerURL != "" || c.OIDCClientID != "" || c.OIDCClientSecret != "" {
+		return fmt.Errorf("%s: OIDC configuration is not allowed", prefix)
+	}
+	if c.ShareListenAddr != "" || c.SharePublicURL != "" {
+		return fmt.Errorf("%s: share listener configuration is not allowed", prefix)
+	}
+
+	listenHost, listenPort, err := net.SplitHostPort(c.ListenAddr)
+	if err != nil {
+		return fmt.Errorf("%s: LISTEN_ADDR: %w", prefix, err)
+	}
+	listenIP, err := netip.ParseAddr(listenHost)
+	if err != nil || !listenIP.Is4() || !listenIP.IsLoopback() {
+		return fmt.Errorf("%s: LISTEN_ADDR must use a literal IPv4 loopback address", prefix)
+	}
+	listenPortNumber, err := strconv.ParseUint(listenPort, 10, 16)
+	if err != nil || listenPortNumber == 0 {
+		return fmt.Errorf("%s: LISTEN_ADDR must include a port from 1 to 65535", prefix)
+	}
+
+	if err := validateOriginURL("PUBLIC_URL", c.PublicURL); err != nil {
+		return err
+	}
+	publicURL, _ := url.Parse(c.PublicURL)
+	if !strings.EqualFold(publicURL.Scheme, "http") {
+		return fmt.Errorf("%s: PUBLIC_URL must use http", prefix)
+	}
+	publicIP, err := netip.ParseAddr(publicURL.Hostname())
+	if err != nil || !publicIP.Is4() || !publicIP.IsLoopback() {
+		return fmt.Errorf("%s: PUBLIC_URL must use a literal IPv4 loopback address", prefix)
+	}
+	publicPort := publicURL.Port()
+	if publicPort == "" {
+		publicPort = "80"
+	}
+	if publicPort != listenPort {
+		return fmt.Errorf("%s: LISTEN_ADDR and PUBLIC_URL ports must match", prefix)
+	}
+	return nil
 }
 
 func validateOriginURL(name, raw string) error {

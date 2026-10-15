@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
@@ -195,6 +196,40 @@ func TestWhoami_ReturnsOnlyTokenScopes(t *testing.T) {
 	}
 	if self.SystemID != nil || self.SystemName != nil || self.SystemCode != nil {
 		t.Fatalf("session unexpectedly exposed a token system: (%v, %v, %v)", self.SystemID, self.SystemName, self.SystemCode)
+	}
+}
+
+func TestWhoamiReturnsEffectiveDeploymentFeatures(t *testing.T) {
+	d := openTestDB(t)
+	seedUser(t, d, 1)
+	want := DeploymentFeatures{
+		LLMConnections: false,
+		EmailIngestion: false,
+		ShareLinks:     false,
+		MobilePairing:  false,
+	}
+	s := &Server{
+		DB:       d,
+		Log:      slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		Features: want,
+	}
+
+	code, self := doWhoami(t, s, memberPrincipal(1))
+	if code != http.StatusOK {
+		t.Fatalf("status=%d, want 200", code)
+	}
+	if self.Features != want {
+		t.Fatalf("features=%+v, want %+v", self.Features, want)
+	}
+
+	self.DisplayName = "updated"
+	body, err := json.Marshal(map[string]string{"display_name": self.DisplayName})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, patched := doPatchSelf(t, s, string(body), memberPrincipal(1))
+	if code != http.StatusOK || patched.Features != want {
+		t.Fatalf("profile refresh status=%d features=%+v, want %+v", code, patched.Features, want)
 	}
 }
 

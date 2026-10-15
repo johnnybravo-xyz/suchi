@@ -84,6 +84,34 @@ api_key_file = "/missing/llm-secret"
 	})
 }
 
+func TestDeploymentGatesUseFileThenEnvironmentPrecedence(t *testing.T) {
+	isolateConfigEnv(t)
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(`
+public_url = "http://127.0.0.1:8000"
+use_llm_connections = "off"
+use_email_ingestion_features = "off"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(FileConfigEnv, path)
+	t.Setenv("USE_EMAIL_INGESTION_FEATURES", "on")
+	if _, err := LoadFile(); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := cfg.EffectivePolicy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy.LLMConnections || !policy.EmailIngestion {
+		t.Fatalf("policy = %+v, want file model off and environment email on", policy)
+	}
+}
+
 func TestLoadFileExplicitPathErrors(t *testing.T) {
 	dir := t.TempDir()
 	unreadable := filepath.Join(dir, "unreadable.toml")
@@ -137,7 +165,8 @@ func isolateConfigEnv(t *testing.T) {
 		"INGEST_IMAP_OAUTH_CLIENT_ID_MICROSOFT",
 		"INGEST_IMAP_OAUTH_SCOPES_MICROSOFT", "INGEST_PASSWORDS_FILE", "DECRYPT_KEY_FILE",
 		"LLM_ENDPOINT_URL", "LLM_MODEL", "LLM_API_KEY", "LLM_API_KEY_FILE", "LLM_EGRESS_ACK",
-		"LLM_CONFIDENCE_THRESHOLD", "PRE_CONSUME_SCRIPT", "SUCHI_UI_DISABLED", "SUCHI_DEV", "SUCHI_DEV_ALLOW_LAN",
+		"LLM_CONFIDENCE_THRESHOLD", "USE_LLM_CONNECTIONS", "USE_EMAIL_INGESTION_FEATURES",
+		"DEPLOYMENT_PROFILE", "PRE_CONSUME_SCRIPT", "SUCHI_UI_DISABLED", "SUCHI_DEV", "SUCHI_DEV_ALLOW_LAN",
 		"SUCHI_DEMO_MODE", "SUCHI_DEMO_GLOBAL_RPS", "SUCHI_DEMO_SCRATCH_TTL_MINUTES",
 	} {
 		unsetEnv(t, key)
