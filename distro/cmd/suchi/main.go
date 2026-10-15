@@ -60,11 +60,7 @@ func main() {
 	}
 	switch command {
 	case "serve":
-		if commandHelpRequested(os.Args[2:]) {
-			fmt.Fprintln(os.Stderr, "Usage: suchi serve")
-			return
-		}
-		os.Exit(runServe())
+		os.Exit(runServe(os.Args[2:]))
 	case "healthcheck":
 		if commandHelpRequested(os.Args[2:]) {
 			fmt.Fprintln(os.Stderr, "Usage: suchi healthcheck")
@@ -127,7 +123,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `suchi — document management, one binary
 
 Usage:
-  suchi serve                     run the HTTP server
+  suchi serve [--setup-token-file PATH]
+                                  run the HTTP server
   suchi healthcheck               probe /readyz on LISTEN_ADDR (for Docker HEALTHCHECK)
   suchi import [flags]            point --from at your existing DMS's export bundle
   suchi gc [flags]                reclaim unreferenced blobs (dry-run default)
@@ -193,7 +190,32 @@ func buildIdentity(info *debug.BuildInfo) (string, string) {
 	return v, rev
 }
 
-func runServe() int {
+type serveOptions struct {
+	setupTokenFile string
+}
+
+func parseServeOptions(args []string) (serveOptions, error) {
+	var options serveOptions
+	flags := flag.NewFlagSet("suchi serve", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	flags.StringVar(&options.setupTokenFile, "setup-token-file", "", "publish the first-run token to a private runtime file")
+	if err := flags.Parse(args); err != nil {
+		return serveOptions{}, err
+	}
+	if flags.NArg() != 0 {
+		return serveOptions{}, fmt.Errorf("suchi serve: unexpected positional arguments: %s", strings.Join(flags.Args(), " "))
+	}
+	return options, nil
+}
+
+func runServe(args []string) int {
+	options, err := parseServeOptions(args)
+	if err != nil {
+		if !errors.Is(err, flag.ErrHelp) {
+			fmt.Fprintln(os.Stderr, err)
+		}
+		return flagParseExit(err)
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)
@@ -214,6 +236,7 @@ func runServe() int {
 		BuildVersion:             buildVersion,
 		BuildRevision:            buildRevision,
 		PipelineProposalVersions: configuredPipelineProposalVersions(),
+		SetupTokenFile:           options.setupTokenFile,
 	}); err != nil {
 		return 1
 	}

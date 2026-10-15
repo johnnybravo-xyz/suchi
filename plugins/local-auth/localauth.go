@@ -9,9 +9,9 @@
 //   - API tokens sent as "Authorization: Token <hex>". Not Bearer —
 //     this is suchi's own wire format for third-party mobile clients.
 //
-// First-boot flow: with no admin present and OIDC unconfigured, the
-// process prints a single-use setup token to the log. Hitting
-// POST /setup with that token creates the admin.
+// First-boot flow: with no users present and OIDC unconfigured, the process
+// publishes a single-use setup token to its log or an opted-in private runtime
+// file. Hitting POST /setup with that token creates the admin.
 package localauth
 
 import (
@@ -71,6 +71,7 @@ type Plugin struct {
 	// initialized."
 	setupToken         string
 	setupTokenIssuedAt time.Time
+	setupTokenFile     string
 }
 
 // Options controls local-auth boot behavior without changing its session and
@@ -79,6 +80,9 @@ type Options struct {
 	// DisableSetup prevents the local password bootstrap path from being
 	// minted. OIDC deployments use their configured admin identity instead.
 	DisableSetup bool
+	// SetupTokenFile publishes the token to a private runtime file instead of
+	// the log. Its parent must already exist with mode 0700.
+	SetupTokenFile string
 }
 
 // New wires the plugin with local password bootstrap enabled.
@@ -87,11 +91,12 @@ func New(ctx context.Context, d *db.DB, log *slog.Logger, cookieSecure, demoMode
 }
 
 // NewWithOptions wires the plugin. If no users exist yet and setup is enabled,
-// a setup token is generated and logged for the operator.
+// a setup token is generated and published for the operator.
 func NewWithOptions(ctx context.Context, d *db.DB, log *slog.Logger, cookieSecure, demoMode bool, opts Options) (*Plugin, error) {
 	p := &Plugin{
 		db: d, log: log.With("plugin", Name),
 		cookieSecure: cookieSecure, demoMode: demoMode,
+		setupTokenFile: opts.SetupTokenFile,
 	}
 	if err := p.deleteExpiredSessions(ctx, time.Now()); err != nil {
 		return nil, fmt.Errorf("localauth: prune expired sessions: %w", err)
@@ -104,6 +109,8 @@ func NewWithOptions(ctx context.Context, d *db.DB, log *slog.Logger, cookieSecur
 		if err := p.mintSetupToken(); err != nil {
 			return nil, err
 		}
+	} else if err := p.removeSetupTokenFile(); err != nil {
+		return nil, err
 	}
 	return p, nil
 }
@@ -127,11 +134,17 @@ func (p *Plugin) mintSetupToken() error {
 	if _, err := rand.Read(b[:]); err != nil {
 		return err
 	}
-	p.setupToken = hex.EncodeToString(b[:])
+	token := hex.EncodeToString(b[:])
+	if err := p.writeSetupTokenFile(token); err != nil {
+		return err
+	}
+	p.setupToken = token
 	p.setupTokenIssuedAt = time.Now()
-	p.log.Warn("localauth.setup.token_minted",
-		"detail", "first-boot setup token — one-time use; open /bootstrap in your browser (or POST to /setup) with an admin email + password within 24h",
-		"token", p.setupToken)
+	if p.setupTokenFile == "" {
+		p.log.Warn("localauth.setup.token_minted",
+			"detail", "first-boot setup token — one-time use; open /bootstrap in your browser (or POST to /setup) with an admin email + password within 24h",
+			"token", p.setupToken)
+	}
 	return nil
 }
 
@@ -220,7 +233,9 @@ func (p *Plugin) EnsureDevAdmin(ctx context.Context, email, password string) err
 	if err != nil {
 		return fmt.Errorf("localauth: seed dev admin: %w", err)
 	}
-	p.setupToken = ""
+	p.setupMu.Lock()
+	p.consumeSetupToken()
+	p.setupMu.Unlock()
 	p.log.Warn("localauth.dev_admin.ready",
 		"email", email,
 		"detail", "SUCHI_DEV=1 — admin auto-provisioned; do not use in production")

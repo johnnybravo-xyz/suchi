@@ -66,6 +66,9 @@ type Options struct {
 	MigrationSets            []db.MigrationSet
 	Actions                  []automations.ActionDefinition
 	Configure                func(*Services) error
+	// SetupTokenFile publishes the first-run token privately for a local
+	// launcher instead of writing it to logs.
+	SetupTokenFile string
 }
 
 // Services is the small boot-time surface available to a compiled
@@ -180,12 +183,14 @@ func Run(ctx context.Context, opts Options) error {
 		return accountEmailChangeMode(cfg, p)
 	}
 	la, err := localauth.NewWithOptions(ctx, d, log, cookieSecure, cfg.DemoMode, localauth.Options{
-		DisableSetup: cfg.OIDCIssuerURL != "",
+		DisableSetup:   cfg.OIDCIssuerURL != "",
+		SetupTokenFile: opts.SetupTokenFile,
 	})
 	if err != nil {
 		log.Error("main.localauth.new", "err", err.Error())
 		return fmt.Errorf("main.localauth.new: %w", err)
 	}
+	defer la.Close()
 
 	// Dev credentials are allowed only in an isolated local auth mode.
 	if cfg.DevMode {

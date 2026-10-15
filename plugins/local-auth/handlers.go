@@ -122,7 +122,11 @@ func (p *Plugin) applySetup(ctx context.Context, req SetupRequest) (int64, error
 	}
 	if time.Since(p.setupTokenIssuedAt) >= SetupTokenTTL {
 		if err := p.mintSetupToken(); err != nil {
+			p.log.Error("localauth.setup.token_mint_failed", "err", err)
 			return 0, errSetupMint
+		}
+		if p.setupTokenFile != "" {
+			return 0, errSetupExpiredFile
 		}
 		return 0, errSetupExpired
 	}
@@ -164,8 +168,7 @@ func (p *Plugin) applySetup(ctx context.Context, req SetupRequest) (int64, error
 		p.log.Error("localauth.setup.insert_failed", "err", err.Error())
 		return 0, errSetupInsert
 	}
-	p.setupToken = "" // burn the token
-	p.setupTokenIssuedAt = time.Time{}
+	p.consumeSetupToken()
 	p.log.Info("localauth.setup.completed", "email", req.Email)
 	return userID, nil
 }
@@ -176,6 +179,7 @@ var (
 	errSetupMissing      = &setupErr{msg: "token, email, and password required", code: http.StatusBadRequest}
 	errSetupBadToken     = &setupErr{msg: "invalid token", code: http.StatusUnauthorized}
 	errSetupExpired      = &setupErr{msg: "setup token expired; a replacement was written to the server log", code: http.StatusUnauthorized}
+	errSetupExpiredFile  = &setupErr{msg: "setup token expired; open Suchi from the application menu again to see its replacement", code: http.StatusUnauthorized}
 	errSetupWeakPassword = &setupErr{
 		msg: "password must be at least 8 characters", code: http.StatusBadRequest,
 	}
