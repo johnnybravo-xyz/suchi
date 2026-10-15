@@ -3,5 +3,16 @@
   "identifier": "launcher",
   "description": "Local lifecycle controls for the bundled launcher page only. Remote server URLs receive no capability.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "allow-launcher-state",
+    "allow-start-processing",
+    "allow-stop-processing",
+    "allow-retry-processing",
+    "allow-reveal-setup-token",
+    "allow-open-setup",
+    "allow-open-application",
+    "allow-rollback-operation",
+    "allow-set-launch-at-login"
+  ]
 }

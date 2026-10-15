@@ -1,0 +1,22 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "launcher-dev",
+  "description": "Lifecycle controls for the loopback launcher development server only.",
+  "remote": {
+    "urls": ["http://127.0.0.1:1420/*"]
+  },
+  "local": false,
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "allow-launcher-state",
+    "allow-start-processing",
+    "allow-stop-processing",
+    "allow-retry-processing",
+    "allow-reveal-setup-token",
+    "allow-open-setup",
+    "allow-open-application",
+    "allow-rollback-operation",
+    "allow-set-launch-at-login"
+  ]
+}

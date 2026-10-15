@@ -274,7 +274,7 @@ desktop-dev: desktop-sidecar
 	    export CC="$$(xcrun --find clang)" SDKROOT="$$(xcrun --show-sdk-path)"; \
 	    export CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER="$$CC" CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER="$$CC"; \
 	  fi; \
-	  PATH="$$toolchain_bin:$$PATH" bun tauri dev
+	  PATH="$$toolchain_bin:$$PATH" bun tauri dev --config src-tauri/tauri.dev.conf.json
 
 desktop-check: desktop-sidecar
 	@cd desktop && bun install --frozen-lockfile
