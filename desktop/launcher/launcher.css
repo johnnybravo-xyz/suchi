@@ -1,32 +1,101 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 :root {
-  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: #17211b;
-  background: #f1f3ed;
+  --bg: #fafaf8;
+  --surface: #fff;
+  --surface-2: #f1f1ed;
+  --ink: #17181a;
+  --muted: #6a7079;
+  --faint: #8a8f97;
+  --line: rgb(23 24 26 / 10%);
+  --line-strong: rgb(23 24 26 / 18%);
+  --accent: #0575b6;
+  --accent-ink: #fff;
+  --shadow: 0 1px 2px rgb(23 24 26 / 5%), 0 8px 24px rgb(23 24 26 / 7%);
+  color-scheme: light;
+  font-family: "Schibsted Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--ink);
+  background: var(--bg);
   font-synthesis: none;
 }
 * { box-sizing: border-box; }
-body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 2rem; }
-main { width: min(38rem, 100%); padding: 2.25rem; border: 1px solid #cbd1c8; border-radius: 1.25rem; background: #fff; box-shadow: 0 1.5rem 4rem rgb(33 47 39 / 10%); }
+body {
+  display: grid;
+  min-height: 100vh;
+  margin: 0;
+  padding: 2rem;
+  place-items: center;
+  background: var(--bg);
+}
+main {
+  width: min(34rem, 100%);
+  padding: 2rem;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
 header { display: flex; align-items: center; gap: 1rem; }
-.mark { display: grid; place-items: center; width: 3rem; height: 3rem; border-radius: .8rem; color: #fff; background: #245b40; font: 700 1.25rem/1 ui-serif, Georgia, serif; }
-.eyebrow { margin: 0 0 .25rem; color: #597064; font-size: .72rem; font-weight: 700; letter-spacing: .14em; }
-h1 { margin: 0; font-size: 1.55rem; line-height: 1.2; }
-.message { margin: 1.5rem 0; color: #405149; line-height: 1.55; }
-.details, output { display: block; padding: .9rem 1rem; border-radius: .6rem; overflow-wrap: anywhere; white-space: pre-wrap; background: #edf0eb; color: #26352d; font: 500 .82rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.mark { display: block; flex: 0 0 auto; width: 3rem; height: 3rem; }
+.eyebrow {
+  margin: 0 0 .25rem;
+  color: var(--accent);
+  font-size: .7rem;
+  font-weight: 750;
+  letter-spacing: .13em;
+}
+h1 { margin: 0; font-size: 1.5rem; line-height: 1.2; letter-spacing: -.02em; }
+.message, #setup p { color: var(--muted); line-height: 1.55; }
+.message { margin: 1.5rem 0; }
+.details, output {
+  display: block;
+  padding: .9rem 1rem;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--surface-2);
+  white-space: pre-wrap;
+  font: 500 .82rem/1.5 "Spline Sans Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
 .actions { display: flex; flex-wrap: wrap; gap: .65rem; margin-top: 1rem; }
-button { appearance: none; border: 1px solid #aeb8b0; border-radius: .55rem; padding: .65rem .9rem; color: #26352d; background: #fff; font: inherit; font-weight: 650; cursor: pointer; }
-button:hover { background: #f4f6f2; }
-button.primary { border-color: #245b40; color: #fff; background: #245b40; }
-button.primary:hover { background: #19482f; }
-footer { margin-top: 2rem; color: #718078; font-size: .78rem; line-height: 1.4; }
+button {
+  appearance: none;
+  padding: .65rem .9rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  color: var(--ink);
+  background: var(--surface);
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+button:hover { border-color: var(--accent); color: var(--accent); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button.primary { border-color: var(--accent); color: var(--accent-ink); background: var(--accent); }
+button.primary:hover { opacity: .9; color: var(--accent-ink); }
+footer {
+  margin-top: 2rem;
+  padding-top: 1rem;
+  border-top: 1px dotted var(--line-strong);
+  color: var(--faint);
+  font-size: .78rem;
+  line-height: 1.4;
+}
 [hidden] { display: none !important; }
 @media (prefers-color-scheme: dark) {
-  :root { color: #eef3ef; background: #17211b; }
-  main { border-color: #425047; background: #202c25; box-shadow: none; }
-  .message { color: #bdc9c1; }
-  .details, output { color: #e2e9e4; background: #17211b; }
-  button { border-color: #637269; color: #eef3ef; background: #26352d; }
-  button:hover { background: #314238; }
-  footer { color: #95a49a; }
+  :root {
+    --bg: #141618;
+    --surface: #1d2023;
+    --surface-2: #23262a;
+    --ink: #eceae2;
+    --muted: #9c9a90;
+    --faint: #7e7c72;
+    --line: rgb(236 234 226 / 9%);
+    --line-strong: rgb(236 234 226 / 17%);
+    --accent: #4fa8dc;
+    --accent-ink: #10222e;
+    --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 8px 24px rgb(0 0 0 / 45%);
+    color-scheme: dark;
+  }
 }
