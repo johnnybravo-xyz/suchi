@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-use crate::{navigation, process::DesktopState};
+use crate::{backup, navigation, process::DesktopState};
 use tauri::{
     AppHandle,
     menu::{CheckMenuItem, MenuBuilder},
@@ -20,11 +20,15 @@ pub fn install(app: &AppHandle, state: DesktopState) -> tauri::Result<()> {
         None::<&str>,
     )?;
     let menu = MenuBuilder::new(app)
-        .text("show", "Show Suchi")
+        .text("show-hide", "Show or Hide Suchi")
         .text("start", "Start Processing")
         .text("stop", "Stop Processing")
         .separator()
+        .text("backup", "Create Complete Backup…")
+        .text("restore", "Restore Complete Backup…")
+        .separator()
         .text("open-data", "Open Data Folder")
+        .text("open-backups", "Open Backup Folder")
         .text("open-logs", "Open Logs")
         .item(&login)
         .separator()
@@ -37,15 +41,22 @@ pub fn install(app: &AppHandle, state: DesktopState) -> tauri::Result<()> {
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(move |app, event| match event.id().as_ref() {
-            "show" => navigation::show_main_window(app),
+            "show-hide" => navigation::toggle_main_window(app),
             "start" => {
                 let _ = event_state.start(app);
             }
             "stop" => event_state.stop(),
+            "backup" => backup::choose_complete_backup(app, event_state.clone()),
+            "restore" => backup::choose_complete_restore(app, event_state.clone()),
             "open-data" => {
                 let _ = app
                     .opener()
                     .open_path(event_state.paths().archive.to_string_lossy(), None::<&str>);
+            }
+            "open-backups" => {
+                let _ = app
+                    .opener()
+                    .open_path(event_state.paths().backups.to_string_lossy(), None::<&str>);
             }
             "open-logs" => {
                 let _ = app
@@ -59,7 +70,7 @@ pub fn install(app: &AppHandle, state: DesktopState) -> tauri::Result<()> {
                 } else {
                     app.autolaunch().disable()
                 };
-                if result.is_ok() {
+                if result.is_ok() && event_state.set_launch_at_login_preference(next).is_ok() {
                     let _ = login_item.set_checked(next);
                 }
             }

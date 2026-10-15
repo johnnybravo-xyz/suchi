@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use std::{
-    fs::{self, OpenOptions},
+    fs::{self, File, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
 };
@@ -12,6 +12,7 @@ pub struct ManagedPaths {
     pub archive: PathBuf,
     pub backups: PathBuf,
     pub config: PathBuf,
+    pub desktop_state: PathBuf,
     pub logs: PathBuf,
     pub runtime: PathBuf,
     pub webview_cache: PathBuf,
@@ -40,6 +41,7 @@ impl ManagedPaths {
             archive: data_root.join("archive"),
             backups: data_root.join("backups"),
             config: config_root.join("local-install.toml"),
+            desktop_state: data_root.join("desktop-state.json"),
             logs,
             runtime: cache_root.join("runtime"),
             webview_cache: cache_root.join("webview"),
@@ -54,8 +56,26 @@ impl ManagedPaths {
         ] {
             create_private_directory(directory)?;
         }
-        paths.write_managed_config()?;
         Ok(paths)
+    }
+
+    pub fn with_legacy_archive(
+        &self,
+        data_root: PathBuf,
+        archive: PathBuf,
+        config: PathBuf,
+    ) -> Result<Self, String> {
+        let backups = data_root.join("backups");
+        create_private_directory(&backups)?;
+        Ok(Self {
+            archive,
+            backups,
+            config,
+            desktop_state: self.desktop_state.clone(),
+            logs: self.logs.clone(),
+            runtime: self.runtime.clone(),
+            webview_cache: self.webview_cache.clone(),
+        })
     }
 
     pub fn ready_file(&self, nonce: &str) -> PathBuf {
@@ -70,14 +90,16 @@ impl ManagedPaths {
         self.logs.join("sidecar.log")
     }
 
-    fn write_managed_config(&self) -> Result<(), String> {
+    pub fn write_managed_config(&self, port: u16) -> Result<(), String> {
         reject_unsafe_existing(&self.config)?;
         let path = toml_string(&self.archive);
+        let origin = format!("http://127.0.0.1:{port}");
+        let listen = format!("127.0.0.1:{port}");
         let contents = format!(
             "# Managed by Suchi Desktop. Manual changes are replaced at launch.\n\
              deployment_profile = \"desktop_local\"\n\
-             public_url = \"http://127.0.0.1:8000\"\n\
-             listen_addr = \"127.0.0.1:8000\"\n\
+             public_url = {origin:?}\n\
+             listen_addr = {listen:?}\n\
              data_dir = {path}\n\
              use_llm_connections = \"off\"\n\
              use_email_ingestion_features = \"off\"\n\
@@ -124,7 +146,7 @@ pub fn create_private_directory(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn atomic_write_private(path: &Path, contents: &[u8]) -> Result<(), String> {
+pub(crate) fn atomic_write_private(path: &Path, contents: &[u8]) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| "The managed file has no parent directory.".to_owned())?;
@@ -145,12 +167,25 @@ fn atomic_write_private(path: &Path, contents: &[u8]) -> Result<(), String> {
     }
     let mut file = options
         .open(&temporary)
-        .map_err(|_| "Cannot create the managed configuration.".to_owned())?;
+        .map_err(|_| "Cannot create the private managed file.".to_owned())?;
     file.write_all(contents)
         .and_then(|()| file.sync_all())
-        .map_err(|_| "Cannot write the managed configuration.".to_owned())?;
+        .map_err(|_| "Cannot write the private managed file.".to_owned())?;
     fs::rename(&temporary, path)
-        .map_err(|_| "Cannot activate the managed configuration.".to_owned())?;
+        .map_err(|_| "Cannot activate the private managed file.".to_owned())?;
+    sync_parent(parent)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_parent(parent: &Path) -> Result<(), String> {
+    File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|_| "Cannot sync the private managed file directory.".to_owned())
+}
+
+#[cfg(not(unix))]
+fn sync_parent(_parent: &Path) -> Result<(), String> {
     Ok(())
 }
 

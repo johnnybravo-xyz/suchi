@@ -11,7 +11,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-const ORIGIN: &str = "http://127.0.0.1:8000";
 const READY_LIMIT: u64 = 16 * 1024;
 
 #[derive(Debug, Deserialize)]
@@ -30,8 +29,10 @@ pub fn wait_for_ready(
     nonce: &str,
     pid: u32,
     identity: &SidecarIdentity,
+    port: u16,
     timeout: Duration,
 ) -> Result<(), String> {
+    let origin = format!("http://127.0.0.1:{port}");
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         match read_record(path) {
@@ -39,13 +40,13 @@ pub fn wait_for_ready(
                 if record.version != 1
                     || record.nonce != nonce
                     || record.pid != pid
-                    || record.public_url != ORIGIN
+                    || record.public_url != origin
                     || record.build_version != identity.version
                     || record.build_revision != identity.revision
                 {
                     return Err("The local server returned invalid readiness proof.".to_owned());
                 }
-                return verify_http_ready();
+                return verify_http_ready(port);
             }
             Err(ReadinessRead::NotReady) => thread::sleep(Duration::from_millis(40)),
             Err(ReadinessRead::Invalid) => {
@@ -80,8 +81,8 @@ fn read_record(path: &Path) -> Result<ReadyRecord, ReadinessRead> {
     serde_json::from_slice(&bytes).map_err(|_| ReadinessRead::Invalid)
 }
 
-fn verify_http_ready() -> Result<(), String> {
-    let address: SocketAddr = "127.0.0.1:8000".parse().expect("fixed socket address");
+fn verify_http_ready(port: u16) -> Result<(), String> {
+    let address = SocketAddr::from(([127, 0, 0, 1], port));
     let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(2))
         .map_err(|_| "The local server readiness endpoint is unavailable.".to_owned())?;
     stream
@@ -90,9 +91,11 @@ fn verify_http_ready() -> Result<(), String> {
     stream
         .set_write_timeout(Some(Duration::from_secs(2)))
         .map_err(|_| "The local server readiness check could not set a timeout.".to_owned())?;
-    stream
-        .write_all(b"GET /readyz HTTP/1.1\r\nHost: 127.0.0.1:8000\r\nConnection: close\r\n\r\n")
-        .map_err(|_| "The local server readiness request failed.".to_owned())?;
+    write!(
+        stream,
+        "GET /readyz HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    )
+    .map_err(|_| "The local server readiness request failed.".to_owned())?;
     let mut response = [0_u8; 1024];
     let count = stream
         .read(&mut response)

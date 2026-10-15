@@ -8,6 +8,7 @@ use tauri::{
 pub fn create_main(
     app: &AppHandle,
     paths: &ManagedPaths,
+    application_origin: String,
     initially_hidden: bool,
 ) -> tauri::Result<WebviewWindow> {
     let navigation_app = app.clone();
@@ -21,7 +22,9 @@ pub fn create_main(
         .data_directory(paths.webview_cache.clone())
         .disable_drag_drop_handler()
         .devtools(cfg!(debug_assertions))
-        .on_navigation(move |url| navigation::permits_navigation(&navigation_app, url))
+        .on_navigation(move |url| {
+            navigation::permits_navigation(&navigation_app, url, &application_origin)
+        })
         .on_new_window(move |url, _features| {
             navigation::open_external(&new_window_app, &url);
             NewWindowResponse::Deny

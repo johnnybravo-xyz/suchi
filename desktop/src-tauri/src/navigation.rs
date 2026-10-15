@@ -3,10 +3,8 @@
 use tauri::{AppHandle, Manager, Url};
 use tauri_plugin_opener::OpenerExt;
 
-pub const APPLICATION_ORIGIN: &str = "http://127.0.0.1:8000";
-
-pub fn permits_navigation(app: &AppHandle, url: &Url) -> bool {
-    if is_launcher_url(url) || is_application_url(url) {
+pub fn permits_navigation(app: &AppHandle, url: &Url, application_origin: &str) -> bool {
+    if is_launcher_url(url) || is_application_url(url, application_origin) {
         return true;
     }
     if matches!(url.scheme(), "https" | "mailto") {
@@ -21,12 +19,12 @@ pub fn open_external(app: &AppHandle, url: &Url) {
     }
 }
 
-pub fn navigate_to_application(app: &AppHandle) {
-    navigate(app, APPLICATION_ORIGIN);
+pub fn navigate_to_application(app: &AppHandle, application_origin: &str) {
+    navigate(app, application_origin);
 }
 
-pub fn navigate_to_setup(app: &AppHandle) {
-    navigate(app, &format!("{APPLICATION_ORIGIN}/bootstrap"));
+pub fn navigate_to_setup(app: &AppHandle, application_origin: &str) {
+    navigate(app, &format!("{application_origin}/bootstrap"));
 }
 
 pub fn navigate_to_launcher(app: &AppHandle) {
@@ -45,6 +43,18 @@ pub fn show_main_window(app: &AppHandle) {
     }
 }
 
+pub fn toggle_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        if window.is_visible().unwrap_or(false) {
+            let _ = window.hide();
+        } else {
+            let _ = window.show();
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
+    }
+}
+
 fn navigate(app: &AppHandle, target: &str) {
     if let Some(window) = app.get_webview_window("main")
         && let Ok(url) = Url::parse(target)
@@ -59,10 +69,10 @@ fn is_launcher_url(url: &Url) -> bool {
         || (url.scheme() == "http" && url.host_str() == Some("tauri.localhost"))
 }
 
-fn is_application_url(url: &Url) -> bool {
+fn is_application_url(url: &Url, application_origin: &str) -> bool {
     url.username().is_empty()
         && url.password().is_none()
-        && url.origin().ascii_serialization() == APPLICATION_ORIGIN
+        && url.origin().ascii_serialization() == application_origin
 }
 
 #[cfg(test)]
@@ -72,16 +82,20 @@ mod tests {
     #[test]
     fn application_origin_is_exact() {
         assert!(is_application_url(
-            &Url::parse("http://127.0.0.1:8000/inbox").unwrap()
+            &Url::parse("http://127.0.0.1:8123/inbox").unwrap(),
+            "http://127.0.0.1:8123",
         ));
         assert!(!is_application_url(
-            &Url::parse("http://localhost:8000/inbox").unwrap()
+            &Url::parse("http://localhost:8123/inbox").unwrap(),
+            "http://127.0.0.1:8123",
         ));
         assert!(!is_application_url(
-            &Url::parse("http://127.0.0.1:8001/inbox").unwrap()
+            &Url::parse("http://127.0.0.1:8001/inbox").unwrap(),
+            "http://127.0.0.1:8123",
         ));
         assert!(!is_application_url(
-            &Url::parse("https://127.0.0.1:8000/inbox").unwrap()
+            &Url::parse("https://127.0.0.1:8123/inbox").unwrap(),
+            "http://127.0.0.1:8123",
         ));
     }
 }

@@ -52,8 +52,9 @@ func Create(ctx context.Context, options Options, outputPath string, overwrite b
 	if err != nil {
 		return CreateReport{}, err
 	}
-	if !preflight.Ready {
-		return CreateReport{}, fmt.Errorf("backup preflight failed: %s", strings.Join(preflight.Issues, "; "))
+	blockingIssues := backupBlockingIssues(preflight.Issues)
+	if len(blockingIssues) != 0 {
+		return CreateReport{}, fmt.Errorf("backup preflight failed: %s", strings.Join(blockingIssues, "; "))
 	}
 	if err := rejectOutputAliases(outputPath, sources); err != nil {
 		return CreateReport{}, err
@@ -136,6 +137,17 @@ func Create(ctx context.Context, options Options, outputPath string, overwrite b
 		Path:    outputPath, Bytes: verified.Bytes, SHA256: verified.SHA256,
 		Manifest: verified.Manifest,
 	}, nil
+}
+
+func backupBlockingIssues(issues []string) []string {
+	blocking := make([]string, 0, len(issues))
+	for _, issue := range issues {
+		if strings.HasPrefix(issue, "insufficient free space:") || strings.HasPrefix(issue, "inspect free space:") {
+			continue
+		}
+		blocking = append(blocking, issue)
+	}
+	return blocking
 }
 
 func checkpointDatabase(ctx context.Context, path string) error {

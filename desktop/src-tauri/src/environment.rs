@@ -3,7 +3,7 @@
 use crate::paths::ManagedPaths;
 use std::{collections::BTreeMap, ffi::OsString};
 
-pub fn sidecar_environment(paths: &ManagedPaths) -> BTreeMap<OsString, OsString> {
+pub fn sidecar_environment(paths: &ManagedPaths, port: u16) -> BTreeMap<OsString, OsString> {
     let mut environment = BTreeMap::new();
     for (key, value) in std::env::vars_os() {
         if allowed_host_variable(&key.to_string_lossy()) {
@@ -15,8 +15,12 @@ pub fn sidecar_environment(paths: &ManagedPaths) -> BTreeMap<OsString, OsString>
     set(&mut environment, "SUCHI_CONFIG", paths.config.as_os_str());
     set(&mut environment, "DATA_DIR", paths.archive.as_os_str());
     set(&mut environment, "DEPLOYMENT_PROFILE", "desktop_local");
-    set(&mut environment, "PUBLIC_URL", "http://127.0.0.1:8000");
-    set(&mut environment, "LISTEN_ADDR", "127.0.0.1:8000");
+    set(
+        &mut environment,
+        "PUBLIC_URL",
+        format!("http://127.0.0.1:{port}"),
+    );
+    set(&mut environment, "LISTEN_ADDR", format!("127.0.0.1:{port}"));
     set(&mut environment, "USE_LLM_CONNECTIONS", "off");
     set(&mut environment, "USE_EMAIL_INGESTION_FEATURES", "off");
     set(&mut environment, "SUCHI_DEV", "0");

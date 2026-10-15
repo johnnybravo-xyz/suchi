@@ -1,22 +1,29 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+mod backup;
 mod commands;
+mod desktop_state;
 mod environment;
 mod identity;
+mod legacy;
 mod logging;
 mod navigation;
 mod paths;
 mod prerequisites;
 mod process;
 mod readiness;
+mod sidecar_cli;
 mod tray;
+mod upgrade;
 mod window;
 
+use desktop_state::DesktopStateStore;
 use identity::SidecarIdentity;
 use paths::ManagedPaths;
 use process::DesktopState;
 use std::env;
 use tauri::Manager;
+use tauri_plugin_autostart::ManagerExt as _;
 
 pub fn run() {
     let initially_hidden = env::args_os().any(|argument| argument == "--hidden");
@@ -43,16 +50,50 @@ pub fn run() {
             commands::reveal_setup_token,
             commands::open_setup,
             commands::open_application,
+            commands::rollback_operation,
             commands::set_launch_at_login,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
-            let paths = ManagedPaths::resolve(&handle).map_err(std::io::Error::other)?;
+            let modern_paths = ManagedPaths::resolve(&handle).map_err(std::io::Error::other)?;
+            let desktop_state = DesktopStateStore::load(modern_paths.desktop_state.clone())
+                .map_err(std::io::Error::other)?;
+            let (paths, legacy_install, startup_blocker) =
+                match legacy::detect(&handle, &modern_paths, &desktop_state.snapshot()) {
+                    Ok(Some((paths, install))) => {
+                        desktop_state
+                            .update(|state| {
+                                state.selected_port = install.port();
+                                state.launch_at_login = install.launch_at_login();
+                                Ok(())
+                            })
+                            .map_err(std::io::Error::other)?;
+                        (paths, Some(install), None)
+                    }
+                    Ok(None) => (modern_paths, None, None),
+                    Err(message) => (modern_paths, None, Some(message)),
+                };
+            desktop_state.persist().map_err(std::io::Error::other)?;
             let identity = SidecarIdentity::embedded().map_err(std::io::Error::other)?;
-            let state =
-                DesktopState::new(paths.clone(), identity).map_err(std::io::Error::other)?;
+            let preserve_legacy_preference = legacy_install.is_some();
+            let state = DesktopState::new(
+                paths.clone(),
+                identity,
+                desktop_state,
+                legacy_install,
+                startup_blocker.clone(),
+            )
+            .map_err(std::io::Error::other)?;
+            if startup_blocker.is_none() && !preserve_legacy_preference {
+                state
+                    .set_launch_at_login_preference(
+                        handle.autolaunch().is_enabled().unwrap_or(false),
+                    )
+                    .map_err(std::io::Error::other)?;
+            }
+            let origin = state.origin().to_owned();
             app.manage(state.clone());
-            window::create_main(&handle, &paths, initially_hidden)?;
+            window::create_main(&handle, &paths, origin, initially_hidden)?;
             tray::install(&handle, state.clone())?;
             std::thread::spawn(move || {
                 let _ = state.start(&handle);

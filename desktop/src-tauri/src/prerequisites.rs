@@ -1,15 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-use crate::{environment::sidecar_environment, paths::ManagedPaths};
+use crate::{paths::ManagedPaths, sidecar_cli};
 use serde::Deserialize;
-use std::{
-    io::{Read, Write},
-    path::Path,
-    process::{Command, Stdio},
-    thread,
-};
-
-const OUTPUT_LIMIT: usize = 1024 * 1024;
+use std::{ffi::OsString, path::Path};
 
 #[derive(Debug, Deserialize)]
 struct Report {
@@ -31,41 +24,18 @@ struct Capability {
     available: bool,
 }
 
-pub fn inspect(executable: &Path, paths: &ManagedPaths) -> Result<Option<String>, String> {
-    let mut command = Command::new(executable);
-    command
-        .args(["prerequisites", "--json"])
-        .env_clear()
-        .envs(sidecar_environment(paths))
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = command
-        .spawn()
-        .map_err(|_| "The prerequisite check could not start.".to_owned())?;
-    let stdout = child.stdout.take().expect("piped stdout");
-    let stderr = child.stderr.take().expect("piped stderr");
-    let stdout = thread::spawn(move || read_bounded(stdout));
-    let stderr = thread::spawn(move || read_bounded(stderr));
-    let status = child
-        .wait()
-        .map_err(|_| "The prerequisite check could not finish.".to_owned())?;
-    let stdout = stdout
-        .join()
-        .map_err(|_| "The prerequisite output reader failed.".to_owned())??;
-    let stderr = stderr
-        .join()
-        .map_err(|_| "The prerequisite error reader failed.".to_owned())??;
-    if !status.success() {
-        let message = String::from_utf8_lossy(&stderr);
-        return Err(if message.trim().is_empty() {
-            "The prerequisite check failed.".to_owned()
-        } else {
-            "The prerequisite check reported an internal error.".to_owned()
-        });
+pub fn inspect(
+    executable: &Path,
+    paths: &ManagedPaths,
+    port: u16,
+) -> Result<Option<String>, String> {
+    let arguments = [OsString::from("prerequisites"), OsString::from("--json")];
+    let output =
+        sidecar_cli::run_json::<Report>(executable, paths, port, &arguments, "prerequisite check")?;
+    if !output.success {
+        return Err("The prerequisite check failed.".to_owned());
     }
-    let report: Report = serde_json::from_slice(&stdout)
-        .map_err(|_| "The prerequisite report is invalid.".to_owned())?;
+    let report = output.value;
     if report.version != 1 {
         return Err("The prerequisite report version is unsupported.".to_owned());
     }
@@ -93,21 +63,4 @@ pub fn inspect(executable: &Path, paths: &ManagedPaths) -> Result<Option<String>
     }
     guidance.push("Suchi will keep working for supported document types. Install the missing local tools, then retry to enable those formats.".to_owned());
     Ok(Some(guidance.join(" ")))
-}
-
-fn read_bounded<R: Read>(mut reader: R) -> Result<Vec<u8>, String> {
-    let mut output = Vec::new();
-    let mut buffer = [0_u8; 8192];
-    loop {
-        let count = reader
-            .read(&mut buffer)
-            .map_err(|_| "The prerequisite output could not be read.".to_owned())?;
-        if count == 0 {
-            return Ok(output);
-        }
-        if output.len() + count > OUTPUT_LIMIT {
-            return Err("The prerequisite output exceeded its safety limit.".to_owned());
-        }
-        output.write_all(&buffer[..count]).expect("write to Vec");
-    }
 }

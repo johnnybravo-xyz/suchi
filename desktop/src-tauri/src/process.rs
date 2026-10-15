@@ -1,8 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use crate::{
-    environment::sidecar_environment, identity::SidecarIdentity, logging::RotatingLog, navigation,
-    paths::ManagedPaths, prerequisites, readiness,
+    backup,
+    desktop_state::{BuildIdentity, DesktopStateStore, OperationKind},
+    environment::sidecar_environment,
+    identity::SidecarIdentity,
+    legacy::{self, LegacyInstall},
+    logging::RotatingLog,
+    navigation,
+    paths::ManagedPaths,
+    prerequisites, readiness, upgrade,
 };
 use rand::RngCore;
 use serde::Serialize;
@@ -19,6 +26,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tauri::AppHandle;
+use tauri_plugin_autostart::ManagerExt as _;
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(20);
@@ -28,11 +36,27 @@ pub struct DesktopState {
     shared: Arc<Shared>,
 }
 
+pub struct OperationGuard {
+    state: DesktopState,
+}
+
+impl Drop for OperationGuard {
+    fn drop(&mut self) {
+        self.state.shared.operation.store(false, Ordering::SeqCst);
+    }
+}
+
 struct Shared {
     identity: SidecarIdentity,
     paths: ManagedPaths,
+    desktop_state: DesktopStateStore,
+    port: u16,
+    origin: String,
     log: Arc<RotatingLog>,
+    legacy: Option<LegacyInstall>,
+    startup_blocker: Option<String>,
     process: Mutex<ProcessState>,
+    operation: AtomicBool,
     quitting: AtomicBool,
 }
 
@@ -51,6 +75,7 @@ enum Phase {
     Running,
     SetupRequired,
     Stopping,
+    Maintenance,
     Error,
 }
 
@@ -69,16 +94,31 @@ pub struct LauncherState {
     can_retry: bool,
     can_open: bool,
     can_stop: bool,
+    can_rollback: bool,
+    rollback_label: Option<String>,
 }
 
 impl DesktopState {
-    pub fn new(paths: ManagedPaths, identity: SidecarIdentity) -> Result<Self, String> {
+    pub fn new(
+        paths: ManagedPaths,
+        identity: SidecarIdentity,
+        desktop_state: DesktopStateStore,
+        legacy: Option<LegacyInstall>,
+        startup_blocker: Option<String>,
+    ) -> Result<Self, String> {
+        let port = desktop_state.snapshot().selected_port;
+        let origin = format!("http://127.0.0.1:{port}");
         let log = Arc::new(RotatingLog::open(paths.sidecar_log())?);
         Ok(Self {
             shared: Arc::new(Shared {
                 identity,
                 paths,
+                desktop_state,
+                port,
+                origin,
                 log,
+                legacy,
+                startup_blocker,
                 process: Mutex::new(ProcessState {
                     phase: Phase::Stopped,
                     pid: None,
@@ -86,6 +126,7 @@ impl DesktopState {
                     control: None,
                     detail: None,
                 }),
+                operation: AtomicBool::new(false),
                 quitting: AtomicBool::new(false),
             }),
         })
@@ -95,17 +136,104 @@ impl DesktopState {
         &self.shared.paths
     }
 
+    pub fn origin(&self) -> &str {
+        &self.shared.origin
+    }
+
+    pub(crate) fn port(&self) -> u16 {
+        self.shared.port
+    }
+
+    pub(crate) fn state_store(&self) -> &DesktopStateStore {
+        &self.shared.desktop_state
+    }
+
+    pub(crate) fn sidecar_executable(&self) -> Result<std::path::PathBuf, String> {
+        self.shared.identity.locate_and_verify()
+    }
+
+    pub(crate) fn build_identity(&self) -> BuildIdentity {
+        BuildIdentity::from(&self.shared.identity)
+    }
+
+    pub(crate) fn set_launch_at_login_preference(&self, enabled: bool) -> Result<(), String> {
+        self.shared.desktop_state.update(|state| {
+            state.launch_at_login = enabled;
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    pub(crate) fn begin_operation(&self) -> Result<OperationGuard, String> {
+        self.shared
+            .operation
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .map_err(|_| "Another archive operation is already running.".to_owned())?;
+        Ok(OperationGuard {
+            state: self.clone(),
+        })
+    }
+
+    pub(crate) fn wait_until_stopped(&self, timeout: Duration) -> Result<(), String> {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            let process = self.shared.process.lock().expect("process state poisoned");
+            if process.pid.is_none() && matches!(process.phase, Phase::Stopped | Phase::Error) {
+                return Ok(());
+            }
+            drop(process);
+            thread::sleep(Duration::from_millis(50));
+        }
+        Err("The local server did not stop in time.".to_owned())
+    }
+
+    pub(crate) fn set_maintenance(&self, detail: impl Into<String>) -> Result<(), String> {
+        let mut process = self.shared.process.lock().expect("process state poisoned");
+        if process.pid.is_some() {
+            return Err("The local server is still running.".to_owned());
+        }
+        process.phase = Phase::Maintenance;
+        process.detail = Some(detail.into());
+        Ok(())
+    }
+
+    pub(crate) fn finish_maintenance(&self) {
+        let mut process = self.shared.process.lock().expect("process state poisoned");
+        if process.phase == Phase::Maintenance {
+            process.phase = Phase::Stopped;
+            process.detail = None;
+        }
+    }
+
+    pub(crate) fn log_operation_error(&self, label: &str, message: &str) {
+        self.shared.log.write(label, message.as_bytes());
+    }
     pub fn launcher_state(&self) -> LauncherState {
         let process = self.shared.process.lock().expect("process state poisoned");
+        let rollback_label =
+            self.shared
+                .desktop_state
+                .snapshot()
+                .pending_operation
+                .map(|pending| match pending.kind {
+                    OperationKind::Restore => "Roll back restore".to_owned(),
+                    OperationKind::DowngradeRestore => "Roll back downgrade restore".to_owned(),
+                    OperationKind::Upgrade | OperationKind::LegacyMigration => {
+                        "Restore backup and quit".to_owned()
+                    }
+                });
         match process.phase {
             Phase::Stopped => LauncherState {
                 title: "Processing is stopped".to_owned(),
                 message: "Your archive is closed. Start processing to use Suchi.".to_owned(),
                 detail: process.detail.clone(),
+
                 setup_required: false,
                 can_retry: true,
                 can_open: false,
                 can_stop: false,
+                can_rollback: false,
+                rollback_label: None,
             },
             Phase::Starting => LauncherState {
                 title: "Starting your archive".to_owned(),
@@ -116,6 +244,8 @@ impl DesktopState {
                 can_retry: false,
                 can_open: false,
                 can_stop: true,
+                can_rollback: false,
+                rollback_label: None,
             },
             Phase::Running => LauncherState {
                 title: "Your archive is ready".to_owned(),
@@ -125,6 +255,8 @@ impl DesktopState {
                 can_retry: false,
                 can_open: true,
                 can_stop: true,
+                can_rollback: false,
+                rollback_label: None,
             },
             Phase::SetupRequired => LauncherState {
                 title: "Finish local setup".to_owned(),
@@ -134,6 +266,8 @@ impl DesktopState {
                 can_retry: false,
                 can_open: false,
                 can_stop: true,
+                can_rollback: false,
+                rollback_label: None,
             },
             Phase::Stopping => LauncherState {
                 title: "Stopping processing".to_owned(),
@@ -143,6 +277,22 @@ impl DesktopState {
                 can_retry: false,
                 can_open: false,
                 can_stop: false,
+                can_rollback: false,
+                rollback_label: None,
+            },
+            Phase::Maintenance => LauncherState {
+                title: "Protecting your archive".to_owned(),
+                message: process
+                    .detail
+                    .clone()
+                    .unwrap_or_else(|| "Suchi is completing a local archive operation…".to_owned()),
+                detail: None,
+                setup_required: false,
+                can_retry: false,
+                can_open: false,
+                can_stop: false,
+                can_rollback: false,
+                rollback_label: None,
             },
             Phase::Error => LauncherState {
                 title: "Suchi could not start".to_owned(),
@@ -152,6 +302,8 @@ impl DesktopState {
                 can_retry: true,
                 can_open: false,
                 can_stop: false,
+                can_rollback: rollback_label.is_some(),
+                rollback_label,
             },
         }
     }
@@ -166,14 +318,13 @@ impl DesktopState {
                 }
                 Phase::Starting | Phase::Running | Phase::SetupRequired => return Ok(()),
                 Phase::Stopping => return Err("Processing is still stopping.".to_owned()),
+                Phase::Maintenance => {
+                    return Err("An archive operation is still running.".to_owned());
+                }
             }
         }
         navigation::navigate_to_launcher(app);
 
-        if let Err(message) = ensure_fixed_port_available() {
-            self.set_error(message.clone());
-            return Err(message);
-        }
         let sidecar = match self.shared.identity.locate_and_verify() {
             Ok(path) => path,
             Err(message) => {
@@ -181,7 +332,35 @@ impl DesktopState {
                 return Err(message);
             }
         };
-        match prerequisites::inspect(&sidecar, &self.shared.paths) {
+        if let Some(message) = self.shared.startup_blocker.clone() {
+            self.set_error(message.clone());
+            return Err(message);
+        }
+        match backup::resume_pending_restore(app, self, &sidecar) {
+            Ok(true) => return Ok(()),
+            Ok(false) => {}
+            Err(message) => {
+                self.set_error(message.clone());
+                return Err(message);
+            }
+        }
+        let prepared = if let Some(legacy) = &self.shared.legacy {
+            legacy::prepare(app, self, &sidecar, legacy)
+                .and_then(|()| self.shared.paths.write_managed_config(self.shared.port))
+        } else {
+            ensure_port_available(self.shared.port)
+                .and_then(|()| upgrade::prepare(app, self, &sidecar))
+                .and_then(|()| self.shared.paths.write_managed_config(self.shared.port))
+        };
+        if let Err(message) = prepared {
+            self.set_error(message.clone());
+            return Err(message);
+        }
+        if let Err(message) = ensure_port_available(self.shared.port) {
+            self.set_error(message.clone());
+            return Err(message);
+        }
+        match prerequisites::inspect(&sidecar, &self.shared.paths, self.shared.port) {
             Ok(detail) => {
                 self.shared
                     .process
@@ -209,7 +388,7 @@ impl DesktopState {
             .arg(&nonce)
             .arg("--exit-on-stdin-close")
             .env_clear()
-            .envs(sidecar_environment(&self.shared.paths))
+            .envs(sidecar_environment(&self.shared.paths, self.shared.port))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -255,6 +434,7 @@ impl DesktopState {
                 &nonce,
                 pid,
                 &state.shared.identity,
+                state.shared.port,
                 STARTUP_TIMEOUT,
             ) {
                 Ok(()) => state.mark_ready(pid, &ready_app),
@@ -353,6 +533,84 @@ impl DesktopState {
         if process.pid != Some(pid) || process.phase != Phase::Starting {
             return;
         }
+        if let Some(pending) = self
+            .shared
+            .desktop_state
+            .snapshot()
+            .pending_operation
+            .filter(|pending| pending.kind == OperationKind::Restore)
+        {
+            process.phase = Phase::Stopping;
+            process.detail = Some("Validating the restored archive before commit…".to_owned());
+            process.stdin.take();
+            let control = process.control.clone();
+            drop(process);
+            if let Some(control) = control {
+                let _ = control.send(Control::Stop);
+            }
+            backup::finalize_restore_after_ready(app.clone(), self.clone(), pending);
+            return;
+        }
+        let pending_kind = self
+            .shared
+            .desktop_state
+            .snapshot()
+            .pending_operation
+            .map(|pending| pending.kind);
+        if pending_kind == Some(OperationKind::LegacyMigration) {
+            let preference = self.shared.desktop_state.snapshot().launch_at_login;
+            let login_result = if preference {
+                app.autolaunch().enable()
+            } else {
+                app.autolaunch().disable()
+            };
+            if login_result.is_err() {
+                process.phase = Phase::Error;
+                process.detail = Some(
+                    "The new launch-at-login setting could not be installed. Fix the application login-item permission, then retry or restore the migration backup."
+                        .to_owned(),
+                );
+                process.stdin.take();
+                let control = process.control.clone();
+                drop(process);
+                if let Some(control) = control {
+                    let _ = control.send(Control::Stop);
+                }
+                navigation::navigate_to_launcher(app);
+                return;
+            }
+        }
+        let target = BuildIdentity::from(&self.shared.identity);
+        if let Err(message) = self.shared.desktop_state.update(|state| {
+            state.last_ready_build = Some(target);
+            if state.pending_operation.as_ref().is_some_and(|pending| {
+                matches!(
+                    pending.kind,
+                    OperationKind::Upgrade | OperationKind::LegacyMigration
+                )
+            }) {
+                if state
+                    .pending_operation
+                    .as_ref()
+                    .is_some_and(|pending| pending.kind == OperationKind::LegacyMigration)
+                {
+                    state.legacy_migration_complete = true;
+                }
+                state.pending_operation = None;
+            }
+            Ok(())
+        }) {
+            process.phase = Phase::Error;
+            process.detail = Some(message);
+            process.stdin.take();
+            let control = process.control.clone();
+            drop(process);
+            if let Some(control) = control {
+                let _ = control.send(Control::Stop);
+            }
+            navigation::navigate_to_launcher(app);
+            return;
+        }
         process.phase = if setup_required {
             Phase::SetupRequired
         } else {
@@ -362,7 +620,7 @@ impl DesktopState {
         if setup_required {
             navigation::navigate_to_launcher(app);
         } else {
-            navigation::navigate_to_application(app);
+            navigation::navigate_to_application(app, &self.shared.origin);
         }
     }
 
@@ -383,7 +641,7 @@ impl DesktopState {
         navigation::navigate_to_launcher(app);
     }
 
-    fn set_error(&self, message: String) {
+    pub(crate) fn set_error(&self, message: String) {
         let mut process = self.shared.process.lock().expect("process state poisoned");
         process.phase = Phase::Error;
         process.detail = Some(message);
@@ -427,10 +685,10 @@ impl DesktopState {
     }
 }
 
-fn ensure_fixed_port_available() -> Result<(), String> {
-    TcpListener::bind(("127.0.0.1", 8000))
+fn ensure_port_available(port: u16) -> Result<(), String> {
+    TcpListener::bind(("127.0.0.1", port))
         .map(drop)
-        .map_err(|_| "Port 8000 is already in use. Stop the other service and retry; Suchi will not choose a different origin.".to_owned())
+        .map_err(|_| format!("Port {port} is already in use. Stop the other service and retry; Suchi will not choose a different origin."))
 }
 
 fn random_nonce() -> String {

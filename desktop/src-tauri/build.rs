@@ -30,6 +30,7 @@ fn main() {
             "reveal_setup_token",
             "open_setup",
             "open_application",
+            "rollback_operation",
             "set_launch_at_login",
         ]));
     tauri_build::try_build(attributes).expect("build Tauri desktop metadata");

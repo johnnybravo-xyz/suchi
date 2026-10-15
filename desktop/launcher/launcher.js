@@ -10,6 +10,7 @@ const actions = document.querySelector("#actions");
 const retry = document.querySelector("#retry");
 const openApp = document.querySelector("#open-app");
 const stop = document.querySelector("#stop");
+const rollback = document.querySelector("#rollback");
 
 let lastState = "";
 
@@ -21,10 +22,12 @@ function render(state) {
   details.hidden = !state.detail;
   details.textContent = state.detail || "";
   setup.hidden = !state.setupRequired;
-  actions.hidden = !(state.canRetry || state.canOpen || state.canStop);
+  actions.hidden = !(state.canRetry || state.canOpen || state.canStop || state.canRollback);
   retry.hidden = !state.canRetry;
   openApp.hidden = !state.canOpen;
   stop.hidden = !state.canStop;
+  rollback.hidden = !state.canRollback;
+  rollback.textContent = state.rollbackLabel || "Roll back";
 }
 
 async function refresh() {
@@ -39,6 +42,8 @@ async function refresh() {
       canRetry: false,
       canOpen: false,
       canStop: false,
+      canRollback: false,
+      rollbackLabel: null,
     });
   }
 }
@@ -51,6 +56,7 @@ document.querySelector("#open-setup").addEventListener("click", () => invoke("op
 retry.addEventListener("click", () => invoke("retry_processing"));
 openApp.addEventListener("click", () => invoke("open_application"));
 stop.addEventListener("click", () => invoke("stop_processing"));
+rollback.addEventListener("click", () => invoke("rollback_operation"));
 
 await refresh();
 window.setInterval(refresh, 500);

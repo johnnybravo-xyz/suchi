@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-rollback-operation"
+description = "Enables the rollback_operation command without any pre-configured scope."
+commands.allow = ["rollback_operation"]
+
+[[permission]]
+identifier = "deny-rollback-operation"
+description = "Denies the rollback_operation command without any pre-configured scope."
+commands.deny = ["rollback_operation"]
