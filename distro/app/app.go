@@ -18,6 +18,7 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/api"
 	"github.com/johnnybravo-xyz/suchi/core/approvals"
+	"github.com/johnnybravo-xyz/suchi/core/archivebackup"
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/automations"
@@ -141,6 +142,11 @@ func Run(ctx context.Context, opts Options) error {
 		return fmt.Errorf("main.datadir.mkdir: %w", err)
 	}
 	log.Info("main.datadir", "path", cfg.DataDir)
+
+	if err := archivebackup.CheckStartup(cfg.DataDir); err != nil {
+		log.Error("main.restore.recovery_required", "err", err.Error())
+		return fmt.Errorf("main.restore: %w", err)
+	}
 
 	d, err := db.Open(ctx, cfg.DataDir+"/suchi.db")
 	if err != nil {

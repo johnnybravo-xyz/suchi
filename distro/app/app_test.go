@@ -77,6 +77,20 @@ func TestRunRejectsInvalidDesktopProfileBeforeArchiveOpen(t *testing.T) {
 	}
 }
 
+func TestRunRejectsInterruptedRestoreBeforeArchiveOpen(t *testing.T) {
+	opts := options(t)
+	if err := os.WriteFile(filepath.Join(opts.Config.DataDir, ".suchi-restore-journal.json"), []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := app.Run(t.Context(), opts)
+	if err == nil || !strings.Contains(err.Error(), "restore recovery required") {
+		t.Fatalf("Run error = %v, want restore recovery requirement", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(opts.Config.DataDir, "suchi.db")); !os.IsNotExist(statErr) {
+		t.Fatalf("interrupted restore opened archive: %v", statErr)
+	}
+}
+
 func TestRunReportsReadinessAfterStartup(t *testing.T) {
 	opts := options(t)
 	stop := errors.New("readiness observed")
@@ -143,7 +157,11 @@ func TestDesktopProfileKeepsDormantIntegrationsInert(t *testing.T) {
 	}
 
 	desktop := seedOpts
-	desktop.Configure = nil
+	databaseReady := make(chan *db.DB, 1)
+	desktop.Configure = func(services *app.Services) error {
+		databaseReady <- services.DB
+		return nil
+	}
 	desktop.Config.DeploymentProfile = config.DeploymentProfileDesktopLocal
 	desktop.Config.UseLLMConnections = config.FeatureGateOff
 	desktop.Config.UseEmailIngestionFeatures = config.FeatureGateOff
@@ -159,11 +177,7 @@ func TestDesktopProfileKeepsDormantIntegrationsInert(t *testing.T) {
 		running.request(t, http.MethodGet, route, "", http.StatusNotFound)
 	}
 
-	database, err := db.Open(t.Context(), filepath.Join(desktop.Config.DataDir, "suchi.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = database.Close() })
+	database := <-databaseReady
 	until(t, func() bool {
 		var state string
 		return database.Read.QueryRowContext(t.Context(),

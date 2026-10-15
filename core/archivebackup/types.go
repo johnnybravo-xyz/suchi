@@ -67,3 +67,18 @@ type VerifyReport struct {
 	SHA256   string   `json:"sha256"`
 	Manifest Manifest `json:"manifest"`
 }
+
+type RestoreReport struct {
+	Version int    `json:"version"`
+	ID      string `json:"id"`
+	Phase   string `json:"phase"`
+	Backup  string `json:"backup"`
+}
+
+type RecoveryReport struct {
+	Version int    `json:"version"`
+	Pending bool   `json:"pending"`
+	ID      string `json:"id,omitempty"`
+	Phase   string `json:"phase,omitempty"`
+	Backup  string `json:"backup,omitempty"`
+}

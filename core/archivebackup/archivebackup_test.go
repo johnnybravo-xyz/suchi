@@ -118,7 +118,85 @@ func TestVerifyRejectsChangedPayloadAndUnknownEntry(t *testing.T) {
 	}
 }
 
+func TestRestoreRollbackAndCommit(t *testing.T) {
+	source, sourceBlob := backupFixtureWithLabel(t, "source")
+	backupPath := filepath.Join(t.TempDir(), "source.suchi-backup")
+	if _, err := archivebackup.Create(t.Context(), source, backupPath, false); err != nil {
+		t.Fatal(err)
+	}
+	target, targetBlob := backupFixtureWithLabel(t, "target")
+
+	restored, err := archivebackup.Restore(t.Context(), target, backupPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.ID == "" || restored.Phase != "activated" {
+		t.Fatalf("restore report = %+v", restored)
+	}
+	if err := archivebackup.CheckStartup(target.DataDir); err != nil {
+		t.Fatalf("activated restore blocked startup: %v", err)
+	}
+	assertArchiveLabel(t, target, "source", sourceBlob, targetBlob)
+	status, err := archivebackup.RecoveryStatus(target.DataDir)
+	if err != nil || !status.Pending || status.ID != restored.ID || status.Phase != "activated" {
+		t.Fatalf("recovery status = %+v, err=%v", status, err)
+	}
+	if _, err := archivebackup.RecoverRollback(t.Context(), target); err != nil {
+		t.Fatal(err)
+	}
+	assertArchiveLabel(t, target, "target", targetBlob, sourceBlob)
+
+	restored, err = archivebackup.Restore(t.Context(), target, backupPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertArchiveLabel(t, target, "source", sourceBlob, targetBlob)
+	if _, err := archivebackup.RecoverCommit(t.Context(), target, restored.ID); err != nil {
+		t.Fatal(err)
+	}
+	status, err = archivebackup.RecoveryStatus(target.DataDir)
+	if err != nil || status.Pending {
+		t.Fatalf("committed recovery status = %+v, err=%v", status, err)
+	}
+	assertArchiveLabel(t, target, "source", sourceBlob, targetBlob)
+}
+
+func TestRestoreRollsBackArchiveWhenConfigActivationFails(t *testing.T) {
+	source, _ := backupFixtureWithLabel(t, "source")
+	backupPath := filepath.Join(t.TempDir(), "source.suchi-backup")
+	if _, err := archivebackup.Create(t.Context(), source, backupPath, false); err != nil {
+		t.Fatal(err)
+	}
+	target, targetBlob := backupFixtureWithLabel(t, "target")
+	configBytes, err := os.ReadFile(target.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(target.ConfigPath); err != nil {
+		t.Fatal(err)
+	}
+	symlinkTarget := filepath.Join(t.TempDir(), "foreign-config.toml")
+	if err := os.WriteFile(symlinkTarget, configBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(symlinkTarget, target.ConfigPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := archivebackup.Restore(t.Context(), target, backupPath); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("restore error = %v, want config symlink rejection", err)
+	}
+	assertArchiveLabel(t, target, "target", targetBlob, "")
+	status, err := archivebackup.RecoveryStatus(target.DataDir)
+	if err != nil || status.Pending {
+		t.Fatalf("failed restore left recovery state: %+v, err=%v", status, err)
+	}
+}
+
 func backupFixture(t *testing.T) (archivebackup.Options, string) {
+	return backupFixtureWithLabel(t, "fixture")
+}
+
+func backupFixtureWithLabel(t *testing.T, label string) (archivebackup.Options, string) {
 	t.Helper()
 	root := t.TempDir()
 	dataDir := filepath.Join(root, "archive")
@@ -136,11 +214,14 @@ func backupFixture(t *testing.T) (archivebackup.Options, string) {
 	if err := db.Migrate(t.Context(), database, stable, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := database.ExecWrite(t.Context(), `INSERT INTO settings(key, value_json, updated_at) VALUES('backup-test-label', ?, 1)`, `"`+label+`"`); err != nil {
+		t.Fatal(err)
+	}
 	cas, err := blob.New(dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref, err := cas.Put(strings.NewReader("complete backup blob"))
+	ref, err := cas.Put(strings.NewReader("complete backup blob " + label))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,13 +237,50 @@ func backupFixture(t *testing.T) (archivebackup.Options, string) {
 		t.Fatal(err)
 	}
 	configPath := filepath.Join(configDir, "local-install.toml")
-	if err := os.WriteFile(configPath, []byte("public_url = \"http://127.0.0.1:8080\"\n"), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte("# "+label+"\npublic_url = \"http://127.0.0.1:8080\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return archivebackup.Options{
 		DataDir: dataDir, KeyPath: keyPath, ConfigPath: configPath,
 		BuildVersion: "test-version", BuildRevision: "test-revision",
 	}, ref.SHA256
+}
+
+func assertArchiveLabel(t *testing.T, options archivebackup.Options, label, presentBlob, absentBlob string) {
+	t.Helper()
+	database, err := db.Open(t.Context(), filepath.Join(options.DataDir, "suchi.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value string
+	if err := database.Read.QueryRow(`SELECT value_json FROM settings WHERE key='backup-test-label'`).Scan(&value); err != nil {
+		_ = database.Close()
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if value != `"`+label+`"` {
+		t.Fatalf("archive label = %s, want %q", value, label)
+	}
+	configBytes, err := os.ReadFile(options.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(configBytes), "# "+label) {
+		t.Fatalf("config = %q, want label %q", configBytes, label)
+	}
+	blobPath := func(hash string) string {
+		return filepath.Join(options.DataDir, "blobs", "sha256", hash[:2], hash[2:4], hash[4:6], hash)
+	}
+	if _, err := os.Stat(blobPath(presentBlob)); err != nil {
+		t.Fatalf("present blob %s: %v", presentBlob, err)
+	}
+	if absentBlob != "" && absentBlob != presentBlob {
+		if _, err := os.Stat(blobPath(absentBlob)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("old blob %s remains: %v", absentBlob, err)
+		}
+	}
 }
 
 func rewriteBackup(t *testing.T, sourcePath, targetPath string, changeBlob, addUnknown bool) {
