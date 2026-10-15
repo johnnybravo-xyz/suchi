@@ -66,67 +66,36 @@ func PrepareStable(ctx context.Context, d *DB, stable, compatibility []Migration
 	if err != nil {
 		return err
 	}
-	state, err := inspectSchema(ctx, d.Write)
-	if err != nil {
-		return fmt.Errorf("inspect core schema: %w", err)
-	}
-
-	if state.version == 0 && state.objectCount == 0 && !state.lineagePresent {
+	report := inspectCompatibility(ctx, d.Write)
+	switch report.Status {
+	case CompatibilityEmpty:
 		if err := Migrate(ctx, d, stable, log); err != nil {
 			return err
 		}
 		return verifyStableSchema(ctx, d.Write)
-	}
-	if state.version == StableSchemaVersion && state.lineageValid && state.lineage == stableLineage && state.fingerprint == stableFingerprint {
+	case CompatibilityCurrent:
 		return nil
+	case CompatibilityCorrupt:
+		return fmt.Errorf("corrupt core schema: %s", report.Detail)
+	case CompatibilityUnsupported:
+		return errors.New(report.Detail)
+	case CompatibilitySupportedUpgrade:
+		// Continue below.
+	default:
+		return fmt.Errorf("unknown compatibility status %q", report.Status)
 	}
-	if state.version == 1 && state.lineageValid && state.lineage == stableLineage && state.fingerprint == stableV1Fingerprint {
-		if err := checkIntegrity(ctx, d.Write); err != nil {
-			return fmt.Errorf("validate stable schema 1 before upgrade: %w", err)
-		}
-		if err := checkForeignKeys(ctx, d.Write); err != nil {
-			return fmt.Errorf("validate stable schema 1 before upgrade: %w", err)
-		}
-		if err := Migrate(ctx, d, stable, log); err != nil {
-			return err
-		}
-		return verifyStableSchema(ctx, d.Write)
-	}
-	if state.version == 2 && state.lineageValid && state.lineage == stableLineage && state.fingerprint == stableV2Fingerprint {
-		if err := checkIntegrity(ctx, d.Write); err != nil {
-			return fmt.Errorf("validate stable schema 2 before upgrade: %w", err)
-		}
-		if err := checkForeignKeys(ctx, d.Write); err != nil {
-			return fmt.Errorf("validate stable schema 2 before upgrade: %w", err)
-		}
-		if err := Migrate(ctx, d, stable, log); err != nil {
-			return err
-		}
-		return verifyStableSchema(ctx, d.Write)
-	}
-	if state.version == 3 && state.lineageValid && state.lineage == stableLineage && state.fingerprint == stableV3Fingerprint {
-		if err := checkIntegrity(ctx, d.Write); err != nil {
-			return fmt.Errorf("validate stable schema 3 before upgrade: %w", err)
-		}
-		if err := checkForeignKeys(ctx, d.Write); err != nil {
-			return fmt.Errorf("validate stable schema 3 before upgrade: %w", err)
-		}
+
+	state := report.state
+	if isStableUpgrade(state) {
 		if err := Migrate(ctx, d, stable, log); err != nil {
 			return err
 		}
 		return verifyStableSchema(ctx, d.Write)
 	}
 
-	profile, ok := classifyBeta(state)
-	if !ok {
-		lineage := "absent"
-		if state.lineagePresent {
-			lineage = state.lineage
-			if !state.lineageValid {
-				lineage = "invalid"
-			}
-		}
-		return fmt.Errorf("unsupported core schema: user_version=%d lineage=%q fingerprint=%s", state.version, lineage, state.fingerprint)
+	profile := report.profile
+	if profile.name == "" {
+		return errors.New("supported schema has no migration profile")
 	}
 	if profile.requiresEmptyWebhooks {
 		var webhooks int
@@ -136,12 +105,6 @@ func PrepareStable(ctx context.Context, d *DB, stable, compatibility []Migration
 		if webhooks != 0 {
 			return fmt.Errorf("validate %s before adoption: legacy agent webhooks contain %d rows; refusing to discard them", profile.name, webhooks)
 		}
-	}
-	if err := checkIntegrity(ctx, d.Write); err != nil {
-		return fmt.Errorf("validate %s before adoption: %w", profile.name, err)
-	}
-	if err := checkForeignKeys(ctx, d.Write); err != nil {
-		return fmt.Errorf("validate %s before adoption: %w", profile.name, err)
 	}
 
 	snapshot, err := createAdoptionSnapshot(ctx, d)

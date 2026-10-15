@@ -13,6 +13,12 @@ import (
 	"time"
 )
 
+var migrationComponentPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
+
+func validMigrationComponent(component string) bool {
+	return component != "core" && migrationComponentPattern.MatchString(component)
+}
+
 // MigrationSet is a compiled extension's complete, ordered migration history.
 // Component is a stable lowercase identifier, distinct from the reserved core.
 // SQL is trusted code: it must not control transactions, user_version, or the
@@ -23,7 +29,7 @@ type MigrationSet struct {
 }
 
 func (set MigrationSet) validate() error {
-	if !regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`).MatchString(set.Component) || set.Component == "core" {
+	if !validMigrationComponent(set.Component) {
 		return fmt.Errorf("invalid migration component %q: use 1-64 lowercase letters, digits, '_' or '-', starting with a letter; core is reserved", set.Component)
 	}
 	if len(set.Migrations) == 0 {
