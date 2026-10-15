@@ -50,6 +50,9 @@ func main() {
 	if command == "taxonomy" && len(os.Args) > 2 && os.Args[2] == "validate" {
 		os.Exit(runTaxonomyValidate(os.Args[3:]))
 	}
+	if command == "prerequisites" {
+		os.Exit(runPrerequisites(os.Args[2:]))
+	}
 	if command != "version" && command != "help" && command != "-h" && command != "--help" &&
 		!commandHelpRequested(os.Args[2:]) {
 		var err error
@@ -126,6 +129,7 @@ func usage() {
 Usage:
   suchi serve [--setup-token-file PATH] [--ready-file PATH --ready-nonce NONCE] [--exit-on-stdin-close]
                                   run the HTTP server
+  suchi prerequisites --json     inspect local parser prerequisites without loading server configuration
   suchi healthcheck               probe /readyz on LISTEN_ADDR (for Docker HEALTHCHECK)
   suchi import [flags]            point --from at your existing DMS's export bundle
   suchi gc [flags]                reclaim unreferenced blobs (dry-run default)
