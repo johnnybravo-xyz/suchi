@@ -32,7 +32,7 @@ impl SidecarIdentity {
 
     fn validate(&self) -> Result<(), String> {
         if self.schema_version != 1
-            || self.target != env!("SUCHI_DESKTOP_TARGET")
+            || !Self::target_matches(&self.target)
             || self.executable_type != "suchi-sidecar"
             || self.version.trim().is_empty()
             || self.revision.trim().is_empty()
@@ -43,6 +43,12 @@ impl SidecarIdentity {
             return Err("The bundled server identity does not match this application.".to_owned());
         }
         Ok(())
+    }
+
+    fn target_matches(target: &str) -> bool {
+        target == env!("SUCHI_DESKTOP_TARGET")
+            || (target == "universal-apple-darwin"
+                && env!("SUCHI_DESKTOP_TARGET").ends_with("-apple-darwin"))
     }
 
     pub fn locate_and_verify(&self) -> Result<PathBuf, String> {

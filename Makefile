@@ -1,4 +1,4 @@
-.PHONY: help build test vet lint fmt fmt-check license-check tidy check security-check run clean smoke smoke-ingest smoke-mail install-hooks ui ui-dev ui-check ui-verify ui-tracked-check ui-e2e ui-clean desktop-sidecar desktop-check docs-dev docs-metadata-check docs-check bench-check release
+.PHONY: help build test vet lint fmt fmt-check license-check tidy check security-check run clean smoke smoke-ingest smoke-mail install-hooks ui ui-dev ui-check ui-verify ui-tracked-check ui-e2e ui-clean desktop-sidecar desktop-dev desktop-check desktop-security desktop-notices desktop-sbom desktop-build desktop-smoke docs-dev docs-metadata-check docs-check bench-check release
 
 .DEFAULT_GOAL := help
 
@@ -7,12 +7,18 @@ MODULES := . plugin-api hack/emlfixtures hack/bench/tools/sampler hack/bench/too
 TEST_FLAGS ?= -timeout 180s
 GO_FILES = find . \( -name .git -o -name node_modules -o -name vendor \) -prune -o -type f -name '*.go' -print0
 UI_SRC_FILES = find ui/src -type f \( -name '*.js' -o -name '*.svelte' -o -name '*.css' \) -print0
+RUST_FILES = find desktop -type f -name '*.rs' -not -path '*/target/*' -print0
 STATICCHECK_VERSION := v0.8.1
 STATICCHECK_TOOLS_VERSION := v0.50.0
 GOVULNCHECK_VERSION := v1.8.0
 GITLEAKS_VERSION := v8.30.1
 MINT_VERSION := 4.2.994
 GITHUB_REMOTE ?= gh
+CARGO_DENY_VERSION := 0.20.2
+CARGO_AUDIT_VERSION := 0.22.2
+CARGO_ABOUT_VERSION := 0.9.2
+CARGO_CYCLONEDX_VERSION := 0.5.9
+DESKTOP_RUST_VERSION := 1.99.0
 GITHUB_REPO ?= johnnybravo-xyz/suchi
 
 help:
@@ -40,7 +46,13 @@ help:
 	  '  ui-e2e          Run the Playwright browser suite.' \
 	  '  ui-clean        Remove UI dependencies and generated assets.' \
 	  '  desktop-sidecar Build the embedded-UI sidecar and identity manifest.' \
-	  '  desktop-check   Check and test the pinned Tauri desktop launcher.' \
+	  '  desktop-dev     Run the native shell against its bundled sidecar.' \
+	  '  desktop-check   Format, lint, and test the pinned Tauri desktop launcher.' \
+	  '  desktop-security Audit Rust licenses, sources, bans, and advisories.' \
+	  '  desktop-notices Regenerate Rust third-party notices.' \
+	  '  desktop-sbom    Generate Rust and packaged-binary SBOM inputs.' \
+	  '  desktop-build   Build native macOS app/DMG or Linux deb/rpm packages.' \
+	  '  desktop-smoke   Inspect and launch the built native package.' \
 	  '  docs-dev        Run the Mintlify documentation server.' \
 	  '  docs-check      Check documentation for broken links.' \
 	  '  docs-metadata-check Check documented versions and image channels.' \
@@ -89,6 +101,8 @@ license-check:
 	  test -z "$$missing" || { printf '%s\n' "$$missing" '' 'Add: // SPDX-License-Identifier: AGPL-3.0-or-later' >&2; exit 1; }; \
 	  missing="$$( $(UI_SRC_FILES) | xargs -0 grep -L 'SPDX-License-Identifier' || true )"; \
 	  test -z "$$missing" || { printf '%s\n' "$$missing" '' 'Add an SPDX-License-Identifier header.' >&2; exit 1; }; \
+	  missing="$$( $(RUST_FILES) | xargs -0 grep -L 'SPDX-License-Identifier' || true )"; \
+	  test -z "$$missing" || { printf '%s\n' "$$missing" '' 'Add an SPDX-License-Identifier header.' >&2; exit 1; }; \
 	  wrong="$$( grep -rl 'SPDX-License-Identifier: AGPL' --include='*.go' plugin-api || true )"; \
 	  test -z "$$wrong" || { printf '%s\n' "$$wrong" '' 'plugin-api/ must be Apache-2.0, or third-party plugins inherit AGPL.' >&2; exit 1; }; \
 	  wrong="$$( grep -rl 'SPDX-License-Identifier: Apache' --include='*.go' core distro plugins hack || true )"; \
@@ -99,7 +113,7 @@ check: fmt-check license-check ui-check vet test lint
 
 # Release-time advisory and secret scans. Kept separate from `check` because they
 # query external databases and may install pinned scanners.
-security-check:
+security-check: desktop-security
 	@tool="$$(command -v govulncheck || printf '%s/bin/govulncheck' "$$(go env GOPATH)")"; \
 	  actual=""; go_version="$$(go env GOVERSION)"; \
 	  test ! -x "$$tool" || actual="$$($$tool -version 2>/dev/null || true)"; \
@@ -219,35 +233,114 @@ ui-e2e:
 ui-clean:
 	rm -rf core/ui/spa/dist ui/dist ui/node_modules
 
-# Tauri requires external binaries to carry the active Rust target suffix at
-# build time. The identity manifest is embedded in the launcher and checked
-# against the installed, suffix-free sidecar before every spawn.
+# Tauri requires external binaries to carry the Rust target suffix at build
+# time. It strips that suffix and exposes `suchi-sidecar` inside the package.
 desktop-sidecar: ui
 	@set -eu; \
-	  target="$$(rustup run 1.99.0 rustc -vV | awk '/^host:/ { print $$2; exit }')"; \
-	  suffix=''; case "$$target" in *windows*) suffix='.exe';; esac; \
+	  target="$${DESKTOP_TARGET:-$$(rustup run $(DESKTOP_RUST_VERSION) rustc -vV | awk '/^host:/ { print $$2; exit }')}"; \
 	  version="$${SUCHI_DESKTOP_VERSION:-v0.3.0-dev}"; \
 	  revision="$${SUCHI_DESKTOP_REVISION:-$$(git rev-parse --short=12 HEAD)}"; \
 	  if test -z "$${SUCHI_DESKTOP_REVISION:-}" && ! git diff --quiet -- . ':!core/ui/spa/dist'; then revision="$$revision.dirty"; fi; \
-	  binary="desktop/src-tauri/binaries/suchi-sidecar-$$target$$suffix"; \
+	  binary="desktop/src-tauri/binaries/suchi-sidecar-$$target"; \
 	  mkdir -p desktop/src-tauri/binaries desktop/src-tauri/generated; \
-	  CGO_ENABLED=0 go build -tags=embedded_ui -trimpath \
-	    -ldflags="-s -w -X main.version=$$version -X main.revision=$$revision" \
-	    -o "$$binary" ./distro/cmd/suchi; \
+	  ldflags="-s -w -X main.version=$$version -X main.revision=$$revision"; \
+	  case "$$target" in \
+	    aarch64-apple-darwin) goos=darwin; goarch=arm64 ;; \
+	    x86_64-apple-darwin) goos=darwin; goarch=amd64 ;; \
+	    aarch64-unknown-linux-gnu) goos=linux; goarch=arm64 ;; \
+	    x86_64-unknown-linux-gnu) goos=linux; goarch=amd64 ;; \
+	    universal-apple-darwin) \
+	      command -v lipo >/dev/null || { echo "lipo is required for a universal macOS sidecar" >&2; exit 1; }; \
+	      arm64="desktop/src-tauri/binaries/suchi-sidecar-aarch64-apple-darwin"; \
+	      amd64="desktop/src-tauri/binaries/suchi-sidecar-x86_64-apple-darwin"; \
+	      CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -tags=embedded_ui -trimpath -ldflags="$$ldflags" -o "$$arm64" ./distro/cmd/suchi; \
+	      CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -tags=embedded_ui -trimpath -ldflags="$$ldflags" -o "$$amd64" ./distro/cmd/suchi; \
+	      lipo -create -output "$$binary" "$$arm64" "$$amd64"; \
+	      goos=""; goarch="" ;; \
+	    *) echo "unsupported desktop target: $$target" >&2; exit 1 ;; \
+	  esac; \
+	  if test -n "$$goos"; then \
+	    CGO_ENABLED=0 GOOS="$$goos" GOARCH="$$goarch" go build -tags=embedded_ui -trimpath -ldflags="$$ldflags" -o "$$binary" ./distro/cmd/suchi; \
+	  fi; \
 	  sha="$$(shasum -a 256 "$$binary" | cut -d ' ' -f 1)"; \
-	  printf '{\n  "schema_version": 1,\n  "version": "%s",\n  "revision": "%s",\n  "target": "%s",\n  "executable_type": "suchi-sidecar",\n  "filename": "suchi-sidecar%s",\n  "sha256": "%s"\n}\n' \
-	    "$$version" "$$revision" "$$target" "$$suffix" "$$sha" \
+	  printf '{\n  "schema_version": 1,\n  "version": "%s",\n  "revision": "%s",\n  "target": "%s",\n  "executable_type": "suchi-sidecar",\n  "filename": "suchi-sidecar",\n  "sha256": "%s"\n}\n' \
+	    "$$version" "$$revision" "$$target" "$$sha" \
 	    > desktop/src-tauri/generated/sidecar-identity.json
+
+desktop-dev: desktop-sidecar
+	cd desktop && bun tauri dev
 
 desktop-check: desktop-sidecar
 	@cd desktop && bun install --frozen-lockfile
-	@cd desktop/src-tauri && toolchain_bin="$$(dirname "$$(rustup which --toolchain 1.99.0 rustfmt)")"; \
+	@cd desktop/src-tauri && toolchain_bin="$$(dirname "$$(rustup which --toolchain $(DESKTOP_RUST_VERSION) rustfmt)")"; \
 	  if test "$$(uname -s)" = Darwin; then \
 	    export CC="$$(xcrun --find clang)" SDKROOT="$$(xcrun --show-sdk-path)"; \
 	    export CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER="$$CC" CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER="$$CC"; \
 	  fi; \
-	  PATH="$$toolchain_bin:$$PATH" rustup run 1.99.0 cargo fmt --check && \
-	  PATH="$$toolchain_bin:$$PATH" rustup run 1.99.0 cargo test --all-targets
+	  PATH="$$toolchain_bin:$$PATH" rustup run $(DESKTOP_RUST_VERSION) cargo fmt --check && \
+	  PATH="$$toolchain_bin:$$PATH" rustup run $(DESKTOP_RUST_VERSION) cargo clippy --all-targets --all-features -- -D warnings && \
+	  PATH="$$toolchain_bin:$$PATH" rustup run $(DESKTOP_RUST_VERSION) cargo test --all-targets
+
+desktop-notices:
+	@set -eu; \
+	  export PATH="$$HOME/.cargo/bin:$$(dirname "$$(rustup which --toolchain $(DESKTOP_RUST_VERSION) rustfmt)"):$${PATH}"; \
+	  actual="$$(cargo about --version 2>/dev/null || true)"; \
+	  case "$$actual" in *"$(CARGO_ABOUT_VERSION)"*) ;; *) cargo install --locked --version $(CARGO_ABOUT_VERSION) cargo-about ;; esac; \
+	  cd desktop/src-tauri; \
+	  cargo about generate about.hbs -o ../THIRD-PARTY-NOTICES.html
+
+# cargo-audit's default exit policy fails vulnerabilities. Its warning-only
+# RUSTSEC-2024-0370 and RUSTSEC-2024-0429 records are transitive dependencies
+# of the current Tauri Linux stack; `--deny warnings` would make that supported
+# upstream stack unbuildable without reducing exposure in Suchi.
+desktop-security:
+	@set -eu; \
+	  export PATH="$$HOME/.cargo/bin:$$(dirname "$$(rustup which --toolchain $(DESKTOP_RUST_VERSION) rustfmt)"):$${PATH}"; \
+	  actual="$$(cargo deny --version 2>/dev/null || true)"; \
+	  case "$$actual" in *"$(CARGO_DENY_VERSION)"*) ;; *) cargo install --locked --version $(CARGO_DENY_VERSION) cargo-deny ;; esac; \
+	  actual="$$(cargo audit --version 2>/dev/null || true)"; \
+	  case "$$actual" in *"$(CARGO_AUDIT_VERSION)"*) ;; *) cargo install --locked --version $(CARGO_AUDIT_VERSION) cargo-audit ;; esac; \
+	  actual="$$(cargo about --version 2>/dev/null || true)"; \
+	  case "$$actual" in *"$(CARGO_ABOUT_VERSION)"*) ;; *) cargo install --locked --version $(CARGO_ABOUT_VERSION) cargo-about ;; esac; \
+	  cd desktop/src-tauri; \
+	  cargo deny check licenses bans sources; \
+	  cargo audit; \
+	  tmp="$$(mktemp)"; trap 'rm -f "$$tmp"' EXIT; \
+	  cargo about generate about.hbs -o "$$tmp"; \
+	  cmp "$$tmp" ../THIRD-PARTY-NOTICES.html
+
+desktop-sbom:
+	@set -eu; \
+	  export PATH="$$HOME/.cargo/bin:$$(dirname "$$(rustup which --toolchain $(DESKTOP_RUST_VERSION) rustfmt)"):$${PATH}"; \
+	  actual="$$(cargo cyclonedx --version 2>/dev/null || true)"; \
+	  case "$$actual" in *"$(CARGO_CYCLONEDX_VERSION)"*) ;; *) cargo install --locked --version $(CARGO_CYCLONEDX_VERSION) cargo-cyclonedx ;; esac; \
+	  mkdir -p dist/sbom; \
+	  cd desktop/src-tauri; \
+	  cargo cyclonedx --format json --override-filename suchi-desktop.cdx; \
+	  mv suchi-desktop.cdx.json ../../dist/sbom/suchi-desktop.cdx.json
+
+desktop-build:
+	@set -eu; \
+	  export PATH="$$(dirname "$$(rustup which --toolchain $(DESKTOP_RUST_VERSION) rustfmt)"):$${PATH}"; \
+	  host="$$(rustup run $(DESKTOP_RUST_VERSION) rustc -vV | awk '/^host:/ { print $$2; exit }')"; \
+	  if test "$$(uname -s)" = Darwin; then \
+	    export CC="$$(xcrun --find clang)" SDKROOT="$$(xcrun --show-sdk-path)"; \
+	    export DYLD_LIBRARY_PATH="$$(rustup run $(DESKTOP_RUST_VERSION) rustc --print sysroot)/lib:$${DYLD_LIBRARY_PATH:-}"; \
+	    export CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER="$$CC" CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER="$$CC"; \
+	  fi; \
+	  target="$${DESKTOP_TARGET:-$$host}"; \
+	  case "$$target" in \
+	    *-apple-darwin) target=universal-apple-darwin; bundles=app,dmg; \
+	      rustup target add --toolchain $(DESKTOP_RUST_VERSION) aarch64-apple-darwin x86_64-apple-darwin ;; \
+	    *-unknown-linux-gnu) bundles=deb,rpm; rustup target add --toolchain $(DESKTOP_RUST_VERSION) "$$target" ;; \
+	    *) echo "native desktop packages support macOS and glibc Linux only" >&2; exit 1 ;; \
+	  esac; \
+	  $(MAKE) desktop-sidecar DESKTOP_TARGET="$$target"; \
+	  cd desktop; \
+	  bun tauri build --target "$$target" --bundles "$$bundles"
+
+desktop-smoke: desktop-build
+	hack/smoke-desktop-package.sh
 
 docs-dev:
 	@cd docs && BUN_TMPDIR=$${BUN_TMPDIR:-/tmp} bunx mint@$(MINT_VERSION) dev

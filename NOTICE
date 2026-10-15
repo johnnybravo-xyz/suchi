@@ -11,8 +11,9 @@ under the Apache License 2.0, with its own LICENSE file, so that third-party
 plugins need not be AGPL. Its source files carry Apache-2.0 SPDX headers.
 
 This file records the third-party material distributed with Suchi and the terms
-that apply to it. Every dependency below is permissively licensed; no GPL or
-AGPL code enters Suchi through its dependency tree.
+that apply to it. No GPL or AGPL code enters Suchi through its dependency tree.
+The Tauri desktop shell has narrowly listed, unmodified MPL-2.0 dependencies;
+MPL applies only to those third-party files and does not relicense Suchi.
 
 
 ================================================================================
@@ -130,6 +131,38 @@ Notable direct dependencies and their licenses:
   golang.org/x/crypto, x/image, x/oauth2                       BSD-3-Clause
   gopkg.in/yaml.v3                                             MIT / Apache-2.0
   modernc.org/sqlite                                           BSD-3-Clause
+
+
+================================================================================
+Tauri desktop dependencies
+================================================================================
+
+Native desktop packages embed the Tauri and Wry Rust dependency graph recorded
+in desktop/src-tauri/Cargo.lock. Generated package-by-package copyright,
+upstream, and complete license text is distributed as
+desktop/THIRD-PARTY-NOTICES.html and inside each native package. The checked
+license policy is desktop/src-tauri/deny.toml.
+
+Direct desktop dependencies:
+
+  https://github.com/tauri-apps/tauri                          Apache-2.0 / MIT
+  https://github.com/tauri-apps/plugins-workspace              Apache-2.0 / MIT
+  https://github.com/dtolnay/semver                            Apache-2.0 / MIT
+  https://github.com/serde-rs/serde                            Apache-2.0 / MIT
+  https://github.com/RustCrypto/hashes                         Apache-2.0 / MIT
+
+The Tauri/WebKit graph requires these unmodified MPL-2.0 crates:
+
+  cssparser
+  cssparser-macros
+  dtoa-short
+  option-ext
+  selectors
+
+Their source is available from https://crates.io/ and the upstream repository
+linked for each crate in THIRD-PARTY-NOTICES.html. Suchi does not modify or
+vendor their source. The Mozilla Public License 2.0 is file-level copyleft: it
+governs those third-party files, not Suchi files that merely use the crates.
 
 
 ================================================================================

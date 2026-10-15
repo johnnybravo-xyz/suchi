@@ -17,9 +17,23 @@
   "bundle": {
     "active": true,
     "category": "Productivity",
+    "copyright": "Copyright (c) 2026 Ritesh Shrivastav",
+    "homepage": "https://suchi.page",
     "shortDescription": "Local document archive",
     "longDescription": "Capture, file, retrieve, and review documents in a private local archive.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
     "externalBin": ["binaries/suchi-sidecar"],
+    "resources": {
+      "../../LICENSE": "LICENSE",
+      "../../NOTICE": "NOTICE",
+      "../THIRD-PARTY-NOTICES.html": "THIRD-PARTY-NOTICES.html"
+    },
     "targets": "all"
   }
 }

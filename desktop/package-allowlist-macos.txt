@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+^Contents/Info\.plist$
+^Contents/MacOS/suchi-desktop$
+^Contents/MacOS/suchi-sidecar$
+^Contents/Resources/LICENSE$
+^Contents/Resources/NOTICE$
+^Contents/Resources/THIRD-PARTY-NOTICES\.html$
+^Contents/Resources/icon\.icns$

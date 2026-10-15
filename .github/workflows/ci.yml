@@ -87,10 +87,14 @@ jobs:
           set -e
           targets="linux/arm64 darwin/amd64 darwin/arm64 windows/amd64"
           for t in $targets; do
-            export GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0
+            GOOS=${t%/*}
+            GOARCH=${t#*/}
+            export GOOS GOARCH
+            export CGO_ENABLED=0
             echo "::group::$GOOS/$GOARCH"
-            go build -trimpath -ldflags="-s -w" -o /tmp/suchi-$GOOS-$GOARCH ./distro/cmd/suchi
-            ls -la /tmp/suchi-$GOOS-$GOARCH
+            output="/tmp/suchi-$GOOS-$GOARCH"
+            go build -trimpath -ldflags="-s -w" -o "$output" ./distro/cmd/suchi
+            ls -la "$output"
             echo "::endgroup::"
           done
 
@@ -124,6 +128,30 @@ jobs:
         working-directory: ui
       - run: bun run e2e
         working-directory: ui
+
+  desktop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.target_ref }}
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.work
+          cache-dependency-path: '**/go.sum'
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.1
+      - name: install native desktop toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libwebkit2gtk-4.1-dev
+          rustup toolchain install 1.99.0 --profile minimal --component clippy,rustfmt
+      - run: make desktop-check
 
   lint:
     runs-on: ubuntu-latest

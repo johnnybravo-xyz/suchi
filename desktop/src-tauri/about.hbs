@@ -1,0 +1,28 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Suchi desktop third-party notices</title>
+  <style>
+    body { font-family: sans-serif; line-height: 1.45; margin: 2rem auto; max-width: 72rem; padding: 0 1rem; }
+    pre { background: #f5f5f3; border: 1px solid #ddd; overflow: auto; padding: 1rem; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>Suchi desktop third-party notices</h1>
+  <p>This file is generated from <code>desktop/src-tauri/Cargo.lock</code>. The Suchi license is distributed separately.</p>
+  {{#each licenses}}
+    <section>
+      <h2>{{name}}</h2>
+      <p>Used by:</p>
+      <ul>
+        {{#each used_by}}
+          <li><a href="{{#if crate.repository}}{{crate.repository}}{{else}}https://crates.io/crates/{{crate.name}}{{/if}}">{{crate.name}} {{crate.version}}</a></li>
+        {{/each}}
+      </ul>
+      <pre>{{text}}</pre>
+    </section>
+  {{/each}}
+</body>
+</html>

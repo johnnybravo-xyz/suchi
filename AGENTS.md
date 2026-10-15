@@ -57,10 +57,14 @@ Optional integrations must preserve useful local operation.
   requires it be carried. A vendored asset served to users needs the notice in
   the served file as well, not only in `NOTICE` — see the banner at the top of
   `core/ui/assets/vendor/oat.min.css`.
-- Reject GPL and AGPL dependencies. The tree is permissive-only (MIT, BSD,
-  Apache-2.0) and that is what keeps the commercial license possible. Bundle a
-  copyleft tool only as a separate process, never linked, and record the
-  election and the process boundary in `NOTICE` as msgconvert does.
+- Reject GPL and AGPL dependencies. Dependencies must be permissive except for
+  unmodified MPL-2.0 Rust crates required by the Tauri/WebKit desktop stack.
+  MPL applies only to those third-party files and does not relicense Suchi;
+  list each exception in `desktop/src-tauri/deny.toml`, and ship its source URL
+  and license text in the generated desktop notices. Never place Suchi source
+  under MPL. Bundle any other copyleft tool only as a separate process, never
+  linked, and record the election and process boundary in `NOTICE` as
+  msgconvert does.
 - The five built-in filing trees in `core/jd/presets/*.toml` are CC0-1.0 and
   already published.
 - Johnny.Decimal is a trademark of Coruscade Pty Ltd and its documentation is
