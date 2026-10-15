@@ -58,5 +58,5 @@ openApp.addEventListener("click", () => invoke("open_application"));
 stop.addEventListener("click", () => invoke("stop_processing"));
 rollback.addEventListener("click", () => invoke("rollback_operation"));
 
-await refresh();
+void refresh();
 window.setInterval(refresh, 500);

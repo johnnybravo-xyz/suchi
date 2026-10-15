@@ -272,6 +272,7 @@ desktop-dev: desktop-sidecar
 
 desktop-check: desktop-sidecar
 	@cd desktop && bun install --frozen-lockfile
+	@cd desktop && bun test launcher
 	@cd desktop/src-tauri && toolchain_bin="$$(dirname "$$(rustup which --toolchain $(DESKTOP_RUST_VERSION) rustfmt)")"; \
 	  if test "$$(uname -s)" = Darwin; then \
 	    export CC="$$(xcrun --find clang)" SDKROOT="$$(xcrun --show-sdk-path)"; \
