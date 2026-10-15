@@ -20,6 +20,8 @@ Notable user-visible changes to Suchi are recorded here.
   app reports optional local parsers instead of downloading them.
 - Archive ownership is exclusive across servers and offline backup operations;
   schema compatibility is checked before startup can mutate an archive.
+- PDF previews now use a bundled offline renderer with page and zoom controls,
+  including in native desktop WebViews without a browser PDF plugin.
 
 ## [0.3.0] - 2026-10-14
 
