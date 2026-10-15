@@ -16,7 +16,7 @@ func availableBytes(path string) (uint64, error) {
 	if err := unix.Statfs(path, &stats); err != nil {
 		return 0, err
 	}
-	if stats.Bsize <= 0 || stats.Bavail < 0 {
+	if stats.Bsize <= 0 {
 		return 0, errors.New("filesystem returned invalid free-space values")
 	}
 	blockSize := uint64(stats.Bsize)
