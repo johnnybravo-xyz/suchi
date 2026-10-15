@@ -15,6 +15,7 @@
   import TypeaheadPicker from '../lib/TypeaheadPicker.svelte'
   import DocumentUnlockStatus from '../lib/DocumentUnlockStatus.svelte'
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
+  import PdfPreview from '../lib/PdfPreview.svelte'
   import { copyText } from '../lib/clipboard.js'
   import LinkQR from '../lib/LinkQR.svelte'
   import DocumentLinkDialog from '../lib/DocumentLinkDialog.svelte'
@@ -188,9 +189,9 @@
   const availableDocumentLinkFields = $derived(documentLinkFields.filter(field => !documentLinkValue(field.id)?.value))
   const selectedNewReferenceField = $derived(documentLinkFields.find(field => Number(field.id) === Number(newReferenceFieldID)))
   const linkedDocumentCount = $derived(backlinks.count + outgoingDocumentLinkFields.length)
-  // Inline-previewable formats: archive_blob is always PDF, browsers render
-  // common media natively, and the server turns stored email bodies into a
-  // sandboxed HTML preview. Other formats swap the iframe for a download panel.
+  // Archive blobs and uploaded PDFs use the bundled renderer. Common media
+  // renders natively, and the server turns stored email bodies into sandboxed
+  // HTML. Other formats swap the preview for a download panel.
   const previewable = $derived.by(() => {
     if (!doc) return false
     if (doc.archive_blob) return true
@@ -203,6 +204,10 @@
     if (m === 'text/plain' || m === 'text/html' || m === 'text/csv' || m === 'text/markdown') return true
     return false
   })
+  const pdfPreviewable = $derived(Boolean(doc && (
+    doc.archive_blob ||
+    (doc.mime_type || '').toLowerCase().split(';')[0].trim() === 'application/pdf'
+  )))
   const areaGroups = $derived.by(() => {
     const m = new Map()
     for (const c of jdCategories) {
@@ -1394,6 +1399,12 @@
           <span class="pill danger">{sensitivityLabel(doc.sensitivity)}</span>
           <button class="btn" onclick={() => (revealed = true)}><Icon name="eye" size={14} /> {translate("documentDetail.revealPreview")}</button>
         </div>
+      {:else if pdfPreviewable}
+        <PdfPreview
+          src={previewPath(id, highSensitivity)}
+          downloadSrc={downloadPath(id)}
+          title={translate("documentDetail.documentPreview")}
+        />
       {:else if previewable}
         <!-- direct URL: session cookie authenticates; server CSP sandboxes;
              streaming + immutable-ETag caching come back for free -->

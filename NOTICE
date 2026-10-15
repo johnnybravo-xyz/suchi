@@ -132,6 +132,20 @@ Notable direct dependencies and their licenses:
   gopkg.in/yaml.v3                                             MIT / Apache-2.0
   modernc.org/sqlite                                           BSD-3-Clause
 
+================================================================================
+PDF.js — bundled browser PDF renderer
+================================================================================
+
+Suchi bundles pdfjs-dist 6.4.299 to render PDF previews locally in browsers and
+native WebViews that do not provide a PDF plugin.
+Upstream: https://github.com/mozilla/pdf.js
+
+PDF.js is licensed under the Apache License 2.0, Copyright 2024 Mozilla
+Foundation. The emitted browser assets retain the upstream license banners and
+include the complete Apache-2.0 text at assets/pdfjs/LICENSE. Licenses and
+notices for the PDF.js CMaps, ICC profile, standard fonts, and JavaScript image
+decoder fallbacks are emitted beside those files under assets/pdfjs/. The
+fallback files themselves carry their complete applicable notices.
 
 ================================================================================
 Tauri desktop dependencies

@@ -50,6 +50,12 @@ test('production chunks group document controls without pulling lazy screens int
   const qr = owner('/qrcode-generator/dist/qrcode.mjs')
   assert.ok(qr)
   assert.ok(!dependencies(controls).has(qr.fileName), 'QR encoder must load only when requested')
+  const pdf = owner('/pdfjs-dist/legacy/build/pdf.mjs')
+  assert.ok(pdf)
+  assert.ok(
+    !dependencies(owner('/routes/DocumentDetail.svelte')).has(pdf.fileName),
+    'PDF renderer must load only for PDF previews',
+  )
 
   for (const path of [
     '/routes/Documents.svelte', '/routes/DocumentDetail.svelte', '/routes/Search.svelte',

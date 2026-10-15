@@ -8,6 +8,28 @@ const replacementFile = {
   buffer: Buffer.from('%PDF-corrected'),
 }
 
+function onePagePDF(text) {
+  const content = `BT /F1 24 Tf 72 720 Td (${text.replace(/[()\\]/g, '\\$&')}) Tj ET`
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
+    `<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}\nendstream`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  ]
+  let body = '%PDF-1.4\n'
+  const offsets = [0]
+  for (let index = 0; index < objects.length; index++) {
+    offsets.push(Buffer.byteLength(body))
+    body += `${index + 1} 0 obj\n${objects[index]}\nendobj\n`
+  }
+  const xref = Buffer.byteLength(body)
+  body += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`
+  body += offsets.slice(1).map(offset => `${String(offset).padStart(10, '0')} 00000 n \n`).join('')
+  body += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`
+  return Buffer.from(body)
+}
+
 function detail(id, overrides = {}) {
   return {
     id,
@@ -17,7 +39,7 @@ function detail(id, overrides = {}) {
     content_source: 'server',
     original_blob: `blob-${id}`,
     original_size: 2048,
-    mime_type: 'application/pdf',
+    mime_type: 'text/html',
     jd_category_id: 1,
     created_at: 1780000000 + id,
     added_at: 1780000000 + id,
@@ -31,8 +53,8 @@ function detail(id, overrides = {}) {
   }
 }
 
-async function installDetailAPI(page, handler) {
-  await page.route('**/preview/**', route => route.fulfill({ contentType: 'text/html', body: '<p>Preview</p>' }))
+async function installDetailAPI(page, handler, preview = { contentType: 'text/html', body: '<p>Preview</p>' }) {
+  await page.route('**/preview/**', route => route.fulfill(preview))
   await page.route('**/api/**', async route => {
     const request = route.request()
     const url = new URL(request.url())
@@ -59,6 +81,29 @@ async function openVersions(page) {
   await page.getByRole('tab', { name: /^Versions/ }).click()
   return page.getByRole('tabpanel', { name: /^Versions/ })
 }
+
+test('renders PDFs with the bundled offline viewer', async ({ page }) => {
+  const pdf = onePagePDF('Suchi PDF preview')
+  await installDetailAPI(page, async ({ route, path }) => {
+    if (path !== '/api/documents/77') return false
+    await route.fulfill({ json: detail(77, { mime_type: 'application/pdf' }) })
+    return true
+  }, {
+    contentType: 'application/pdf',
+    body: pdf,
+    headers: { 'Accept-Ranges': 'bytes' },
+  })
+
+  await page.goto('/#/doc/77')
+  const preview = page.locator('.preview')
+  await expect(preview.getByRole('toolbar', { name: 'PDF controls' })).toBeVisible()
+  await expect(preview.getByText('Page 1 of 1', { exact: true })).toBeVisible()
+  await expect(preview.locator('iframe')).toHaveCount(0)
+  const canvas = preview.locator('canvas')
+  await expect(canvas).toBeVisible()
+  await expect.poll(() => canvas.evaluate(node => node.width)).toBeGreaterThan(0)
+  await expect.poll(() => canvas.evaluate(node => node.height)).toBeGreaterThan(0)
+})
 
 test('shows explicit revision state and retries an uncertain replacement with one key', async ({ page }) => {
   const keys = []
