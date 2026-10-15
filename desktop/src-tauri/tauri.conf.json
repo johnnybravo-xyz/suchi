@@ -4,6 +4,12 @@
   "version": "0.3.0",
   "identifier": "xyz.johnnybravo.suchi",
   "build": {
+    "beforeDevCommand": {
+      "script": "bun scripts/serve-launcher.js",
+      "cwd": "..",
+      "wait": false
+    },
+    "devUrl": "http://127.0.0.1:1420",
     "frontendDist": "../launcher"
   },
   "app": {

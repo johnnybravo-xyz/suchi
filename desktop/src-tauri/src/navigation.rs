@@ -4,7 +4,10 @@ use tauri::{AppHandle, Manager, Url};
 use tauri_plugin_opener::OpenerExt;
 
 pub fn permits_navigation(app: &AppHandle, url: &Url, application_origin: &str) -> bool {
-    if is_launcher_url(url) || is_application_url(url, application_origin) {
+    if is_launcher_url(url)
+        || is_development_launcher_url(app, url)
+        || is_application_url(url, application_origin)
+    {
         return true;
     }
     if matches!(url.scheme(), "https" | "mailto") {
@@ -28,6 +31,12 @@ pub fn navigate_to_setup(app: &AppHandle, application_origin: &str) {
 }
 
 pub fn navigate_to_launcher(app: &AppHandle) {
+    #[cfg(dev)]
+    if let Some(url) = &app.config().build.dev_url {
+        navigate(app, url.as_str());
+        return;
+    }
+
     #[cfg(target_os = "windows")]
     const URL: &str = "http://tauri.localhost/index.html";
     #[cfg(not(target_os = "windows"))]
@@ -67,6 +76,20 @@ fn navigate(app: &AppHandle, target: &str) {
 fn is_launcher_url(url: &Url) -> bool {
     (url.scheme() == "tauri" && url.host_str() == Some("localhost"))
         || (url.scheme() == "http" && url.host_str() == Some("tauri.localhost"))
+}
+
+#[cfg(dev)]
+fn is_development_launcher_url(app: &AppHandle, url: &Url) -> bool {
+    app.config()
+        .build
+        .dev_url
+        .as_ref()
+        .is_some_and(|dev_url| url.origin() == dev_url.origin())
+}
+
+#[cfg(not(dev))]
+fn is_development_launcher_url(_app: &AppHandle, _url: &Url) -> bool {
+    false
 }
 
 fn is_application_url(url: &Url, application_origin: &str) -> bool {

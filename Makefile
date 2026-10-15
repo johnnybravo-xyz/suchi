@@ -268,7 +268,13 @@ desktop-sidecar: ui
 	    > desktop/src-tauri/generated/sidecar-identity.json
 
 desktop-dev: desktop-sidecar
-	cd desktop && bun tauri dev
+	@cd desktop && bun install --frozen-lockfile
+	@cd desktop && toolchain_bin="$$(dirname "$$(rustup which --toolchain $(DESKTOP_RUST_VERSION) rustfmt)")"; \
+	  if test "$$(uname -s)" = Darwin; then \
+	    export CC="$$(xcrun --find clang)" SDKROOT="$$(xcrun --show-sdk-path)"; \
+	    export CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER="$$CC" CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER="$$CC"; \
+	  fi; \
+	  PATH="$$toolchain_bin:$$PATH" bun tauri dev
 
 desktop-check: desktop-sidecar
 	@cd desktop && bun install --frozen-lockfile
