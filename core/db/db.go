@@ -26,14 +26,17 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/archivelock"
+
 	_ "modernc.org/sqlite"
 )
 
 // DB is the pair of pools plus the file path. Close closes both.
 type DB struct {
-	Write *sql.DB
-	Read  *sql.DB
-	Path  string
+	Write       *sql.DB
+	Read        *sql.DB
+	Path        string
+	archiveLock *archivelock.Lock
 }
 
 // Open opens (or creates) the SQLite database at path and returns the
@@ -43,6 +46,10 @@ func Open(ctx context.Context, path string) (*DB, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return nil, fmt.Errorf("resolve db path: %w", err)
+	}
+	archiveLock, err := archivelock.Acquire(filepath.Dir(abs))
+	if err != nil {
+		return nil, err
 	}
 
 	// Boot pragmas run in the DSN so the very first connection is
@@ -78,6 +85,7 @@ func Open(ctx context.Context, path string) (*DB, error) {
 
 	write, err := sql.Open("sqlite", dsn)
 	if err != nil {
+		_ = archiveLock.Close()
 		return nil, fmt.Errorf("open write pool: %w", err)
 	}
 	write.SetMaxOpenConns(1)
@@ -85,12 +93,14 @@ func Open(ctx context.Context, path string) (*DB, error) {
 	write.SetConnMaxLifetime(0) // never recycle the sole writer
 	if err := ping(ctx, write); err != nil {
 		_ = write.Close()
+		_ = archiveLock.Close()
 		return nil, fmt.Errorf("write pool ping: %w", err)
 	}
 
 	read, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		_ = write.Close()
+		_ = archiveLock.Close()
 		return nil, fmt.Errorf("open read pool: %w", err)
 	}
 	read.SetMaxOpenConns(4)
@@ -99,15 +109,16 @@ func Open(ctx context.Context, path string) (*DB, error) {
 	if err := ping(ctx, read); err != nil {
 		_ = write.Close()
 		_ = read.Close()
+		_ = archiveLock.Close()
 		return nil, fmt.Errorf("read pool ping: %w", err)
 	}
 
-	return &DB{Write: write, Read: read, Path: abs}, nil
+	return &DB{Write: write, Read: read, Path: abs, archiveLock: archiveLock}, nil
 }
 
 // Close closes both pools. Errors from either are joined.
 func (d *DB) Close() error {
-	return errors.Join(d.Write.Close(), d.Read.Close())
+	return errors.Join(d.Write.Close(), d.Read.Close(), d.archiveLock.Close())
 }
 
 // WriteTx runs fn inside a BEGIN IMMEDIATE transaction on the write pool.

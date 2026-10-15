@@ -3,6 +3,7 @@
 package db_test
 
 import (
+	"database/sql"
 	"fmt"
 	"io"
 	"log/slog"
@@ -102,9 +103,20 @@ func TestStableCatalogAndBetaAdoption(t *testing.T) {
 			if info.Mode().Perm() != 0o600 {
 				t.Fatalf("snapshot mode = %o, want 600", info.Mode().Perm())
 			}
-			snapshot := openAdoptionDB(t, snapshots[0])
-			assertSchemaVersion(t, snapshot, sourceVersion)
-			assertMigrationScalar(t, snapshot, `SELECT count(*) FROM users WHERE id=42`, 1)
+			snapshot, err := sql.Open("sqlite", "file:"+filepath.ToSlash(snapshots[0])+"?mode=ro")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var snapshotVersion, users int
+			if err := snapshot.QueryRow("PRAGMA user_version").Scan(&snapshotVersion); err != nil {
+				t.Fatal(err)
+			}
+			if err := snapshot.QueryRow(`SELECT count(*) FROM users WHERE id=42`).Scan(&users); err != nil {
+				t.Fatal(err)
+			}
+			if snapshotVersion != sourceVersion || users != 1 {
+				t.Fatalf("snapshot version=%d users=%d, want version=%d users=1", snapshotVersion, users, sourceVersion)
+			}
 			if err := snapshot.Close(); err != nil {
 				t.Fatal(err)
 			}
