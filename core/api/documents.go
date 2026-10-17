@@ -43,6 +43,8 @@ type UploadResponse struct {
 	IdempotentReplay bool   `json:"idempotent_replay,omitempty"`
 }
 
+var errSplitOriginChildrenTrashed = errors.New("split origin has trashed children")
+
 // UploadDocument accepts a multipart upload, streams it into the CAS,
 // and inserts (or resurrects) a document row.
 //
@@ -120,6 +122,61 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 			replay = &stored
 			outID = stored.DocumentID
 			return nil
+		}
+
+		// A completed byte-identical split keeps its staging origin retired.
+		// Resolve it before ordinary live/Trash dedup so re-upload cannot
+		// resurrect the combined feeder PDF beside its children.
+		var (
+			splitOriginID    int64
+			splitOriginTitle string
+			splitChildren    int
+			trashedChildren  int
+		)
+		errSplit := tx.QueryRowContext(r.Context(), `
+			SELECT parent.id, parent.title, COUNT(child.id),
+			       SUM(CASE WHEN child.trashed_at IS NOT NULL THEN 1 ELSE 0 END)
+			FROM documents parent
+			JOIN documents child ON child.split_origin_id = parent.id
+			WHERE parent.system_id = ?
+			  AND parent.owner_id = ?
+			  AND parent.original_blob = ?
+			  AND parent.trashed_at IS NOT NULL
+			GROUP BY parent.id, parent.title
+			ORDER BY parent.trashed_at DESC
+			LIMIT 1
+		`, systemID, principal.UserID, upload.SHA256).Scan(
+			&splitOriginID, &splitOriginTitle, &splitChildren, &trashedChildren,
+		)
+		if errSplit == nil {
+			if splitChildren == 0 {
+				return fmt.Errorf("completed split origin has no children")
+			}
+			if trashedChildren != 0 {
+				return errSplitOriginChildrenTrashed
+			}
+			outID = splitOriginID
+			deduplicated = true
+			if err := ingest.RecordSource(r.Context(), tx, outID, upload.SourceKind,
+				upload.SourceLabel, upload.Filename, time.Now().Unix()); err != nil {
+				return err
+			}
+			status = http.StatusOK
+			response = UploadResponse{
+				ID: outID, SHA256: upload.SHA256, Size: upload.Size,
+				MIME: upload.MIME, Title: splitOriginTitle, Deduplicated: true,
+			}
+			response.SystemCode, response.JDAddress, err = documentAddress(r.Context(), tx, outID)
+			if err != nil {
+				return err
+			}
+			return storeUploadResponse(
+				r.Context(), tx, principal.UserID, upload.Idempotency,
+				upload.SHA256, outID, status, response,
+			)
+		}
+		if !errors.Is(errSplit, sql.ErrNoRows) {
+			return errSplit
 		}
 
 		// A live match reuses the document and records this acquisition.
@@ -271,6 +328,11 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 	if errors.Is(err, errIdempotencyConflict) {
 		s.writeError(w, http.StatusConflict, "idempotency_conflict",
 			"Idempotency-Key was already used for a different upload")
+		return
+	}
+	if errors.Is(err, errSplitOriginChildrenTrashed) {
+		s.writeError(w, http.StatusConflict, "split_origin_children_trashed",
+			"one or more documents from this scanned batch are in Trash")
 		return
 	}
 	if err != nil {

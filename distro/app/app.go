@@ -377,6 +377,13 @@ func Run(ctx context.Context, opts Options) error {
 	// The chain is empty until a detector plugin registers.
 	langChain := lang.NewChain(log)
 
+	if cfg.ScanASNMode != "off" {
+		log.Info("main.scan_asn.enabled",
+			"mode", cfg.ScanASNMode,
+			"prefix", cfg.ScanASNPrefix,
+			"dpi", cfg.ScanSplitDPI)
+	}
+
 	disp.Register(postingest.New(
 		d, cas, actions, log,
 		postingest.WithLanguages(runtimePrefs.OCRLanguages),
@@ -397,9 +404,11 @@ func Run(ctx context.Context, opts Options) error {
 			WhitenessThreshold: cfg.ScanBlankWhitenessThreshold,
 		}),
 		postingest.WithScanSplit(postingest.ScanSplit{
-			Enabled: cfg.ScanSplitEnabled,
-			Token:   cfg.ScanSplitToken,
-			DPI:     cfg.ScanSplitDPI,
+			Enabled:   cfg.ScanSplitEnabled,
+			Token:     cfg.ScanSplitToken,
+			DPI:       cfg.ScanSplitDPI,
+			ASNMode:   cfg.ScanASNMode,
+			ASNPrefix: cfg.ScanASNPrefix,
 		}),
 		postingest.WithDecrypt(postingest.Decrypt{
 			Key:           decryptKey,
