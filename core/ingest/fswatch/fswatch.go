@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/asn"
 	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/customfield"
 	"github.com/johnnybravo-xyz/suchi/core/db"
@@ -382,6 +383,28 @@ func (w *Watcher) ingestOpen(ctx context.Context, path, relativePath string, f *
 // transaction, so producers never get a partially annotated document.
 func applySidecar(ctx context.Context, tx *sql.Tx, docID int64, s *sidecar.V1, ownerID, systemID int64) error {
 	now := time.Now().Unix()
+	if s.ArchiveSerialNumber != nil {
+		if err := asn.ValidateValue(*s.ArchiveSerialNumber); err != nil {
+			return fmt.Errorf("archive serial number: %w", err)
+		}
+		var conflict bool
+		if err := tx.QueryRowContext(ctx, `
+			SELECT EXISTS(
+				SELECT 1 FROM documents
+				WHERE system_id = ? AND archive_serial_number = ? AND id <> ?
+			)
+		`, systemID, *s.ArchiveSerialNumber, docID).Scan(&conflict); err != nil {
+			return err
+		}
+		if conflict {
+			return fmt.Errorf("archive serial number %d is already retained in this filing system", *s.ArchiveSerialNumber)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE documents SET archive_serial_number = ? WHERE id = ?
+		`, *s.ArchiveSerialNumber, docID); err != nil {
+			return err
+		}
+	}
 
 	// Correspondents. Multi-party (roles) form takes precedence when
 	// set; singular Correspondent is kept for backwards-compat and
