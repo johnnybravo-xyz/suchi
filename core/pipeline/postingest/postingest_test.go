@@ -563,7 +563,7 @@ printf 'segment-%%s' "$4"
 	if err == nil || fanOut {
 		t.Fatalf("first fan-out = (%v, %v), want retryable failure", fanOut, err)
 	}
-	assertSplitState(t, d, parentID, false, 1)
+	assertSplitState(t, d, parentID, false, 0)
 
 	fanOut, err = h.fanOutSegments(ctx, h.log, parentID, []byte("source pdf"), segments)
 	if err != nil || !fanOut {
@@ -940,7 +940,11 @@ func TestChildrenRetainSystemAcrossFanoutAndStagingDeletion(t *testing.T) {
 			}
 			var childErr error
 			if mode == "split" {
-				childErr = h.createSplitChild(ctx, h.log, parentID, 1, 1, docsplit.Segment{}, []byte("split child"))
+				binDir := t.TempDir()
+				writeExecutable(t, filepath.Join(binDir, "qpdf"), "#!/bin/sh\nprintf 'split child'\n")
+				t.Setenv("PATH", binDir)
+				_, childErr = h.fanOutSegments(ctx, h.log, parentID, []byte("source"),
+					[]docsplit.Segment{{Start: 1, End: 1}})
 			} else {
 				parsed, err := eml.Parse([]byte(msgConvertedEmail))
 				if err != nil {
@@ -964,8 +968,9 @@ func TestChildrenRetainSystemAcrossFanoutAndStagingDeletion(t *testing.T) {
 				t.Fatal(err)
 			}
 			if mode == "split" {
-				if err := h.createSplitChild(ctx, h.log, parentID, 1, 1, docsplit.Segment{}, []byte("split child")); err != nil {
-					t.Fatal(err)
+				if fanOut, err := h.fanOutSegments(ctx, h.log, parentID, []byte("source"),
+					[]docsplit.Segment{{Start: 1, End: 1}}); err != nil || !fanOut {
+					t.Fatalf("split retry fanout=%v err=%v", fanOut, err)
 				}
 			} else {
 				retired, err := h.handleEmail(ctx, h.log, parentID, []byte(msgConvertedEmail), mode == "files-only")

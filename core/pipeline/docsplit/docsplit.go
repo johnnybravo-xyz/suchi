@@ -1,30 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Package docsplit finds separator pages in a scanned PDF and returns
-// the page ranges that make up each sub-document.
+// Package docsplit plans opt-in PDF splitting from legacy disposable separator
+// sheets or retained archive-serial-number QR labels.
 //
-// Detection is QR-only and opt-in — users print separator sheets
-// carrying a specific payload (default `SUCHI-SPLIT`), insert them
-// between doc stacks in the feeder, and scan the whole pile. The
-// pipeline drops the separators and fans out each segment to its own
-// documents row.
-//
-// Why QR-only:
-//
-//   - Blank-page separation looks ergonomic but silently splits legit
-//     multipage docs that happen to contain a mostly-empty page (a
-//     signature panel, a chapter divider). QR is explicit: a user
-//     who prints separator sheets intends the split.
-//   - QR detection at 150 DPI is fast enough (~30ms per page on
-//     modest hardware) that the pre-scan doesn't dominate ingest.
-//
-// Contract:
-//
-//   - Missing pdftoppm on PATH → Skipped=true, Segments empty, caller
-//     treats input as a single doc.
-//   - No separators found → one Segment spanning [1..N].
-//   - Separators found → one Segment per contiguous non-separator
-//     range; the separator pages themselves are dropped.
+// Legacy separator pages are dropped. In ASN split mode every ASN-bearing page
+// starts a retained segment. ASN assign mode keeps the PDF intact and accepts
+// one label on any page.
 package docsplit
 
 import (
@@ -41,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/asn"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/barcode"
 	"github.com/johnnybravo-xyz/suchi/core/sandbox"
 )
@@ -49,57 +31,102 @@ import (
 const (
 	DefaultBinary  = "pdftoppm"
 	DefaultTimeout = 90 * time.Second
-	// DPI needs to be high enough that a small QR (a few cm on the
-	// printed page) survives rasterization. 150 is safe for modern
-	// scanners; 100 works for larger QRs.
-	DefaultDPI   = 150
-	DefaultToken = "SUCHI-SPLIT"
+	DefaultDPI     = 150
+	DefaultToken   = "SUCHI-SPLIT"
+
+	ASNModeOff    = "off"
+	ASNModeAssign = "assign"
+	ASNModeSplit  = "split"
 )
 
-// Options carries per-call knobs. Zero values fall back to Default*.
+// Mode describes the marker family selected for one PDF.
+type Mode string
+
+const (
+	ModeNone      Mode = "none"
+	ModeSeparator Mode = "separator"
+	ModeASNAssign Mode = "asn_assign"
+	ModeASNSplit  Mode = "asn_split"
+)
+
+// Stable validation codes surfaced through terminal jobs.
+const (
+	CodeMalformedASN      = "malformed_asn"
+	CodeMixedMarkers      = "mixed_markers"
+	CodeMultipleASN       = "multiple_asn"
+	CodeMultipleASNOnPage = "multiple_asn_on_page"
+	CodeDuplicateASN      = "duplicate_asn"
+	CodeMissingLeadingASN = "missing_leading_asn"
+)
+
+// ValidationError is a deterministic marker-plan failure.
+type ValidationError struct {
+	Code string
+	Page int
+	ASN  int64
+}
+
+func (e *ValidationError) Error() string {
+	message := e.Code
+	if e.Page > 0 {
+		message += fmt.Sprintf(" page=%d", e.Page)
+	}
+	if e.ASN > 0 {
+		message += fmt.Sprintf(" asn=%d", e.ASN)
+	}
+	return message
+}
+
+// Options carries per-call knobs. Zero binary/timeout/DPI values fall back to
+// defaults. Separator and ASN markers are independently opt-in.
 type Options struct {
 	Binary  string
 	Timeout time.Duration
 	DPI     int
 
-	// Token is the QR payload that marks a separator page. Case-
-	// sensitive; whitespace trimmed. Empty falls back to DefaultToken.
-	Token string
+	SeparatorEnabled bool
+	Token            string
+	ASNMode          string
+	ASNPrefix        string
 }
 
-// Segment is a contiguous run of pages that make up one sub-document.
-// Start and End are 1-indexed and inclusive.
+// Segment is a contiguous, 1-indexed inclusive page range. ASN and MarkerPage
+// are set only for retained ASN plans.
 type Segment struct {
-	Start int
-	End   int
+	Start      int
+	End        int
+	ASN        int64
+	MarkerPage int
 }
 
 // Result carries the analysis output.
 type Result struct {
-	// Segments is the list of non-separator page ranges in reading order.
-	// When no separators are found, it's [{1, TotalPages}].
-	Segments []Segment
-	// SeparatorPages lists the 1-indexed pages that matched the token
-	// and got dropped. Empty means "no splits, single doc".
+	Mode           Mode
+	Segments       []Segment
 	SeparatorPages []int
-	// TotalPages is the raw page count of the input PDF.
-	TotalPages int
-	// Skipped=true when the pdftoppm binary is missing. Segments is
-	// empty; caller keeps the input as a single doc.
-	Skipped bool
+	TotalPages     int
+	Skipped        bool
 }
 
-// Analyze rasterizes pdfBytes and returns the split plan.
+// Analyze rasterizes pdfBytes once, classifies every symbol, and returns the
+// complete marker plan.
 func Analyze(ctx context.Context, pdfBytes []byte, log *slog.Logger, opts Options) (*Result, error) {
+	started := time.Now()
 	log = log.With("component", "docsplit")
+	if err := validateOptions(opts); err != nil {
+		return nil, err
+	}
 
 	binary := opts.Binary
 	if binary == "" {
 		binary = DefaultBinary
 	}
 	if _, err := exec.LookPath(binary); err != nil {
+		if asnEnabled(opts.ASNMode) {
+			return nil, fmt.Errorf("docsplit: required rasterizer %q not found", binary)
+		}
 		log.Warn("docsplit.skip.no_binary", "binary", binary)
-		return &Result{Skipped: true}, nil
+		return &Result{Mode: ModeNone, Skipped: true}, nil
 	}
 	timeout := opts.Timeout
 	if timeout == 0 {
@@ -125,7 +152,6 @@ func Analyze(ctx context.Context, pdfBytes []byte, log *slog.Logger, opts Option
 		return nil, fmt.Errorf("write input: %w", err)
 	}
 	prefix := filepath.Join(dir, "p")
-
 	res, err := sandbox.Run(ctx, sandbox.Opts{
 		Args: []string{
 			binary, "-png", "-r", strconv.Itoa(dpi),
@@ -136,7 +162,13 @@ func Analyze(ctx context.Context, pdfBytes []byte, log *slog.Logger, opts Option
 		Dir:       dir,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("pdftoppm: exit %d: %s", res.ExitCode, tail(res.Stderr))
+		exitCode := -1
+		var stderr []byte
+		if res != nil {
+			exitCode = res.ExitCode
+			stderr = res.Stderr
+		}
+		return nil, fmt.Errorf("pdftoppm: exit %d: %s", exitCode, tail(stderr))
 	}
 
 	pngs, err := listPNGs(dir)
@@ -147,45 +179,200 @@ func Analyze(ctx context.Context, pdfBytes []byte, log *slog.Logger, opts Option
 		return nil, errors.New("docsplit: no pages produced")
 	}
 
-	out := &Result{TotalPages: len(pngs)}
+	pages := make([]pageSymbols, 0, len(pngs))
 	for _, p := range pngs {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if isSeparator(ctx, p.path, token, log) {
-			out.SeparatorPages = append(out.SeparatorPages, p.n)
+		codes, decodeErr := decodePage(ctx, p.path)
+		if decodeErr != nil {
+			if asnEnabled(opts.ASNMode) {
+				return nil, fmt.Errorf("docsplit: decode page %d: %w", p.n, decodeErr)
+			}
+			log.Debug("docsplit.page.decode_failed", "page", p.n, "err", decodeErr.Error())
 		}
+		pages = append(pages, classifyPage(p.n, codes, opts, token))
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	out.Segments = computeSegments(len(pngs), out.SeparatorPages)
-	log.Debug("docsplit.done",
-		"pages", len(pngs),
-		"separators", len(out.SeparatorPages),
-		"segments", len(out.Segments))
+	out, err := planPages(len(pngs), pages, opts)
+	if err != nil {
+		return nil, err
+	}
+	log.Info("docsplit.plan",
+		"mode", out.Mode,
+		"pages", out.TotalPages,
+		"segments", len(out.Segments),
+		"asn_pages", canonicalPairs(out.Segments),
+		"elapsed", time.Since(started))
 	return out, nil
 }
 
-// isSeparator returns true when any QR/DataMatrix/Aztec on the page
-// matches token. Decode failures are logged at Debug without discarding valid
-// symbols from another reader. A broken page alone cannot force a split.
-func isSeparator(ctx context.Context, pngPath, token string, log *slog.Logger) bool {
+func validateOptions(opts Options) error {
+	switch opts.ASNMode {
+	case "", ASNModeOff:
+	case ASNModeAssign, ASNModeSplit:
+		if err := asn.ValidatePrefix(opts.ASNPrefix); err != nil {
+			return fmt.Errorf("docsplit: invalid ASN prefix: %w", err)
+		}
+	default:
+		return fmt.Errorf("docsplit: invalid ASN mode %q", opts.ASNMode)
+	}
+	return nil
+}
+
+func asnEnabled(mode string) bool {
+	return mode == ASNModeAssign || mode == ASNModeSplit
+}
+
+func decodePage(ctx context.Context, pngPath string) ([]barcode.Barcode, error) {
 	data, err := os.ReadFile(pngPath)
 	if err != nil {
-		log.Debug("docsplit.page.read_failed", "path", pngPath, "err", err.Error())
-		return false
+		return nil, err
 	}
-	codes, err := barcode.DecodeBytes(ctx, data)
-	if err != nil {
-		log.Debug("docsplit.page.decode_failed", "path", pngPath, "err", err.Error())
+	return barcode.DecodeAllBytes(ctx, data)
+}
+
+type pageSymbols struct {
+	page         int
+	separator    bool
+	asns         []int64
+	asnLooking   bool
+	malformedASN bool
+}
+
+func classifyPage(page int, codes []barcode.Barcode, opts Options, token string) pageSymbols {
+	out := pageSymbols{page: page}
+	for _, code := range codes {
+		if opts.SeparatorEnabled && strings.TrimSpace(code.Text) == token {
+			out.separator = true
+		}
+		if !asnEnabled(opts.ASNMode) || code.Format != "QR" {
+			continue
+		}
+		value, matched, err := asn.ParseLabel(opts.ASNPrefix, code.Text)
+		if !matched {
+			continue
+		}
+		out.asnLooking = true
+		if err != nil {
+			out.malformedASN = true
+			continue
+		}
+		out.asns = append(out.asns, value)
 	}
-	for _, c := range codes {
-		if strings.TrimSpace(c.Text) == token {
-			return true
+	return out
+}
+
+func planPages(total int, pages []pageSymbols, opts Options) (*Result, error) {
+	out := &Result{Mode: ModeNone, TotalPages: total}
+	var (
+		asnPages  []pageSymbols
+		hasLegacy bool
+		hasASN    bool
+	)
+	for _, page := range pages {
+		if page.separator {
+			hasLegacy = true
+			out.SeparatorPages = append(out.SeparatorPages, page.page)
+		}
+		if page.asnLooking {
+			hasASN = true
+			asnPages = append(asnPages, page)
 		}
 	}
-	return false
+	if hasLegacy && hasASN {
+		return nil, &ValidationError{Code: CodeMixedMarkers, Page: firstMixedPage(pages)}
+	}
+	if hasLegacy {
+		out.Mode = ModeSeparator
+		out.Segments = computeSegments(total, out.SeparatorPages)
+		return out, nil
+	}
+	if !hasASN {
+		if total > 0 {
+			out.Segments = []Segment{{Start: 1, End: total}}
+		}
+		return out, nil
+	}
+	for _, page := range asnPages {
+		if page.malformedASN {
+			return nil, &ValidationError{Code: CodeMalformedASN, Page: page.page}
+		}
+	}
+
+	switch opts.ASNMode {
+	case ASNModeAssign:
+		count := 0
+		var selected pageSymbols
+		for _, page := range asnPages {
+			count += len(page.asns)
+			if len(page.asns) > 0 {
+				selected = page
+			}
+		}
+		if count != 1 {
+			page := asnPages[0].page
+			if len(asnPages) > 1 {
+				page = asnPages[1].page
+			}
+			return nil, &ValidationError{Code: CodeMultipleASN, Page: page}
+		}
+		out.Mode = ModeASNAssign
+		out.Segments = []Segment{{
+			Start: 1, End: total, ASN: selected.asns[0], MarkerPage: selected.page,
+		}}
+		return out, nil
+
+	case ASNModeSplit:
+		if len(asnPages[0].asns) == 0 || asnPages[0].page != 1 {
+			return nil, &ValidationError{Code: CodeMissingLeadingASN, Page: 1}
+		}
+		seen := make(map[int64]struct{}, len(asnPages))
+		for _, page := range asnPages {
+			if len(page.asns) > 1 {
+				return nil, &ValidationError{Code: CodeMultipleASNOnPage, Page: page.page}
+			}
+			value := page.asns[0]
+			if _, exists := seen[value]; exists {
+				return nil, &ValidationError{Code: CodeDuplicateASN, Page: page.page, ASN: value}
+			}
+			seen[value] = struct{}{}
+		}
+		out.Mode = ModeASNSplit
+		out.Segments = make([]Segment, len(asnPages))
+		for i, page := range asnPages {
+			end := total
+			if i+1 < len(asnPages) {
+				end = asnPages[i+1].page - 1
+			}
+			out.Segments[i] = Segment{
+				Start: page.page, End: end, ASN: page.asns[0], MarkerPage: page.page,
+			}
+		}
+		return out, nil
+	}
+	return nil, fmt.Errorf("docsplit: ASN markers found while mode is %q", opts.ASNMode)
+}
+
+func firstMixedPage(pages []pageSymbols) int {
+	for _, page := range pages {
+		if page.separator || page.asnLooking {
+			return page.page
+		}
+	}
+	return 0
+}
+
+func canonicalPairs(segments []Segment) []string {
+	var pairs []string
+	for _, segment := range segments {
+		if segment.ASN > 0 {
+			pairs = append(pairs, fmt.Sprintf("%d@%d", segment.ASN, segment.MarkerPage))
+		}
+	}
+	return pairs
 }
 
 // computeSegments walks 1..total and splits at each separator page,

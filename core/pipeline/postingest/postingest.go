@@ -14,10 +14,12 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/approvals"
+	"github.com/johnnybravo-xyz/suchi/core/asn"
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/automations"
 	"github.com/johnnybravo-xyz/suchi/core/blob"
@@ -44,6 +46,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/tessocr"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/thumb"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/zugferd"
+	renderpaths "github.com/johnnybravo-xyz/suchi/core/render/paths"
 	"github.com/johnnybravo-xyz/suchi/core/render/view"
 	"github.com/johnnybravo-xyz/suchi/core/taxonomy"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
@@ -60,9 +63,11 @@ type postIngestPayload struct {
 	// Consumption-trigger context. Producers populate whichever of
 	// these they have; automations.ApplyOnConsumption filters against
 	// them. Zero values disable the corresponding filter.
-	Filename   string `json:"filename,omitempty"`     // upload multipart / basename of source path
-	SourcePath string `json:"source_path,omitempty"`  // absolute path when the doc came from fs-watch
-	MailRuleID int64  `json:"mail_rule_id,omitempty"` // set by mail-intake plugins that own a rule id
+	Filename           string `json:"filename,omitempty"`     // upload multipart / basename of source path
+	SourcePath         string `json:"source_path,omitempty"`  // absolute path when the doc came from fs-watch
+	MailRuleID         int64  `json:"mail_rule_id,omitempty"` // set by mail-intake plugins that own a rule id
+	SkipMarkerPlanning bool   `json:"skip_marker_planning,omitempty"`
+	ProtectFirstPage   bool   `json:"protect_first_page,omitempty"`
 }
 
 // PostClassifyKind is the job kind the LLM classifier plugin's Subscriber
@@ -159,12 +164,14 @@ type ScanBlank struct {
 	WhitenessThreshold float64
 }
 
-// ScanSplit carries the per-Handler configuration for multi-doc
-// splitting on QR separator sheets. Zero Token → docsplit's default.
+// ScanSplit carries the per-Handler configuration for legacy disposable
+// separators and retained archive-serial-number QR labels.
 type ScanSplit struct {
-	Enabled bool
-	Token   string
-	DPI     int
+	Enabled   bool
+	Token     string
+	DPI       int
+	ASNMode   string
+	ASNPrefix string
 }
 
 // Option configures a Handler. Zero-arg New() → sane defaults;
@@ -262,11 +269,8 @@ func WithDecrypt(cfg Decrypt) Option {
 	return func(h *Handler) { h.decrypt = cfg }
 }
 
-// WithScanSplit enables multi-doc splitting on QR separator sheets.
-// When Enabled=true and the input PDF has separator pages (QR pages
-// carrying Token), post-ingest fans out one sibling document per
-// segment, soft-deletes the parent, and returns without running the
-// downstream chain on the parent.
+// WithScanSplit configures legacy separator and ASN-label analysis. A PDF is
+// scanned once when either marker family is enabled.
 func WithScanSplit(cfg ScanSplit) Option {
 	return func(h *Handler) { h.scanSplit = cfg }
 }
@@ -299,47 +303,103 @@ func (h *Handler) Kinds() []string { return []string{Kind} }
 // in state=dead and shows up in /api/tasks/.
 func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	log := h.log.With("doc_id", e.DocID)
-
-	// Consumption-trigger automations. Fire before any content
-	// processing so filters that key on filename/source_path/mail_rule
-	// can tag or route the doc up-front.
 	consCtx := consumptionContextFromPayload(e.Payload)
+	skipMarkerPlanning := payloadBool(e.Payload, "skip_marker_planning")
+
+	if complete, err := h.completedFanout(ctx, e.DocID); err != nil {
+		return fmt.Errorf("check completed fanout: %w", err)
+	} else if complete {
+		return nil
+	}
+
+	var (
+		input             documentInput
+		inputLoaded       bool
+		origBytes         []byte
+		mime              string
+		mimeCommitted     bool
+		preflightPDFBytes []byte
+		protectedPages    []int
+		bodyRewritten     bool
+	)
+	if payloadBool(e.Payload, "protect_first_page") {
+		protectedPages = []int{1}
+	}
+
+	// ASN-enabled PDFs are validated from immutable accepted bytes before any
+	// automation, pre-consume metadata, MIME, or decryption state mutation.
+	if h.asnPreflightEnabled() && !skipMarkerPlanning {
+		var err error
+		input, err = h.loadDoc(ctx, e.DocID)
+		if err != nil {
+			return fmt.Errorf("load doc: %w", err)
+		}
+		inputLoaded = true
+		origBytes, err = h.readBlob(input.OriginalBlob)
+		if err != nil {
+			return fmt.Errorf("cas get %s: %w", input.OriginalBlob, err)
+		}
+		mime = mimeutil.RefineByContent(input.MIME, origBytes)
+		if strings.HasPrefix(strings.ToLower(mime), "application/pdf") {
+			var handled bool
+			var plan *docsplit.Result
+			preflightPDFBytes, plan, handled, err = h.preflightPDF(
+				ctx, log, e.DocID, input, origBytes, mime, consCtx,
+			)
+			if err != nil {
+				return err
+			}
+			if handled {
+				return nil
+			}
+			mimeCommitted = true
+			if plan != nil && len(plan.Segments) == 1 && plan.Segments[0].MarkerPage > 0 {
+				protectedPages = []int{plan.Segments[0].MarkerPage}
+			}
+		}
+	}
+
+	// Each ordinary document and each selected split child runs consumption
+	// automations exactly once. A combined ASN batch returns above before here.
 	if err := automations.ApplyOnConsumption(ctx, h.db, h.actions, log, e.DocID, consCtx); err != nil {
 		return fmt.Errorf("consumption automations: %w", err)
 	}
 
-	input, err := h.loadDoc(ctx, e.DocID)
-	if err != nil {
-		return fmt.Errorf("load doc: %w", err)
-	}
-	mime := input.MIME
-
-	origBytes, err := h.readBlob(input.OriginalBlob)
-	if err != nil {
-		return fmt.Errorf("cas get %s: %w", input.OriginalBlob, err)
-	}
-
-	// Mail headers can label a real PDF as "bin" or octet-stream. Resniff
-	// only unspecified types so an explicit rescan also repairs existing rows.
-	if refined := mimeutil.RefineByContent(mime, origBytes); refined != mime {
-		result, err := h.db.ExecWrite(ctx, `
-			UPDATE documents SET mime_type = ?, updated_at = ?
-			WHERE id = ? AND original_blob = ? AND trashed_at IS NULL
-		`, refined, time.Now().Unix(), e.DocID, input.OriginalBlob)
+	if !inputLoaded {
+		var err error
+		input, err = h.loadDoc(ctx, e.DocID)
 		if err != nil {
-			return fmt.Errorf("refine source MIME: %w", err)
+			return fmt.Errorf("load doc: %w", err)
 		}
-		if n, err := result.RowsAffected(); err != nil || n != 1 {
-			return fmt.Errorf("refine source MIME: document changed or unavailable (rows=%d, err=%v)", n, err)
+		origBytes, err = h.readBlob(input.OriginalBlob)
+		if err != nil {
+			return fmt.Errorf("cas get %s: %w", input.OriginalBlob, err)
 		}
-		log.Info("post-ingest.mime.refined", "previous_mime", mime, "mime", refined)
+		mime = input.MIME
+	}
+
+	// Mail headers can label a real PDF as "bin" or octet-stream. ASN
+	// preflight commits this only after marker validation; other paths retain
+	// the previous automation-before-MIME-write order.
+	if refined := mimeutil.RefineByContent(mime, origBytes); refined != mime {
+		if !mimeCommitted {
+			result, err := h.db.ExecWrite(ctx, `
+				UPDATE documents SET mime_type = ?, updated_at = ?
+				WHERE id = ? AND original_blob = ? AND trashed_at IS NULL
+			`, refined, time.Now().Unix(), e.DocID, input.OriginalBlob)
+			if err != nil {
+				return fmt.Errorf("refine source MIME: %w", err)
+			}
+			if n, err := result.RowsAffected(); err != nil || n != 1 {
+				return fmt.Errorf("refine source MIME: document changed or unavailable (rows=%d, err=%v)", n, err)
+			}
+			log.Info("post-ingest.mime.refined", "previous_mime", mime, "mime", refined)
+		}
 		mime = refined
 	}
 
-	// Optional operator pre-consume hook. Runs BEFORE any built-in
-	// format-specific logic — the script sees the raw bytes and can
-	// rewrite them (SUCHI_OUTPUT) and/or emit tags + custom-fields
-	// via a stdout JSON envelope. See docs/preconsume.mdx.
+	// Optional operator pre-consume hook. For a fanout it runs independently
+	// in each child; the combined staging parent never reaches this point.
 	if h.preConsume != "" {
 		pc, err := preconsume.Run(ctx, origBytes, preconsume.Document{
 			ID:         e.DocID,
@@ -355,6 +415,8 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 				log.Info("post-ingest.preconsume.body_rewritten",
 					"input_bytes", len(origBytes), "output_bytes", len(pc.WorkingBytes))
 				origBytes = pc.WorkingBytes
+				bodyRewritten = true
+				protectedPages = nil
 			}
 			if len(pc.Tags) > 0 || len(pc.CustomFields) > 0 {
 				if err := h.applyPreConsumeMetadata(ctx, e.DocID, pc.Tags, pc.CustomFields); err != nil {
@@ -550,52 +612,39 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		return h.postContentSteps(ctx, log, e.DocID)
 	}
 
-	// 1. qpdf normalize (with password candidates). Gathers candidates
-	// from the operator's passwords file + the learned-passwords table
-	// scoped to this doc's owner. First success wins; if all attempts
-	// fail with a password error, the doc lands in state='encrypted'
-	// and post-ingest bails out until the operator supplies one via
-	// POST /api/documents/{id}/decrypt.
-	candidates, pwdSources, err := h.gatherDecryptCandidates(ctx, log, e.DocID)
-	if err != nil {
-		log.Warn("post-ingest.decrypt.candidates_load_failed", "err", err.Error())
-	}
-	normalized, err := qpdf.Normalize(ctx, bytes.NewReader(origBytes), log,
-		qpdf.Options{Passwords: candidates})
-	if err != nil {
-		return fmt.Errorf("qpdf: %w", err)
-	}
-	if normalized.NeedsPassword {
-		log.Warn("post-ingest.decrypt.needs_password",
-			"doc_id", e.DocID, "tried_candidates", len(candidates))
-		return h.markEncrypted(ctx, e.DocID, normalized.StderrTail)
-	}
-	pdfBytes := normalized.Data
-	// If a candidate password worked, promote the doc to decrypted
-	// state, snapshot the decrypted bytes into the CAS as a second
-	// blob (original is preserved verbatim), and bump last_used_at on
-	// the winning learned-password row so hot passwords stay hot.
-	//
-	// The !Skipped guard is important: qpdf.Normalize returns
-	// Skipped=true (with Data == raw input bytes) when the qpdf binary
-	// is missing on PATH. Without the guard, we'd record those
-	// still-encrypted bytes as `decrypted_blob` and stamp the row
-	// 'decrypted' — the serving path would then hand the browser
-	// ciphertext and the PDF viewer would prompt every fetch.
-	if !normalized.Skipped && normalized.PasswordIndex >= 0 {
-		if err := h.recordDecrypted(ctx, log, e.DocID, pdfBytes, pwdSources, normalized.PasswordIndex); err != nil {
-			log.Warn("post-ingest.decrypt.record_failed", "err", err.Error())
+	// 1. qpdf normalize (with password candidates). ASN preflight already
+	// normalized immutable input; reuse it unless the trusted pre-consume hook
+	// rewrote the body.
+	var pdfBytes []byte
+	if len(preflightPDFBytes) > 0 && !bodyRewritten {
+		pdfBytes = preflightPDFBytes
+	} else {
+		candidates, pwdSources, err := h.gatherDecryptCandidates(ctx, log, e.DocID)
+		if err != nil {
+			log.Warn("post-ingest.decrypt.candidates_load_failed", "err", err.Error())
+		}
+		normalized, err := qpdf.Normalize(ctx, bytes.NewReader(origBytes), log,
+			qpdf.Options{Passwords: candidates})
+		if err != nil {
+			return fmt.Errorf("qpdf: %w", err)
+		}
+		if normalized.NeedsPassword {
+			log.Warn("post-ingest.decrypt.needs_password",
+				"doc_id", e.DocID, "tried_candidates", len(candidates))
+			return h.markEncrypted(ctx, e.DocID, normalized.StderrTail)
+		}
+		pdfBytes = normalized.Data
+		if !normalized.Skipped && normalized.PasswordIndex >= 0 {
+			if err := h.recordDecrypted(ctx, log, e.DocID, pdfBytes, pwdSources, normalized.PasswordIndex); err != nil {
+				log.Warn("post-ingest.decrypt.record_failed", "err", err.Error())
+			}
 		}
 	}
 
-	// 1a. Multi-doc split on QR separator sheets (opt-in). Runs
-	// BEFORE blank removal so page-number references stay valid.
-	// When separators are found, splitAndFanOut creates one sibling
-	// document per segment (each with its own post-ingest job), soft-
-	// deletes the parent, and returns fanOut=true — we short-circuit
-	// the downstream chain because the children carry it forward.
-	if h.scanSplit.Enabled {
-		fanOut, err := h.splitAndFanOut(ctx, log, e.DocID, pdfBytes)
+	// Legacy-only splitting retains its historical automation/pre-consume
+	// order. ASN-enabled input was already planned before either hook above.
+	if h.scanSplit.Enabled && !skipMarkerPlanning && len(preflightPDFBytes) == 0 {
+		fanOut, err := h.splitAndFanOut(ctx, log, e.DocID, pdfBytes, consCtx, mime)
 		if err != nil {
 			return fmt.Errorf("scan split: %w", err)
 		}
@@ -609,7 +658,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	// Operates on the working copy only — the CAS original stays
 	// verbatim.
 	if h.scanBlank.Enabled {
-		trimmed, err := h.trimBlankPages(ctx, log, pdfBytes)
+		trimmed, err := h.trimBlankPages(ctx, log, pdfBytes, protectedPages)
 		if err != nil {
 			log.Warn("post-ingest.scan_blank.error", "err", err.Error())
 		} else if trimmed != nil {
@@ -668,158 +717,601 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	return h.postContentSteps(ctx, log, e.DocID)
 }
 
-// splitAndFanOut looks for QR separator sheets in pdfBytes and, if
-// any are found, creates one sibling document per non-separator
-// segment. Each child gets its own qpdf-trimmed PDF (via
-// qpdf.SelectPages), its own CAS put, its own documents row (with
-// split_parent_id back-pointer), and its own fresh post-ingest job.
-// The parent document is soft-deleted after fanout — the CAS blob is
-// untouched, so undelete restores the original if the split was
-// wrong.
-//
-// Returns fanOut=true only when at least one child was created. When
-// no separators are found (or docsplit is skipped for missing
-// binary), returns fanOut=false and the caller continues with the
-// original as a single doc.
-func (h *Handler) splitAndFanOut(ctx context.Context, log *slog.Logger, parentID int64, pdfBytes []byte) (bool, error) {
+func (h *Handler) asnPreflightEnabled() bool {
+	return h.scanSplit.ASNMode == docsplit.ASNModeAssign ||
+		h.scanSplit.ASNMode == docsplit.ASNModeSplit
+}
+
+func (h *Handler) completedFanout(ctx context.Context, parentID int64) (bool, error) {
+	var complete bool
+	err := h.db.Read.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1
+			FROM documents parent
+			WHERE parent.id = ?
+			  AND parent.trashed_at IS NOT NULL
+			  AND EXISTS (
+				  SELECT 1 FROM documents child
+				  WHERE child.split_origin_id = parent.id
+			  )
+		)
+	`, parentID).Scan(&complete)
+	return complete, err
+}
+
+type preparedDecryption struct {
+	blob    string
+	size    int64
+	sources []pwdSource
+	index   int
+}
+
+func (h *Handler) preflightPDF(
+	ctx context.Context,
+	log *slog.Logger,
+	docID int64,
+	input documentInput,
+	accepted []byte,
+	mime string,
+	consCtx automations.Context,
+) ([]byte, *docsplit.Result, bool, error) {
+	candidates, pwdSources, err := h.gatherDecryptCandidates(ctx, log, docID)
+	if err != nil {
+		log.Warn("post-ingest.decrypt.candidates_load_failed", "err", err.Error())
+	}
+	normalized, err := qpdf.Normalize(ctx, bytes.NewReader(accepted), log,
+		qpdf.Options{Passwords: candidates})
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("qpdf: %w", err)
+	}
+	if normalized.NeedsPassword {
+		log.Warn("post-ingest.decrypt.needs_password",
+			"doc_id", docID, "tried_candidates", len(candidates))
+		return nil, nil, true, h.markEncrypted(ctx, docID, normalized.StderrTail)
+	}
+
+	plan, err := docsplit.Analyze(ctx, normalized.Data, log, docsplit.Options{
+		SeparatorEnabled: h.scanSplit.Enabled,
+		Token:            h.scanSplit.Token,
+		DPI:              h.scanSplit.DPI,
+		ASNMode:          h.scanSplit.ASNMode,
+		ASNPrefix:        h.scanSplit.ASNPrefix,
+	})
+	if err != nil {
+		var validation *docsplit.ValidationError
+		if errors.As(err, &validation) {
+			return nil, nil, false, terminalASNError(validation.Code, validation.Page, validation.ASN)
+		}
+		return nil, nil, false, fmt.Errorf("scan ASN: %w", err)
+	}
+
+	decryption, err := h.prepareDecryption(normalized, pwdSources)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	fanOut := plan.Mode == docsplit.ModeASNSplit && len(plan.Segments) > 1 ||
+		plan.Mode == docsplit.ModeSeparator && len(plan.SeparatorPages) > 0 && len(plan.Segments) > 0
+	if fanOut {
+		created, err := h.fanOutPlan(
+			ctx, log, docID, input.OriginalBlob, normalized.Data, plan,
+			consCtx, mime, decryption,
+		)
+		return nil, plan, created, err
+	}
+	if plan.Mode == docsplit.ModeSeparator && len(plan.SeparatorPages) > 0 && len(plan.Segments) == 0 {
+		log.Warn("post-ingest.scan_split.no_segments",
+			"pages", plan.TotalPages, "separators", len(plan.SeparatorPages))
+	}
+	if err := h.commitPreflightState(ctx, docID, input.OriginalBlob, mime, plan, decryption); err != nil {
+		return nil, nil, false, err
+	}
+	return normalized.Data, plan, false, nil
+}
+
+func (h *Handler) prepareDecryption(normalized *qpdf.Result, sources []pwdSource) (*preparedDecryption, error) {
+	if normalized.Skipped || normalized.PasswordIndex < 0 {
+		return nil, nil
+	}
+	ref, err := h.cas.Put(bytes.NewReader(normalized.Data))
+	if err != nil {
+		return nil, fmt.Errorf("cas put decrypted: %w", err)
+	}
+	return &preparedDecryption{
+		blob: ref.SHA256, size: ref.Size, sources: sources, index: normalized.PasswordIndex,
+	}, nil
+}
+
+func (h *Handler) commitPreflightState(
+	ctx context.Context,
+	docID int64,
+	originalBlob string,
+	mime string,
+	plan *docsplit.Result,
+	decryption *preparedDecryption,
+) error {
+	return h.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		if err := h.applyPreflightStateTx(ctx, tx, docID, originalBlob, mime, decryption); err != nil {
+			return err
+		}
+		if plan == nil || len(plan.Segments) != 1 || plan.Segments[0].ASN == 0 {
+			return nil
+		}
+		return h.assignScannedASNTx(ctx, tx, docID, plan.Segments[0].ASN, plan.Segments[0].MarkerPage)
+	})
+}
+
+func (h *Handler) applyPreflightStateTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	docID int64,
+	originalBlob string,
+	mime string,
+	decryption *preparedDecryption,
+) error {
+	now := time.Now().Unix()
+	result, err := tx.ExecContext(ctx, `
+		UPDATE documents
+		SET mime_type = CASE WHEN ? = '' THEN mime_type ELSE ? END,
+		    updated_at = ?
+		WHERE id = ?
+		  AND (? = '' OR original_blob = ?)
+		  AND trashed_at IS NULL
+	`, mime, mime, now, docID, originalBlob, originalBlob)
+	if err != nil {
+		return err
+	}
+	if changed, err := result.RowsAffected(); err != nil || changed != 1 {
+		return fmt.Errorf("preflight document changed or unavailable (rows=%d, err=%v)", changed, err)
+	}
+	if decryption == nil {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE documents
+		SET encryption_state = 'decrypted', decrypted_blob = ?, decrypted_size = ?, updated_at = ?
+		WHERE id = ?
+	`, decryption.blob, decryption.size, now, docID); err != nil {
+		return err
+	}
+	if decryption.index >= 0 && decryption.index < len(decryption.sources) {
+		source := decryption.sources[decryption.index]
+		if source.LearnedID != 0 {
+			_, err := tx.ExecContext(ctx, `
+				UPDATE decryption_passwords
+				SET last_used_at = ?, last_used_doc_id = ?
+				WHERE id = ?
+			`, now, docID, source.LearnedID)
+			return err
+		}
+	}
+	return nil
+}
+
+func (h *Handler) assignScannedASNTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	docID int64,
+	value int64,
+	page int,
+) error {
+	if err := asn.ValidateValue(value); err != nil {
+		return terminalASNError(docsplit.CodeMalformedASN, page, value)
+	}
+	var (
+		systemID    int64
+		currentASN  sql.NullInt64
+		previous    sql.NullInt64
+		family      sql.NullString
+		splitOrigin int64
+		historical  bool
+	)
+	err := tx.QueryRowContext(ctx, `
+		SELECT d.system_id, d.archive_serial_number, d.previous_version_id,
+		       d.version_family_key, d.split_origin_id,
+		       EXISTS(
+			       SELECT 1 FROM documents newer
+			       WHERE d.version_family_key IS NOT NULL
+			         AND newer.system_id = d.system_id
+			         AND newer.version_family_key = d.version_family_key
+			         AND newer.id > d.id
+			         AND newer.trashed_at IS NULL
+		       )
+		FROM documents d
+		WHERE d.id = ? AND d.trashed_at IS NULL
+	`, docID).Scan(&systemID, &currentASN, &previous, &family, &splitOrigin, &historical)
+	if errors.Is(err, sql.ErrNoRows) {
+		return terminalASNError("archive_serial_number_requires_current_version", page, value)
+	}
+	if err != nil {
+		return err
+	}
+	if historical {
+		return terminalASNError("archive_serial_number_requires_current_version", page, value)
+	}
+	if currentASN.Valid {
+		if currentASN.Int64 == value {
+			return nil
+		}
+		return terminalASNError("archive_serial_number_mismatch", page, value)
+	}
+	if previous.Valid || family.Valid {
+		return terminalASNError("archive_serial_number_mismatch", page, value)
+	}
+	if splitOrigin != 0 {
+		return terminalASNError("archive_serial_number_batch_not_allowed", page, value)
+	}
+	var conflict bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM documents
+			WHERE system_id = ? AND archive_serial_number = ? AND id <> ?
+		)
+	`, systemID, value, docID).Scan(&conflict); err != nil {
+		return err
+	}
+	if conflict {
+		return terminalASNError("archive_serial_number_conflict", page, value)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE documents SET archive_serial_number = ?, updated_at = ? WHERE id = ?
+	`, value, time.Now().Unix(), docID); err != nil {
+		return err
+	}
+	return h.enqueueASNLayoutMove(ctx, tx, docID)
+}
+
+func (h *Handler) enqueueASNLayoutMove(ctx context.Context, tx *sql.Tx, docID int64) error {
+	var template string
+	err := tx.QueryRowContext(ctx, `
+		SELECT sp.path
+		FROM documents d
+		JOIN storage_paths sp ON sp.id = d.storage_path_id AND sp.system_id = d.system_id
+		WHERE d.id = ?
+	`, docID).Scan(&template)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if renderpaths.UsesVariable(template, "asn") {
+		return view.EnqueueMove(ctx, tx, docID)
+	}
+	return nil
+}
+
+func terminalASNError(code string, page int, value int64) error {
+	detail := code
+	if page > 0 {
+		detail += fmt.Sprintf(" page=%d", page)
+	}
+	if value > 0 {
+		detail += fmt.Sprintf(" asn=%d", value)
+	}
+	return fmt.Errorf("%w: %s", jobs.ErrTerminal, detail)
+}
+
+// splitAndFanOut preserves legacy-only automation/pre-consume ordering while
+// using the same atomic prepare/commit path as ASN batches.
+func (h *Handler) splitAndFanOut(
+	ctx context.Context,
+	log *slog.Logger,
+	parentID int64,
+	pdfBytes []byte,
+	consCtx automations.Context,
+	mime string,
+) (bool, error) {
 	plan, err := docsplit.Analyze(ctx, pdfBytes, log, docsplit.Options{
-		Token: h.scanSplit.Token,
-		DPI:   h.scanSplit.DPI,
+		SeparatorEnabled: true,
+		Token:            h.scanSplit.Token,
+		DPI:              h.scanSplit.DPI,
+		ASNMode:          docsplit.ASNModeOff,
 	})
 	if err != nil {
 		return false, err
 	}
-	if plan.Skipped || len(plan.SeparatorPages) == 0 {
+	if plan.Skipped || plan.Mode != docsplit.ModeSeparator || len(plan.SeparatorPages) == 0 {
 		return false, nil
 	}
-	// A separator on every page (edge case) leaves no segments —
-	// keep the original as a single doc rather than trashing it.
 	if len(plan.Segments) == 0 {
 		log.Warn("post-ingest.scan_split.no_segments",
 			"pages", plan.TotalPages, "separators", len(plan.SeparatorPages))
 		return false, nil
 	}
-	log.Info("post-ingest.scan_split.detected",
-		"parent_id", parentID,
-		"pages", plan.TotalPages,
-		"separators", len(plan.SeparatorPages),
-		"segments", len(plan.Segments))
-	return h.fanOutSegments(ctx, log, parentID, pdfBytes, plan.Segments)
+	return h.fanOutPlan(ctx, log, parentID, "", pdfBytes, plan, consCtx, mime, nil)
 }
 
-func (h *Handler) fanOutSegments(ctx context.Context, log *slog.Logger, parentID int64, pdfBytes []byte, segments []docsplit.Segment) (bool, error) {
-	var contentSource string
-	if err := h.db.Read.QueryRowContext(ctx, `SELECT content_source FROM documents WHERE id=?`, parentID).Scan(&contentSource); err != nil {
+type preparedSegment struct {
+	index int
+	seg   docsplit.Segment
+	blob  string
+	size  int64
+}
+
+func (h *Handler) fanOutSegments(
+	ctx context.Context,
+	log *slog.Logger,
+	parentID int64,
+	pdfBytes []byte,
+	segments []docsplit.Segment,
+) (bool, error) {
+	return h.fanOutPlan(ctx, log, parentID, "", pdfBytes, &docsplit.Result{
+		Mode: docsplit.ModeSeparator, Segments: segments,
+	}, automations.Context{}, "", nil)
+}
+
+func (h *Handler) fanOutPlan(
+	ctx context.Context,
+	log *slog.Logger,
+	parentID int64,
+	originalBlob string,
+	pdfBytes []byte,
+	plan *docsplit.Result,
+	consCtx automations.Context,
+	mime string,
+	decryption *preparedDecryption,
+) (bool, error) {
+	if len(plan.Segments) == 0 {
+		return false, nil
+	}
+	parent, err := h.loadSplitParentState(ctx, h.db.Read, parentID)
+	if err != nil {
 		return false, fmt.Errorf("load parent for split: %w", err)
 	}
-	if contentSource == "device_ocr" {
-		// Device OCR describes the combined feeder scan, so there is no safe way
-		// to assign its text or confidence to individual segments. Each child
-		// starts without device text and runs the normal server extraction path.
-		log.Info("post-ingest.scan_split.device_ocr_discarded", "parent_id", parentID)
+	asnBatch := plan.Mode == docsplit.ModeASNSplit
+	if err := validateBatchParent(parent, asnBatch); err != nil {
+		return false, err
+	}
+	if err := h.precheckSegmentASNs(ctx, h.db.Read, parent.systemID, parentID, plan.Segments); err != nil {
+		return false, err
+	}
+	existing, err := loadExistingSplitIndexes(ctx, h.db.Read, parentID, parent.systemID, len(plan.Segments))
+	if err != nil {
+		return false, err
+	}
+	if asnBatch && len(existing) != 0 {
+		return false, terminalASNError("archive_serial_number_batch_not_allowed", 0, 0)
 	}
 
-	for i, seg := range segments {
-		exists, err := h.splitChildExists(ctx, parentID, i+1)
-		if err != nil {
-			return false, fmt.Errorf("check segment %d: %w", i+1, err)
-		}
-		if exists {
+	prepared := make(map[int]preparedSegment, len(plan.Segments)-len(existing))
+	for i, segment := range plan.Segments {
+		index := i + 1
+		if _, exists := existing[index]; exists {
 			continue
 		}
-		segBytes, err := h.extractSegment(ctx, log, pdfBytes, seg)
+		result, err := qpdf.SelectPages(ctx, pdfBytes, segment.Pages(), log, qpdf.Options{})
 		if err != nil {
-			return false, fmt.Errorf("extract segment %d: %w", i+1, err)
+			return false, fmt.Errorf("extract segment %d: %w", index, err)
 		}
-		if err := h.createSplitChild(ctx, log, parentID, i+1, len(segments), seg, segBytes); err != nil {
-			return false, fmt.Errorf("create segment %d: %w", i+1, err)
+		if result.Skipped {
+			return false, fmt.Errorf("extract segment %d: qpdf select-pages skipped: %s", index, result.StderrTail)
+		}
+		ref, err := h.cas.Put(bytes.NewReader(result.Data))
+		if err != nil {
+			return false, fmt.Errorf("segment %d cas put: %w", index, err)
+		}
+		prepared[index] = preparedSegment{
+			index: index, seg: segment, blob: ref.SHA256, size: ref.Size,
 		}
 	}
-	// Soft-delete the parent so the workspace only shows children.
-	// CAS blob is still referenced by the trashed row, so gc leaves it.
-	if err := h.softDeleteParent(ctx, parentID); err != nil {
-		return false, fmt.Errorf("soft-delete parent: %w", err)
+
+	var childIDs []int64
+	err = h.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		current, err := h.loadSplitParentState(ctx, tx, parentID)
+		if err != nil {
+			return fmt.Errorf("reload live parent: %w", err)
+		}
+		if err := validateBatchParent(current, asnBatch); err != nil {
+			return err
+		}
+		if err := h.precheckSegmentASNs(ctx, tx, current.systemID, parentID, plan.Segments); err != nil {
+			return err
+		}
+		currentExisting, err := loadExistingSplitIndexes(ctx, tx, parentID, current.systemID, len(plan.Segments))
+		if err != nil {
+			return err
+		}
+		if asnBatch && len(currentExisting) != 0 {
+			return terminalASNError("archive_serial_number_batch_not_allowed", 0, 0)
+		}
+		if err := h.applyPreflightStateTx(ctx, tx, parentID, originalBlob, mime, decryption); err != nil {
+			return err
+		}
+
+		now := time.Now().Unix()
+		for i, segment := range plan.Segments {
+			index := i + 1
+			if _, exists := currentExisting[index]; exists {
+				continue
+			}
+			part, ok := prepared[index]
+			if !ok {
+				return fmt.Errorf("prepared segment %d missing after concurrent state change", index)
+			}
+			var archiveNumber any
+			if segment.ASN > 0 {
+				archiveNumber = segment.ASN
+			}
+			var childID, systemID int64
+			var childMIME string
+			err := tx.QueryRowContext(ctx, `
+				INSERT INTO documents(
+					system_id, owner_id, original_blob, original_size, title, mime_type,
+					jd_category_id, added_at, created_at, updated_at,
+					split_parent_id, split_origin_id, split_index,
+					source_mtime, sensitivity, archive_serial_number
+				)
+				SELECT system_id, owner_id, ?, ?,
+				       CASE WHEN title = '' THEN 'Untitled' ELSE title END || ?,
+				       COALESCE(mime_type, ''), jd_category_id, ?, ?, ?,
+				       id, id, ?, source_mtime, sensitivity, ?
+				FROM documents
+				WHERE id = ? AND trashed_at IS NULL
+				RETURNING id, system_id, mime_type
+			`, part.blob, part.size, fmt.Sprintf(" (part %d/%d)", index, len(plan.Segments)),
+				now, now, now, index, archiveNumber, parentID).
+				Scan(&childID, &systemID, &childMIME)
+			if err != nil {
+				return fmt.Errorf("create child %d: %w", index, err)
+			}
+			if err := ingestmeta.CopySources(ctx, tx, parentID, childID); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO object_acls(
+					object_kind, object_id, principal_kind, principal_id,
+					perm_bits, created_at, created_by
+				)
+				SELECT 'document', ?, principal_kind, principal_id,
+				       perm_bits, created_at, created_by
+				FROM object_acls
+				WHERE object_kind = 'document' AND object_id = ?
+			`, childID, parentID); err != nil {
+				return err
+			}
+			payload, err := json.Marshal(postIngestPayload{
+				SHA256: part.blob, Size: part.size, MIME: childMIME,
+				Filename: consCtx.Filename, SourcePath: consCtx.SourcePath,
+				MailRuleID: consCtx.MailRuleID, SkipMarkerPlanning: true,
+				ProtectFirstPage: segment.ASN > 0,
+			})
+			if err != nil {
+				return err
+			}
+			if err := jobs.Enqueue(ctx, tx, Kind, childID, systemID, string(payload)); err != nil {
+				return err
+			}
+			childIDs = append(childIDs, childID)
+		}
+		result, err := tx.ExecContext(ctx, `
+			UPDATE documents SET trashed_at = ?, updated_at = ?
+			WHERE id = ? AND trashed_at IS NULL
+		`, now, now, parentID)
+		if err != nil {
+			return err
+		}
+		if changed, err := result.RowsAffected(); err != nil || changed != 1 {
+			return fmt.Errorf("retire split parent: rows=%d err=%v", changed, err)
+		}
+		return nil
+	})
+	if err != nil {
+		return false, err
 	}
+	log.Info("post-ingest.scan_split.committed",
+		"parent_id", parentID, "segments", len(plan.Segments), "children", childIDs)
 	return true, nil
 }
 
-func (h *Handler) splitChildExists(ctx context.Context, parentID int64, index int) (bool, error) {
-	var exists bool
-	err := h.db.Read.QueryRowContext(ctx, `
-		SELECT EXISTS(
-			SELECT 1 FROM documents
-			WHERE split_index = ?
-			  AND (split_origin_id = ? OR (split_origin_id = 0 AND split_parent_id = ?))
-		)
-	`, index, parentID, parentID).Scan(&exists)
-	return exists, err
+type splitParentState struct {
+	systemID      int64
+	archiveASN    sql.NullInt64
+	previous      sql.NullInt64
+	family        sql.NullString
+	splitOrigin   int64
+	contentSource string
 }
 
-func (h *Handler) extractSegment(ctx context.Context, log *slog.Logger, pdfBytes []byte, seg docsplit.Segment) ([]byte, error) {
-	res, err := qpdf.SelectPages(ctx, pdfBytes, seg.Pages(), log, qpdf.Options{})
+type splitParentQuerier interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func (h *Handler) loadSplitParentState(
+	ctx context.Context,
+	q splitParentQuerier,
+	parentID int64,
+) (splitParentState, error) {
+	var state splitParentState
+	err := q.QueryRowContext(ctx, `
+		SELECT system_id, archive_serial_number, previous_version_id,
+		       version_family_key, split_origin_id, content_source
+		FROM documents
+		WHERE id = ? AND trashed_at IS NULL
+	`, parentID).Scan(
+		&state.systemID, &state.archiveASN, &state.previous,
+		&state.family, &state.splitOrigin, &state.contentSource,
+	)
+	return state, err
+}
+
+func validateBatchParent(parent splitParentState, asnBatch bool) error {
+	if !asnBatch {
+		return nil
+	}
+	if parent.previous.Valid || parent.family.Valid || parent.archiveASN.Valid || parent.splitOrigin != 0 {
+		return terminalASNError("archive_serial_number_batch_not_allowed", 0, 0)
+	}
+	return nil
+}
+
+type splitQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func loadExistingSplitIndexes(
+	ctx context.Context,
+	q splitQueryer,
+	parentID int64,
+	systemID int64,
+	expected int,
+) (map[int]int64, error) {
+	rows, err := q.QueryContext(ctx, `
+		SELECT id, system_id, split_index
+		FROM documents
+		WHERE split_origin_id = ?
+		   OR (split_origin_id = 0 AND split_parent_id = ?)
+	`, parentID, parentID)
 	if err != nil {
 		return nil, err
 	}
-	if res.Skipped {
-		return nil, fmt.Errorf("qpdf select-pages skipped: %s", res.StderrTail)
+	defer rows.Close()
+	out := make(map[int]int64)
+	for rows.Next() {
+		var id, childSystemID int64
+		var index int
+		if err := rows.Scan(&id, &childSystemID, &index); err != nil {
+			return nil, err
+		}
+		if childSystemID != systemID || index < 1 || index > expected {
+			return nil, fmt.Errorf("legacy split child shape mismatch")
+		}
+		if _, duplicate := out[index]; duplicate {
+			return nil, fmt.Errorf("duplicate legacy split child index %d", index)
+		}
+		out[index] = id
 	}
-	return res.Data, nil
+	return out, rows.Err()
 }
 
-// createSplitChild writes the document row and post-ingest job atomically.
-// The preceding CAS put may leave an unreferenced blob on failure; normal GC
-// reclaims it.
-func (h *Handler) createSplitChild(ctx context.Context, log *slog.Logger, parentID int64, index, total int, seg docsplit.Segment, segBytes []byte) error {
-	ref, err := h.cas.Put(bytes.NewReader(segBytes))
-	if err != nil {
-		return fmt.Errorf("cas put: %w", err)
-	}
-	return h.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		now := time.Now().Unix()
-		var childID, systemID int64
-		var mime string
-		// Privacy and human edits come from the live parent under the writer,
-		// after segment extraction. Trash cannot race a new visible child.
-		err := tx.QueryRowContext(ctx, `
-			INSERT INTO documents(
-				system_id, owner_id, original_blob, original_size, title, mime_type,
-				jd_category_id, added_at, created_at, updated_at,
-				split_parent_id, split_origin_id, split_index,
-				source_mtime, sensitivity
+type asnConflictQuerier interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func (h *Handler) precheckSegmentASNs(
+	ctx context.Context,
+	q asnConflictQuerier,
+	systemID int64,
+	parentID int64,
+	segments []docsplit.Segment,
+) error {
+	for _, segment := range segments {
+		if segment.ASN == 0 {
+			continue
+		}
+		var conflict bool
+		if err := q.QueryRowContext(ctx, `
+			SELECT EXISTS(
+				SELECT 1 FROM documents
+				WHERE system_id = ? AND archive_serial_number = ? AND id <> ?
 			)
-			SELECT system_id, owner_id, ?, ?,
-			       CASE WHEN title = '' THEN 'Untitled' ELSE title END || ?, COALESCE(mime_type, ''),
-			       jd_category_id, ?, ?, ?, id, id, ?, source_mtime, sensitivity
-			FROM documents WHERE id = ? AND trashed_at IS NULL
-			RETURNING id, system_id, mime_type
-		`, ref.SHA256, ref.Size, fmt.Sprintf(" (part %d/%d)", index, total), now, now, now, index, parentID).
-			Scan(&childID, &systemID, &mime)
-		if err != nil {
-			return fmt.Errorf("create child from live parent %d: %w", parentID, err)
-		}
-		if err := ingestmeta.CopySources(ctx, tx, parentID, childID); err != nil {
+		`, systemID, segment.ASN, parentID).Scan(&conflict); err != nil {
 			return err
 		}
-		payload, _ := json.Marshal(postIngestPayload{
-			SHA256: ref.SHA256, Size: ref.Size, MIME: mime,
-		})
-		if err := jobs.Enqueue(ctx, tx, Kind, childID, systemID, string(payload)); err != nil {
-			return err
+		if conflict {
+			return terminalASNError("archive_serial_number_conflict", segment.MarkerPage, segment.ASN)
 		}
-		log.Info("post-ingest.scan_split.child_created",
-			"parent_id", parentID, "child_id", childID,
-			"index", index, "pages", seg.PageCount())
-		return nil
-	})
-}
-
-func (h *Handler) softDeleteParent(ctx context.Context, docID int64) error {
-	return h.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `
-			UPDATE documents SET trashed_at = ?, updated_at = ? WHERE id = ? AND trashed_at IS NULL
-		`, time.Now().Unix(), time.Now().Unix(), docID)
-		return err
-	})
+	}
+	return nil
 }
 
 // deleteEmailStagingParent removes an email row that only existed long enough
@@ -1194,7 +1686,7 @@ func (h *Handler) createEmailAttachmentChild(ctx context.Context, log *slog.Logg
 //
 // Never destroys data — the CAS holds the original; this only shapes
 // what feeds pdf-inspector + the OCR engine + archive_blob.
-func (h *Handler) trimBlankPages(ctx context.Context, log *slog.Logger, pdfBytes []byte) ([]byte, error) {
+func (h *Handler) trimBlankPages(ctx context.Context, log *slog.Logger, pdfBytes []byte, protected []int) ([]byte, error) {
 	pa, err := pageanalyze.Analyze(ctx, pdfBytes, log, pageanalyze.Options{
 		WhitenessThreshold: h.scanBlank.WhitenessThreshold,
 	})
@@ -1205,21 +1697,31 @@ func (h *Handler) trimBlankPages(ctx context.Context, log *slog.Logger, pdfBytes
 		log.Warn("post-ingest.scan_blank.skip.no_binary")
 		return nil, nil
 	}
-	blanks := len(pa.Pages) - len(pa.NonBlank)
-	if blanks == 0 {
+	keepSet := make(map[int]struct{}, len(pa.NonBlank)+len(protected))
+	for _, page := range pa.NonBlank {
+		keepSet[page] = struct{}{}
+	}
+	for _, page := range protected {
+		if page >= 1 && page <= len(pa.Pages) {
+			keepSet[page] = struct{}{}
+		}
+	}
+	if len(keepSet) == len(pa.Pages) {
 		return nil, nil
 	}
-	if len(pa.NonBlank) == 0 {
-		// Every page tripped the whiteness check — either a
-		// pathologically empty scan or the threshold is off. Keep the
-		// original so we don't produce an empty archive.
+	if len(keepSet) == 0 {
 		log.Warn("post-ingest.scan_blank.all_blank",
 			"pages", len(pa.Pages), "threshold", h.scanBlank.WhitenessThreshold)
 		return nil, nil
 	}
+	keep := make([]int, 0, len(keepSet))
+	for page := range keepSet {
+		keep = append(keep, page)
+	}
+	sort.Ints(keep)
 	log.Info("post-ingest.scan_blank.trim",
-		"total", len(pa.Pages), "blanks", blanks, "keep", len(pa.NonBlank))
-	res, err := qpdf.SelectPages(ctx, pdfBytes, pa.NonBlank, log, qpdf.Options{})
+		"total", len(pa.Pages), "blanks", len(pa.Pages)-len(keep), "keep", len(keep))
+	res, err := qpdf.SelectPages(ctx, pdfBytes, keep, log, qpdf.Options{})
 	if err != nil {
 		return nil, err
 	}
@@ -1611,6 +2113,22 @@ func (h *Handler) generateThumb(ctx context.Context, log *slog.Logger, docID int
 	log.Info("post-ingest.thumb.written", "doc_id", docID, "sha", ref.SHA256, "size", len(res.PNG))
 }
 
+func payloadBool(payload map[string]any, key string) bool {
+	if direct, ok := payload[key].(bool); ok {
+		return direct
+	}
+	raw, ok := payload["raw"].(string)
+	if !ok || raw == "" {
+		return false
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		return false
+	}
+	value, _ := decoded[key].(bool)
+	return value
+}
+
 // emailFilesOnlyFromPayload extracts the email_files_only
 // flag emailwatch stamps on its post-ingest payload. Dispatcher hands
 // the raw JSON as e.Payload["raw"] (see core/jobs/jobs.go), so we
@@ -1640,6 +2158,14 @@ func consumptionContextFromPayload(p map[string]any) automations.Context {
 	var c automations.Context
 	if p == nil {
 		return c
+	}
+	if raw, ok := p["raw"].(string); ok && raw != "" {
+		var payload postIngestPayload
+		if json.Unmarshal([]byte(raw), &payload) == nil {
+			c.Filename = payload.Filename
+			c.SourcePath = payload.SourcePath
+			c.MailRuleID = payload.MailRuleID
+		}
 	}
 	if s, ok := p["filename"].(string); ok {
 		c.Filename = s
