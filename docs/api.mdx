@@ -35,7 +35,7 @@ carry it into bug reports. See [Errors](#errors) for the JSON error contract.
 | Approvals               | `/api/approvals/…` ([guide](/approvals))                                                                                                                                              |
 | Groups + ACLs           | `/api/groups/…`, `/api/acls/{kind}/{id}` ([guide](/permissions))                                                                                                                      |
 | Share links             | `/api/share_links/…`, public `/s/{token}` + `/s/{token}/{doc_id}/download`. Multi-doc bundles: pass 1–200 `doc_ids` on POST, one token covers all of them.                            |
-| Admin                   | `/api/admin/users`, `GET /api/admin/setup/state`, `POST /api/admin/setup/preset/{preview,apply}`, `/api/admin/settings/{llm,preferences,ingest}`, `/api/admin/taxonomy/{import,export}` |
+| Admin                   | `/api/admin/users`, `GET /api/admin/setup/state`, `POST /api/admin/setup/preset/{preview,apply}`, `/api/admin/settings/{llm,preferences,scan,ingest}`, `/api/admin/taxonomy/{import,export}` |
 
 ## Auth
 
@@ -2600,6 +2600,18 @@ See [LLM classifier](/llm-classifier).
 OCR language list. `POST` to the same path with
 `{backup_interval_hours, ocr_languages}` resets the backup scheduler and
 replaces the language snapshot used by future OCR jobs immediately.
+
+`GET /api/admin/settings/scan` returns the effective
+`{scan_asn_mode,scan_asn_prefix,scan_split_dpi}`. When deployment configuration
+pins any field, the response also includes `managed` with a boolean for each
+field. `POST` accepts all three fields, validates mode `off|assign|split`,
+prefix `[A-Za-z][A-Za-z0-9._:-]*`, and integer DPI `72–600`, then replaces the
+unpinned marker settings used by future PDF processing jobs immediately. A
+request that changes a pinned value returns **409** `scan_setting_managed`
+without writing any field; submitting its effective value allows unpinned
+fields to change without overwriting the stored value beneath the deployment
+override. A prefix that collides with an enabled legacy separator token returns
+**422** `apply_failed` and restores the prior stored values.
 
 `GET /api/admin/settings/ingest` returns the watched directory, owner, target
 system, and effective `fs_watch_recursive` boot flag. `POST` with
