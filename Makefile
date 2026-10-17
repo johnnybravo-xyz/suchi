@@ -1,4 +1,4 @@
-.PHONY: help build test vet lint fmt fmt-check license-check tidy check security-check run clean smoke smoke-ingest smoke-mail install-hooks ui ui-dev ui-check ui-verify ui-tracked-check ui-e2e ui-clean docs-dev docs-metadata-check docs-check bench-check release
+.PHONY: help build test vet lint fmt fmt-check license-check tidy check security-check run clean smoke smoke-ingest smoke-asn smoke-mail install-hooks ui ui-dev ui-check ui-verify ui-tracked-check ui-e2e ui-clean docs-dev docs-metadata-check docs-check bench-check release
 
 .DEFAULT_GOAL := help
 
@@ -32,6 +32,7 @@ help:
 	  '  clean           Remove the built binary directory.' \
 	  '  smoke           Build and smoke-test server health endpoints.' \
 	  '  smoke-ingest    Exercise the local document ingestion path.' \
+	  '  smoke-asn       Exercise retained ASN assignment and scan splitting.' \
 	  '  smoke-mail      Exercise the mbsync mail deployment path.' \
 	  '  ui              Build the generated embedded SPA.' \
 	  '  ui-dev          Run the Vite development server.' \
@@ -228,6 +229,9 @@ docs-check: docs-metadata-check
 
 smoke-ingest:
 	@./hack/local-ingest-test.sh
+
+smoke-asn:
+	@./hack/smoke-asn.sh
 
 smoke-mail:
 	@cd deploy/mail-mbsync && ./smoke-test.sh
