@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/johnnybravo-xyz/suchi/core/asn"
 )
 
 // Config is the fully-resolved runtime configuration.
@@ -129,6 +131,10 @@ type Config struct {
 	ScanSplitEnabled bool
 	ScanSplitToken   string // default "SUCHI-SPLIT"
 	ScanSplitDPI     int    // default 150
+	// External archive serial number labels are opt-in and independent from
+	// disposable legacy separator sheets.
+	ScanASNMode   string // off|assign|split; default "off"
+	ScanASNPrefix string // default "ASN"
 
 	// Password-protected PDF handling.
 	//
@@ -301,6 +307,28 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("SCAN_SPLIT_DPI: want integer in [72,600], got %q", s)
 		}
 		c.ScanSplitDPI = n
+	}
+
+	c.ScanASNMode = strings.ToLower(env("SCAN_ASN_MODE", "off"))
+	switch c.ScanASNMode {
+	case "off", "assign", "split":
+	default:
+		return nil, fmt.Errorf("SCAN_ASN_MODE: unknown value %q (want off|assign|split)", c.ScanASNMode)
+	}
+	c.ScanASNPrefix = env("SCAN_ASN_PREFIX", "ASN")
+	if c.ScanASNMode != "off" {
+		if err := asn.ValidatePrefix(c.ScanASNPrefix); err != nil {
+			return nil, fmt.Errorf("SCAN_ASN_PREFIX: want case-sensitive ASCII [A-Za-z][A-Za-z0-9._:-]*, got %q", c.ScanASNPrefix)
+		}
+		if c.ScanSplitEnabled {
+			effectiveToken := strings.TrimSpace(c.ScanSplitToken)
+			if effectiveToken == "" {
+				effectiveToken = "SUCHI-SPLIT"
+			}
+			if strings.HasPrefix(effectiveToken, c.ScanASNPrefix) {
+				return nil, fmt.Errorf("SCAN_SPLIT_TOKEN: effective token %q starts with SCAN_ASN_PREFIX %q", effectiveToken, c.ScanASNPrefix)
+			}
+		}
 	}
 
 	c.LLMConfidenceThreshold = 0.7
