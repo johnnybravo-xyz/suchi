@@ -15,6 +15,9 @@ async function mockUpload(page, options = {}) {
       uploads.push(request)
       if (options.upload) return options.upload(route, uploads.length)
       body = { id: 41 }
+    } else if (url.pathname === '/api/documents/' && request.method() === 'GET' && url.searchParams.has('split_origin_id')) {
+      expect(url.searchParams.get('split_origin_id')).toBe('41')
+      if (options.children) return options.children(route)
     } else if (url.pathname === '/api/tasks/') {
       expect(url.searchParams.get('include')).toBe('jobs')
       expect(url.searchParams.get('doc_id')).toBe('41')
@@ -188,6 +191,28 @@ test('waits for processing to finish before reading the document', async ({ page
   await page.clock.runFor(2500)
   await expect(page.getByText('Ready · No text found', { exact: true })).toBeVisible()
   expect(documentReads).toBe(1)
+})
+
+test('shows documents created from a split scan instead of linking the retired batch', async ({ page }) => {
+  await mockUpload(page, {
+    document: route => route.fulfill({ json: { id: 41, title: 'Feeder batch', trashed_at: 1, tags: [] } }),
+    children: route => route.fulfill({ json: {
+      count: 2,
+      results: [
+        { id: 43, title: 'Second document', split_index: 2, archive_serial_number: 4022 },
+        { id: 42, title: 'First document', split_index: 1, archive_serial_number: 4021 },
+      ],
+    } }),
+  })
+  await page.goto('/#/upload')
+  await page.locator('input[type=file]').setInputFiles(file('batch.png'))
+  await expect(page.getByText('Split into 2 documents', { exact: true })).toBeVisible()
+  const results = page.getByRole('group', { name: 'Documents created from this scan' })
+  await expect(results.getByRole('link')).toHaveCount(2)
+  await expect(results.getByRole('link').nth(0)).toContainText('ASN 4021')
+  await expect(results.getByRole('link').nth(0)).toContainText('First document')
+  await expect(results.getByRole('link').nth(1)).toContainText('ASN 4022')
+  await expect(page.getByRole('link', { name: 'Open document', exact: true })).toHaveCount(0)
 })
 
 test('keeps processing honest after automatic checks pause and allows checking again', async ({ page }) => {
