@@ -801,6 +801,7 @@
                aria-label={d.title || translate("documents.documentValue", { "id": d.id })}>
               <span class="grid-document-title">
                 {#if d.jd_address || d.jd_category_code}<span class="chip">{d.jd_address || d.jd_category_code}</span>{/if}
+                {#if d.archive_serial_number != null}<span class="chip">{translate("common.asnValue", { value: String(d.archive_serial_number) })}</span>{/if}
                 <span class="title">{d.title || translate("documents.documentValue2", { "id": d.id })}</span>
                 <DocumentUnlockStatus state={d.encryption_state} />
               </span>
@@ -822,6 +823,7 @@
           <span class="rthumb" class:blurred={isHighSensitivity(d.sensitivity)}><img src={thumbPath(d.id, isHighSensitivity(d.sensitivity))} alt="" loading="lazy" onerror={(e) => e.target.closest('.rthumb').classList.add('none')} /></span>
           <span class="dot {sensDot(d.sensitivity)}" class:accent={!d.sensitivity}></span>
           {#if d.jd_address || d.jd_category_code}<span class="chip" title={translate("documents.valueValue2", { "jd_category_name": d.jd_category_name, "jd_area_name": d.jd_area_name })}>{d.jd_address || d.jd_category_code}</span>{/if}
+          {#if d.archive_serial_number != null}<span class="chip">{translate("common.asnValue", { value: String(d.archive_serial_number) })}</span>{/if}
           <span class="title grow">{d.title || translate("documents.documentValue2", { "id": d.id })}</span>
           <DocumentUnlockStatus state={d.encryption_state} />
           {#if d.tags?.length}

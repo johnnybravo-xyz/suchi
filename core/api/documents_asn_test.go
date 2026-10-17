@@ -4,6 +4,7 @@ package api
 
 import (
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -172,5 +173,70 @@ func TestPatchDocumentArchiveSerialNumberCoordinatesASNLayout(t *testing.T) {
 		`{"archive_serial_number":null,"rendered_layout_id":0}`, adminPrincipal(1))
 	if cleared.Code != http.StatusOK {
 		t.Fatalf("coordinated clear: status=%d body=%s", cleared.Code, cleared.Body.String())
+	}
+}
+
+func TestArchiveSerialNumberCollectionProjections(t *testing.T) {
+	s, mux := newSystemsBoundaryServer(t)
+	seedSystemsBoundary(t, s)
+	if _, err := s.DB.Write.Exec(`
+		UPDATE documents SET archive_serial_number=4021 WHERE id=101;
+		UPDATE documents SET archive_serial_number=4022 WHERE id=104;
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	documentsResponse := systemsBoundaryRequest(
+		mux, http.MethodGet, "/api/documents/?system=S01", "", adminPrincipal(1),
+	)
+	var documents Envelope[DocumentListRow]
+	if documentsResponse.Code != http.StatusOK ||
+		json.Unmarshal(documentsResponse.Body.Bytes(), &documents) != nil {
+		t.Fatalf("documents: status=%d body=%s", documentsResponse.Code, documentsResponse.Body.String())
+	}
+	var projectedList bool
+	for _, document := range documents.Results {
+		if document.ID == 101 {
+			projectedList = document.ArchiveSerialNumber != nil && *document.ArchiveSerialNumber == 4021
+		}
+	}
+	if !projectedList {
+		t.Fatalf("list projection = %+v", documents.Results)
+	}
+
+	searchResponse := systemsBoundaryRequest(
+		mux, http.MethodGet, "/api/search/?system=S01&q=needle", "", adminPrincipal(1),
+	)
+	var search Envelope[SearchHit]
+	if searchResponse.Code != http.StatusOK ||
+		json.Unmarshal(searchResponse.Body.Bytes(), &search) != nil {
+		t.Fatalf("search: status=%d body=%s", searchResponse.Code, searchResponse.Body.String())
+	}
+	var projectedSearch bool
+	for _, hit := range search.Results {
+		if hit.ID == 101 {
+			projectedSearch = hit.ArchiveSerialNumber != nil && *hit.ArchiveSerialNumber == 4021
+		}
+	}
+	if !projectedSearch {
+		t.Fatalf("search projection = %+v", search.Results)
+	}
+
+	trashResponse := systemsBoundaryRequest(
+		mux, http.MethodGet, "/api/trash/?system=S01", "", adminPrincipal(1),
+	)
+	var trashRows Envelope[TrashRow]
+	if trashResponse.Code != http.StatusOK ||
+		json.Unmarshal(trashResponse.Body.Bytes(), &trashRows) != nil {
+		t.Fatalf("trash: status=%d body=%s", trashResponse.Code, trashResponse.Body.String())
+	}
+	var projectedTrash bool
+	for _, row := range trashRows.Results {
+		if row.ID == 104 {
+			projectedTrash = row.ArchiveSerialNumber != nil && *row.ArchiveSerialNumber == 4022
+		}
+	}
+	if !projectedTrash {
+		t.Fatalf("trash projection = %+v", trashRows.Results)
 	}
 }

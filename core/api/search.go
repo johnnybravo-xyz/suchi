@@ -7,6 +7,7 @@
 package api
 
 import (
+	"database/sql"
 	"net/http"
 	"strconv"
 	"strings"
@@ -19,15 +20,16 @@ import (
 // mobile clients already accept from /api/documents/{id} — same field
 // names — with a per-hit `rank` score from FTS5.
 type SearchHit struct {
-	ID          int64   `json:"id"`
-	SystemCode  string  `json:"system_code,omitempty"`
-	JDAddress   string  `json:"jd_address,omitempty"`
-	Title       string  `json:"title"`
-	Snippet     string  `json:"snippet"`
-	Rank        float64 `json:"rank"`
-	CreatedAt   int64   `json:"created_at"`
-	MIME        string  `json:"mime_type,omitempty"`
-	Sensitivity string  `json:"sensitivity,omitempty"`
+	ID                  int64   `json:"id"`
+	SystemCode          string  `json:"system_code,omitempty"`
+	JDAddress           string  `json:"jd_address,omitempty"`
+	Title               string  `json:"title"`
+	Snippet             string  `json:"snippet"`
+	Rank                float64 `json:"rank"`
+	CreatedAt           int64   `json:"created_at"`
+	MIME                string  `json:"mime_type,omitempty"`
+	Sensitivity         string  `json:"sensitivity,omitempty"`
+	ArchiveSerialNumber *int64  `json:"archive_serial_number,omitempty"`
 }
 
 // Ranking constants. BM25F weights favour title matches over body-text
@@ -147,7 +149,8 @@ func (s *Server) Search(w http.ResponseWriter, r *http.Request) {
 	if queryPlan.Match == "" {
 		pageSQL = `
 			SELECT d.id, d.title, '', 0.0, d.created_at,
-			       COALESCE(d.mime_type, ''), COALESCE(d.sensitivity, ''), sys.code, COALESCE(category.code,0)
+			       COALESCE(d.mime_type, ''), COALESCE(d.sensitivity, ''), sys.code,
+			       COALESCE(category.code,0), d.archive_serial_number
 			FROM documents d` + searchAddressJoins + whereSQL + `
 			ORDER BY d.created_at DESC, d.id DESC
 			LIMIT ? OFFSET ?`
@@ -184,13 +187,19 @@ func (s *Server) Search(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var hit SearchHit
 		var categoryCode int
+		var archiveNumber sql.NullInt64
 		if err := rows.Scan(&hit.ID, &hit.Title, &hit.Snippet, &hit.Rank,
-			&hit.CreatedAt, &hit.MIME, &hit.Sensitivity, &hit.SystemCode, &categoryCode); err != nil {
+			&hit.CreatedAt, &hit.MIME, &hit.Sensitivity, &hit.SystemCode, &categoryCode,
+			&archiveNumber); err != nil {
 			s.serverErr(w, "search.scan", err)
 			return
 		}
 		hit.Snippet = closeMarks(hit.Snippet)
 		hit.JDAddress = systems.Address(hit.SystemCode, categoryCode, hit.ID)
+		if archiveNumber.Valid {
+			value := archiveNumber.Int64
+			hit.ArchiveSerialNumber = &value
+		}
 		out = append(out, hit)
 	}
 	if err := rows.Err(); err != nil {
@@ -238,7 +247,8 @@ func searchFTSPageSQL(whereSQL string, trigram bool) string {
 		               FROM documents_fts WHERE documents_fts MATCH ? AND rowid = d.id),
 		              ` + trigramPassage + `, '') END,
 		       ranked.match_rank, d.created_at,
-		       COALESCE(d.mime_type, ''), COALESCE(d.sensitivity, ''), sys.code, COALESCE(category.code,0)
+		       COALESCE(d.mime_type, ''), COALESCE(d.sensitivity, ''), sys.code,
+		       COALESCE(category.code,0), d.archive_serial_number
 		FROM ranked
 		JOIN documents d ON d.id = ranked.id` + searchAddressJoins + `
 		ORDER BY ranked.tier, ranked.match_rank, ranked.id`
