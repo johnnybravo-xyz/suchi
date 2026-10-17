@@ -63,11 +63,13 @@ without removing recipient, cc, or other relations.
 The **Notes** tab adds attributed working context to this exact version.
 Authors can edit/delete their own notes and administrators can moderate any
 note; Trash shows Notes read-only. Notes and typed custom fields do not copy to a
-replacement version. **Previous archive number** appears only when retained by
-an import and cannot be edited. Folder-layout assignment is intentionally absent
-from Document Detail; administrators manage definitions under **Advanced >
-Folder layouts**, while controlled bulk/API and automation workflows assign
-them.
+replacement version. The metadata card shows an assigned archive serial number
+as **ASN _n_**. **Edit** accepts one positive integer or an empty value to clear
+it; a conflict explains that the number remains held by a live, trashed, or
+historical document in this filing system. Replacement upload moves the ASN to
+the new head. Folder-layout assignment is intentionally absent from Document
+Detail; administrators manage definitions under **Advanced > Folder layouts**,
+while controlled bulk/API and automation workflows assign them.
 
 On wide screens the preview and detail column keep one viewport-filling height;
 longer metadata, notes, and extracted text scroll inside the detail column
@@ -84,8 +86,9 @@ also capture a time append `Thh:mm`.
 **Upload** opens one full-page queue from the top bar, command menu or a file
 drop anywhere in the archive. Every selected file appears immediately, in order,
 as **Waiting**, **Uploading**, **Processing**, **Ready** or a clear failure.
-The summary and progress bar count completed transfers; each accepted row links
-to its document.
+The summary and progress bar count completed transfers. An ordinary accepted
+row links to its document; a feeder scan split by ASN labels changes to
+**Created _n_ documents** with an ordered link and ASN chip for every child.
 
 Network and server failures retain the file for **Retry**. An oversized file
 instead asks for a smaller file or a changed server limit. Processing checks do

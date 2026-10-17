@@ -186,8 +186,8 @@ func TestAssignRenderedLayoutRequiresPreviousArchiveNumber(t *testing.T) {
 	})
 	must(t, err)
 	if err := automations.ApplyOnDocumentAdded(ctx, d, registry, log, docID); err == nil ||
-		!strings.Contains(err.Error(), "requires a previous archive number") {
-		t.Fatalf("automation without previous archive number = %v", err)
+		!strings.Contains(err.Error(), "requires an archive serial number") {
+		t.Fatalf("automation without archive serial number = %v", err)
 	}
 	var assigned sql.NullInt64
 	must(t, d.Read.QueryRowContext(ctx, `SELECT storage_path_id FROM documents WHERE id=?`, docID).Scan(&assigned))

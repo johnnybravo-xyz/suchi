@@ -227,6 +227,17 @@ selected primary sender or clears sender roles with ID `0`, preserves other role
 relations in local state, and rejects late responses through the same generation
 guard.
 
+Archive serial number editing is detail-owned state with the same route
+generation guard. The browser accepts only decimal safe positive integers or an
+empty value, then sends `archive_serial_number` in one PATCH. Server validation
+and retained-value conflicts stay inline without discarding the draft. List,
+ranked Search, Trash, detail, and version rows consume the server projection and
+render one canonical **ASN _n_** chip; the browser does not reconstruct values
+from QR payloads or folder paths.
+
+Verify the ASN editor, projection chips, and split-upload receipt with
+`cd ui && bun run e2e --grep 'archive serial numbers|split scan'`.
+
 `DocumentDetail.svelte` owns similar-document results, version history,
 replacement upload, attributed exact-revision notes, typed custom fields,
 outgoing references, and backlinks for one route generation. Those reads load
@@ -552,7 +563,10 @@ second modal owns upload state. A batch records every file synchronously in
 selection order and sends them sequentially to its captured system. Each entry
 keeps one idempotency key for retry and drops its `File` after acceptance.
 A single bounded scheduler checks processing tasks before fetching terminal
-document details, so active jobs do not cause repeated document reads. Navigation
+document details, so active jobs do not cause repeated document reads. When the
+accepted row is retired by splitting, the queue requests its immutable
+`split_origin_id`, orders children by `split_index`, and replaces the parent
+success link with links to every child, including their ASN chips. Navigation
 stops receipt polling and releases paste URLs while already accepted transfers
 continue for the same account.
 
