@@ -135,6 +135,7 @@ type Handler struct {
 	ocrEngine       string // "auto" | "tesseract" | "ocrmypdf"
 	scanBlank       ScanBlank
 	scanSplit       ScanSplit
+	scanSplitState  func() ScanSplit // optional live marker-analysis state
 	decrypt         Decrypt
 	preConsume      string // path to optional user script; empty → skip
 	convertMSG      func(context.Context, io.Reader, *slog.Logger, msg.Options) (*msg.Result, error)
@@ -275,6 +276,12 @@ func WithScanSplit(cfg ScanSplit) Option {
 	return func(h *Handler) { h.scanSplit = cfg }
 }
 
+// WithScanSplitState supplies marker-analysis configuration at job execution
+// time so future documents can pick up saved settings without a restart.
+func WithScanSplitState(state func() ScanSplit) Option {
+	return func(h *Handler) { h.scanSplitState = state }
+}
+
 // New builds a Handler ready to register with a Dispatcher. The
 // required dependencies (db, cas, actions, log) covers what every branch needs; every
 // other knob is an Option. Zero options → English OCR, no renderer,
@@ -305,6 +312,10 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	log := h.log.With("doc_id", e.DocID)
 	consCtx := consumptionContextFromPayload(e.Payload)
 	skipMarkerPlanning := payloadBool(e.Payload, "skip_marker_planning")
+	scanSplit := h.scanSplit
+	if h.scanSplitState != nil {
+		scanSplit = h.scanSplitState()
+	}
 
 	if complete, err := h.completedFanout(ctx, e.DocID); err != nil {
 		return fmt.Errorf("check completed fanout: %w", err)
@@ -328,7 +339,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 
 	// ASN-enabled PDFs are validated from immutable accepted bytes before any
 	// automation, pre-consume metadata, MIME, or decryption state mutation.
-	if h.asnPreflightEnabled() && !skipMarkerPlanning {
+	if asnPreflightEnabled(scanSplit) && !skipMarkerPlanning {
 		var err error
 		input, err = h.loadDoc(ctx, e.DocID)
 		if err != nil {
@@ -344,7 +355,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 			var handled bool
 			var plan *docsplit.Result
 			preflightPDFBytes, plan, handled, err = h.preflightPDF(
-				ctx, log, e.DocID, input, origBytes, mime, consCtx,
+				ctx, log, e.DocID, input, origBytes, mime, consCtx, scanSplit,
 			)
 			if err != nil {
 				return err
@@ -643,8 +654,8 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 
 	// Legacy-only splitting retains its historical automation/pre-consume
 	// order. ASN-enabled input was already planned before either hook above.
-	if h.scanSplit.Enabled && !skipMarkerPlanning && len(preflightPDFBytes) == 0 {
-		fanOut, err := h.splitAndFanOut(ctx, log, e.DocID, pdfBytes, consCtx, mime)
+	if scanSplit.Enabled && !skipMarkerPlanning && len(preflightPDFBytes) == 0 {
+		fanOut, err := h.splitAndFanOut(ctx, log, e.DocID, pdfBytes, consCtx, mime, scanSplit)
 		if err != nil {
 			return fmt.Errorf("scan split: %w", err)
 		}
@@ -717,9 +728,9 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	return h.postContentSteps(ctx, log, e.DocID)
 }
 
-func (h *Handler) asnPreflightEnabled() bool {
-	return h.scanSplit.ASNMode == docsplit.ASNModeAssign ||
-		h.scanSplit.ASNMode == docsplit.ASNModeSplit
+func asnPreflightEnabled(cfg ScanSplit) bool {
+	return cfg.ASNMode == docsplit.ASNModeAssign ||
+		cfg.ASNMode == docsplit.ASNModeSplit
 }
 
 func (h *Handler) completedFanout(ctx context.Context, parentID int64) (bool, error) {
@@ -754,6 +765,7 @@ func (h *Handler) preflightPDF(
 	accepted []byte,
 	mime string,
 	consCtx automations.Context,
+	scanSplit ScanSplit,
 ) ([]byte, *docsplit.Result, bool, error) {
 	candidates, pwdSources, err := h.gatherDecryptCandidates(ctx, log, docID)
 	if err != nil {
@@ -771,11 +783,11 @@ func (h *Handler) preflightPDF(
 	}
 
 	plan, err := docsplit.Analyze(ctx, normalized.Data, log, docsplit.Options{
-		SeparatorEnabled: h.scanSplit.Enabled,
-		Token:            h.scanSplit.Token,
-		DPI:              h.scanSplit.DPI,
-		ASNMode:          h.scanSplit.ASNMode,
-		ASNPrefix:        h.scanSplit.ASNPrefix,
+		SeparatorEnabled: scanSplit.Enabled,
+		Token:            scanSplit.Token,
+		DPI:              scanSplit.DPI,
+		ASNMode:          scanSplit.ASNMode,
+		ASNPrefix:        scanSplit.ASNPrefix,
 	})
 	if err != nil {
 		var validation *docsplit.ValidationError
@@ -1000,11 +1012,12 @@ func (h *Handler) splitAndFanOut(
 	pdfBytes []byte,
 	consCtx automations.Context,
 	mime string,
+	scanSplit ScanSplit,
 ) (bool, error) {
 	plan, err := docsplit.Analyze(ctx, pdfBytes, log, docsplit.Options{
 		SeparatorEnabled: true,
-		Token:            h.scanSplit.Token,
-		DPI:              h.scanSplit.DPI,
+		Token:            scanSplit.Token,
+		DPI:              scanSplit.DPI,
 		ASNMode:          docsplit.ASNModeOff,
 	})
 	if err != nil {

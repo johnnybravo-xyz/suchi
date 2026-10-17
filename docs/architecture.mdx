@@ -298,6 +298,18 @@ variable is marked in previews/lists and cannot be assigned to a document
 without a value. Combined ASN/layout writes validate their resulting state
 before committing.
 
+`core/api/setup.go` owns session-admin GET/POST for the live scan controls.
+`core/settings.ResolveScanConfig` combines stored rows with boot-pinned
+environment/config values and reports each pin to the API. A save that changes
+a pinned value fails before the writer; accepted saves update only unpinned
+rows, preserving the stored value beneath each deployment override.
+`distro/app` validates the result against the boot-only legacy separator token
+and publishes one atomic `postingest.ScanSplit` snapshot.
+`core/pipeline/postingest` captures that snapshot once at job entry, so a
+running PDF cannot mix settings while later jobs observe a successful save
+without restart. Failed live validation restores the prior settings rows before
+the API returns.
+
 Verify these boundaries with `go test ./core/asn ./core/pipeline/docsplit
 ./core/pipeline/postingest ./core/ingest/fswatch ./core/ingest/sidecar
 ./core/api ./core/automations ./core/customfield ./core/db

@@ -564,6 +564,12 @@ async function mockAPI(page, options = {}) {
     archive_review_threshold: 0.5,
     archive_auto_threshold: 0.9,
   }
+  let scanSettings = {
+    scan_asn_mode: options.scanASNMode || 'off',
+    scan_asn_prefix: options.scanASNPrefix || 'ASN',
+    scan_split_dpi: options.scanSplitDPI ?? 150,
+    ...(options.scanManaged ? { managed: options.scanManaged } : {}),
+  }
   let trashDocuments = [...(options.trashDocuments || [])]
   let renderedLayouts = (options.renderedLayouts || []).map(layout => ({ ...layout }))
   const restoredDocuments = new Set()
@@ -830,6 +836,16 @@ async function mockAPI(page, options = {}) {
     else if (path === '/api/admin/settings/preferences') body = {
       backup_interval_hours: 24,
       ocr_languages: ['eng'],
+    }
+    else if (path === '/api/admin/settings/scan') {
+      if (request.method() === 'POST') {
+        const payload = request.postDataJSON()
+        options.scanSettingsRequests?.push(payload)
+        scanSettings = { ...payload }
+        body = {}
+      } else {
+        body = scanSettings
+      }
     }
     else if (path === '/api/admin/settings/ingest') body = {
       fs_watch_dir: '',
@@ -1234,10 +1250,70 @@ test('opens Archive configuration after choosing a filing tree', async ({ page }
   await expect(configuration.getByRole('link', { name: /Email intake/ }).last()).toBeVisible()
   await expect(configuration.getByRole('link', { name: /Classification/ }).last()).toBeVisible()
   await expect(configuration.getByRole('link', { name: /Folder layouts/ }).last()).toBeVisible()
+  await expect(configuration.getByRole('link', { name: /Scan processing/ }).last()).toBeVisible()
   await expect(configuration.getByRole('link', { name: /OCR and backups/ }).last()).toBeVisible()
   const advanced = configuration.locator('.archive-rail .rail-group').filter({ hasText: 'Advanced' })
   await expect(advanced.getByRole('link').nth(0)).toHaveText('Folder layouts')
-  await expect(advanced.getByRole('link').nth(1)).toHaveText('OCR and backups')
+  await expect(advanced.getByRole('link').nth(1)).toHaveText('Scan processing')
+  await expect(advanced.getByRole('link').nth(2)).toHaveText('OCR and backups')
+})
+
+test('updates scan processing from Advanced configuration', async ({ page }) => {
+  const requests = []
+  await mockAPI(page, {
+    filingTreeChosen: true,
+    scanASNMode: 'assign',
+    scanASNPrefix: 'FILE-',
+    scanSplitDPI: 200,
+    scanSettingsRequests: requests,
+  })
+  await page.goto('/#/settings?tab=archive&section=scan-processing')
+
+  const prefix = page.getByRole('textbox', { name: 'QR label prefix' })
+  const dpi = page.getByRole('spinbutton', { name: 'Detection DPI' })
+  await expect(page.getByRole('radio', { name: 'Assign', exact: true })).toBeChecked()
+  await expect(prefix).toHaveValue('FILE-')
+  await expect(dpi).toHaveValue('200')
+  await expect(page.getByText('FILE-4021', { exact: true })).toBeVisible()
+
+  await page.getByRole('radio', { name: 'Off', exact: true }).check()
+  await expect(prefix).toBeHidden()
+  await expect(dpi).toBeHidden()
+
+  await page.getByRole('radio', { name: 'Split', exact: true }).check()
+  await prefix.fill('BOX:')
+  await dpi.fill('300')
+  await expect(page.getByText('BOX:4021', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Save scan processing' }).click()
+
+  await expect.poll(() => requests).toEqual([{
+    scan_asn_mode: 'split',
+    scan_asn_prefix: 'BOX:',
+    scan_split_dpi: 300,
+  }])
+  await expect(page.getByText('Scan processing saved', { exact: true })).toBeVisible()
+  await expect(page.getByRole('radio', { name: 'Split', exact: true })).toBeChecked()
+  await expect(prefix).toHaveValue('BOX:')
+  await expect(dpi).toHaveValue('300')
+})
+
+test('disables scan processing fields pinned by server configuration', async ({ page }) => {
+  await mockAPI(page, {
+    filingTreeChosen: true,
+    scanASNMode: 'split',
+    scanASNPrefix: 'ZRD',
+    scanSplitDPI: 300,
+    scanManaged: { scan_asn_mode: true, scan_asn_prefix: true, scan_split_dpi: false },
+  })
+  await page.goto('/#/settings?tab=archive&section=scan-processing')
+
+  await expect(page.getByText('Mode is set by server configuration.')).toBeVisible()
+  await expect(page.getByRole('radio', { name: 'Split', exact: true })).toBeChecked()
+  await expect(page.getByRole('radio', { name: 'Split', exact: true })).toBeDisabled()
+  await expect(page.getByRole('radio', { name: 'Assign', exact: true })).toBeDisabled()
+  await expect(page.getByRole('textbox', { name: 'QR label prefix' })).toBeDisabled()
+  await expect(page.getByRole('spinbutton', { name: 'Detection DPI' })).toBeEnabled()
+  await expect(page.getByText('ZRD4021', { exact: true })).toBeVisible()
 })
 
 for (const userRole of ['admin', 'member']) {

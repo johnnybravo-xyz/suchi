@@ -6,7 +6,7 @@
   import { adminListUsers,
            getLLMSettings, saveLLMSettings, testLLMSettings, subscriptionLoginAction, getSubscriptionModels, saveSubscriptionModel,
            saveResearchContextMode, saveClassificationAutoApply, saveArchiveMatchingSettings,
-           getPreferences, savePreferences, getIngestSettings, saveIngestSettings } from '../lib/api.js'
+           getPreferences, savePreferences, getScanSettings, saveScanSettings, getIngestSettings, saveIngestSettings } from '../lib/api.js'
   import { isLocalEndpoint } from '../lib/net.js'
   import EmailAccounts from '../lib/EmailAccounts.svelte'
 
@@ -23,6 +23,7 @@
     users: translate("configurationSection.couldNotLoadArchiveUsers"),
     ingest: translate("configurationSection.couldNotLoadWatchedFolderSettings"),
     llm: translate("configurationSection.couldNotLoadClassificationSettings"),
+    scan: translate("configurationSection.couldNotLoadScanProcessingSettings"),
     preferences: translate("configurationSection.couldNotLoadOcrAndBackupSettings"),
   }
 
@@ -170,6 +171,21 @@
   let llmTestError = $state('')
   let llmTestGeneration = 0
   let prefs = $state({ backup_interval_hours: 24, ocr_languages: 'eng' })
+  let scan = $state({
+    scan_asn_mode: 'off', scan_asn_prefix: 'ASN', scan_split_dpi: 150,
+    managed: { scan_asn_mode: false, scan_asn_prefix: false, scan_split_dpi: false },
+  })
+  let scanSaved = { scan_asn_prefix: 'ASN', scan_split_dpi: 150 }
+  const SCAN_MODE_OPTIONS = [
+    { id: 'off', label: translate("configurationSection.asnModeOff"), description: translate("configurationSection.asnModeOffDesc") },
+    { id: 'assign', label: translate("configurationSection.asnModeAssign"), description: translate("configurationSection.asnModeAssignDesc") },
+    { id: 'split', label: translate("configurationSection.asnModeSplit"), description: translate("configurationSection.asnModeSplitDesc") },
+  ]
+  const scanPrefixValid = $derived(/^[A-Za-z][A-Za-z0-9._:-]*$/.test(scan.scan_asn_prefix))
+  const scanDpiValid = $derived(Number.isInteger(Number(scan.scan_split_dpi))
+    && Number(scan.scan_split_dpi) >= 72 && Number(scan.scan_split_dpi) <= 600)
+  const allScanSettingsManaged = $derived(scan.managed.scan_asn_mode
+    && scan.managed.scan_asn_prefix && scan.managed.scan_split_dpi)
   let ingest = $state({ fs_watch_dir: '', fs_watch_owner_email: '', fs_watch_system: '' })
   let ingestRecursive = $state(true)
 
@@ -217,6 +233,18 @@
     prefs.backup_interval_hours = current?.backup_interval_hours ?? 24
     prefs.ocr_languages = (current?.ocr_languages || ['eng']).join(',')
   }
+  async function loadScan() {
+    const current = await getScanSettings()
+    scan.scan_asn_mode = current?.scan_asn_mode || 'off'
+    scan.scan_asn_prefix = current?.scan_asn_prefix || 'ASN'
+    scan.scan_split_dpi = current?.scan_split_dpi ?? 150
+    scan.managed = {
+      scan_asn_mode: !!current?.managed?.scan_asn_mode,
+      scan_asn_prefix: !!current?.managed?.scan_asn_prefix,
+      scan_split_dpi: !!current?.managed?.scan_split_dpi,
+    }
+    scanSaved = { scan_asn_prefix: scan.scan_asn_prefix, scan_split_dpi: scan.scan_split_dpi }
+  }
   async function loadIngest() {
     const current = await getIngestSettings()
     ingest.fs_watch_dir = current?.fs_watch_dir || ''
@@ -230,12 +258,14 @@
     ingest: loadIngest,
     llm: loadLLM,
     preferences: loadPreferences,
+    scan: loadScan,
   }
   const requiredLoadKeys = $derived(({
     sources: ['users', 'ingest'],
     mail: ['users'],
     llm: ['llm'],
     preferences: ['preferences'],
+    'scan-processing': ['scan'],
   })[section] || [])
   const activeLoadFailure = $derived.by(() => {
     const key = requiredLoadKeys.find((candidate) => loadErrors[candidate])
@@ -265,6 +295,18 @@
     }
     catch (ex) { err = ex.message || translate("configurationSection.theServerRejectedThat") }
     finally { busy = false }
+  }
+
+  async function saveScan() {
+    const inactive = scan.scan_asn_mode === 'off'
+    await saveAnd(async () => {
+      await saveScanSettings({
+        scan_asn_mode: scan.scan_asn_mode,
+        scan_asn_prefix: inactive ? scanSaved.scan_asn_prefix : scan.scan_asn_prefix,
+        scan_split_dpi: inactive ? Number(scanSaved.scan_split_dpi) : Number(scan.scan_split_dpi),
+      })
+      await loadScan()
+    }, translate("configurationSection.scanProcessingSaved"))
   }
 
 
@@ -670,6 +712,51 @@
         <a role="button" class="btn primary sm" href={filingHref("#/automations")}>{translate("configurationSection.openAutomations")}</a>
       </div>
 
+    {:else if section === 'scan-processing'}
+      <h3>{translate("configurationSection.barcodeAssistedScanFiling")}</h3>
+      <p class="wiz-p">{translate("configurationSection.scanProcessingDescription")}</p>
+      {#if scan.managed.scan_asn_mode}
+        <p class="sub">{translate("configurationSection.modeManagedByServer")}</p>
+      {/if}
+      <div class="context-presets" role="radiogroup" aria-label={translate("configurationSection.archiveSerialNumberMode")}>
+        {#each SCAN_MODE_OPTIONS as option (option.id)}
+          <label class="context-preset" class:on={scan.scan_asn_mode === option.id} class:locked={scan.managed.scan_asn_mode}>
+            <input type="radio" name="scan-asn-mode" value={option.id} aria-label={option.label}
+                   bind:group={scan.scan_asn_mode} disabled={scan.managed.scan_asn_mode} />
+            <span class="context-copy">
+              <span class="context-label"><b>{option.label}</b></span>
+              <small>{option.description}</small>
+            </span>
+          </label>
+        {/each}
+      </div>
+
+      {#if scan.scan_asn_mode !== 'off'}
+        <div class="field"><label for="scan-prefix">{translate("configurationSection.qrLabelPrefix")}</label>
+          <input id="scan-prefix" class="input mono" required pattern="[A-Za-z][A-Za-z0-9._:-]*"
+                 bind:value={scan.scan_asn_prefix} disabled={scan.managed.scan_asn_prefix} />
+          <p class="sub">
+            {translate("configurationSection.qrLabelPrefixHelp")}
+            <code>{scan.scan_asn_prefix || '…'}4021</code>
+            {#if scan.managed.scan_asn_prefix} · {translate("configurationSection.setByServerConfiguration")}{/if}
+          </p>
+        </div>
+        <div class="field"><label for="scan-dpi">{translate("configurationSection.pageAnalysisDpi")}</label>
+          <input id="scan-dpi" class="input" type="number" min="72" max="600" step="1"
+                 bind:value={scan.scan_split_dpi} disabled={scan.managed.scan_split_dpi} />
+          <p class="sub">
+            {translate("configurationSection.pageAnalysisDpiHelp")}
+            {#if scan.managed.scan_split_dpi} · {translate("configurationSection.setByServerConfiguration")}{/if}
+          </p>
+        </div>
+      {/if}
+      <p class="wiz-p sub" style="font-size:.8rem">{translate("configurationSection.scanSettingsRuntimeHelp")}</p>
+      <div class="toolbar">
+        <button class="btn primary sm"
+                disabled={busy || allScanSettingsManaged || (scan.scan_asn_mode !== 'off' && (!scanPrefixValid || !scanDpiValid))}
+                onclick={saveScan}>{translate("configurationSection.saveScanProcessing")}</button>
+      </div>
+
     {:else if section === 'preferences'}
       <h3>{translate("configurationSection.ocrAndBackups")}</h3>
       <div class="field"><label for="p-ocr">{translate("configurationSection.ocrLanguagesCommaSeparatedTesseractCodes")}</label>
@@ -705,6 +792,7 @@
   }
   .context-preset:hover { border-color: var(--line-strong); }
   .context-preset.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .context-preset.locked { cursor: default; opacity: .7; }
   .context-preset input { margin: 3px 0 0; accent-color: var(--accent); }
   .context-copy { display: flex; flex-direction: column; gap: 3px; color: var(--muted); font-size: .76rem; line-height: 1.4; }
   .context-label { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; color: var(--ink); font-size: .82rem; }

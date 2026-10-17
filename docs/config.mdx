@@ -149,6 +149,14 @@ environment overrides a file-side secret-file path.
 | `SUCHI_DEMO_GLOBAL_RPS`           | `5`                      | Per-IP request rate for demo session mint and upgrade endpoints; burst is twice this value. `0` disables the cap. Range `0–10000`.                                                                                                                                                                                                                                                                                                                                                                                             |
 | `SUCHI_DEMO_SCRATCH_TTL_MINUTES`  | `30`                     | When demo mode is on, bounds how long a per-visitor scratch user (email `visitor-*@demo.local`) survives before the reset ticker sweeps them and their uploads. Ticker cadence is `ceil(TTL/2)` minutes. Range `1–1440`.                                                                                                                                                                                                                                                                                                        |
 
+Administrators can change ASN mode, prefix, and rasterization DPI under
+**Settings > Archive configuration > Advanced > Scan processing**. Saves affect
+future processing jobs immediately. An explicitly configured
+`SCAN_ASN_MODE`, `SCAN_ASN_PREFIX`, or `SCAN_SPLIT_DPI` remains authoritative
+and appears read-only instead of silently accepting an ineffective edit.
+Removing an override reveals the previously stored value. Legacy
+disposable-separator enablement and token remain boot configuration.
+
 ## Ingest pipeline timeouts
 
 Every ingest stage runs inside `core/sandbox` with a hard per-invocation

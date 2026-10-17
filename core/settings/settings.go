@@ -15,9 +15,11 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/asn"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 )
 
@@ -39,6 +41,9 @@ const (
 
 	KeyBackupIntervalHours = "backup.interval_hours"
 	KeyOCRLanguages        = "ocr.languages" // JSON array of ISO codes
+	KeyScanASNMode         = "scan.asn_mode"
+	KeyScanASNPrefix       = "scan.asn_prefix"
+	KeyScanSplitDPI        = "scan.split_dpi"
 
 	KeyFSWatchDir     = "ingest.fs_watch_dir"
 	KeyFSWatchOwnerID = "ingest.fs_watch_owner_id"
@@ -496,6 +501,85 @@ func envSet(keys ...string) bool {
 		}
 	}
 	return false
+}
+
+// ScanConfig controls retained ASN-label analysis for future PDF processing
+// jobs. Legacy disposable-separator enablement and token remain boot-only.
+type ScanConfig struct {
+	ASNMode   string
+	ASNPrefix string
+	SplitDPI  int
+}
+
+// ResolveScanConfig fills fields not pinned by the environment or config file
+// from the database. Pinned values are read from the environment because file
+// configuration is exported there at boot. Invalid values fail closed to the
+// validated boot/default value rather than changing marker interpretation.
+func ResolveScanConfig(ctx context.Context, database *db.DB, fb ScanConfig) ScanConfig {
+	out := fb
+	if !scanModeValid(out.ASNMode) {
+		out.ASNMode = "off"
+	}
+	if asn.ValidatePrefix(out.ASNPrefix) != nil {
+		out.ASNPrefix = "ASN"
+	}
+	if out.SplitDPI < 72 || out.SplitDPI > 600 {
+		out.SplitDPI = 150
+	}
+	if raw, pinned := os.LookupEnv("SCAN_ASN_MODE"); pinned {
+		if mode := strings.ToLower(raw); scanModeValid(mode) {
+			out.ASNMode = mode
+		}
+	} else {
+		var mode string
+		if err := Get(ctx, database, KeyScanASNMode, &mode); err == nil && scanModeValid(mode) {
+			out.ASNMode = mode
+		}
+	}
+	if raw, pinned := os.LookupEnv("SCAN_ASN_PREFIX"); pinned {
+		if asn.ValidatePrefix(raw) == nil {
+			out.ASNPrefix = raw
+		}
+	} else {
+		var prefix string
+		if err := Get(ctx, database, KeyScanASNPrefix, &prefix); err == nil && asn.ValidatePrefix(prefix) == nil {
+			out.ASNPrefix = prefix
+		}
+	}
+	if raw, pinned := os.LookupEnv("SCAN_SPLIT_DPI"); pinned {
+		if dpi, err := strconv.Atoi(raw); err == nil && dpi >= 72 && dpi <= 600 {
+			out.SplitDPI = dpi
+		}
+	} else {
+		var dpi int
+		if err := Get(ctx, database, KeyScanSplitDPI, &dpi); err == nil && dpi >= 72 && dpi <= 600 {
+			out.SplitDPI = dpi
+		}
+	}
+	return out
+}
+
+// ScanPins reports which scan keys are pinned by the deployment environment
+// or config file and therefore read-only through the admin settings API.
+type ScanPins struct {
+	Mode   bool
+	Prefix bool
+	DPI    bool
+}
+
+func (p ScanPins) Any() bool { return p.Mode || p.Prefix || p.DPI }
+
+// PinnedScanKeys reports the scan keys exported into this process environment.
+func PinnedScanKeys() ScanPins {
+	return ScanPins{
+		Mode:   envSet("SCAN_ASN_MODE"),
+		Prefix: envSet("SCAN_ASN_PREFIX"),
+		DPI:    envSet("SCAN_SPLIT_DPI"),
+	}
+}
+
+func scanModeValid(mode string) bool {
+	return mode == "off" || mode == "assign" || mode == "split"
 }
 
 // FSWatchConfig mirrors the filesystem watcher knobs that archive

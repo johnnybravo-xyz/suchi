@@ -516,6 +516,40 @@ func TestSaveLLMConfig_ExplicitEmptyKeyOverridesUnpinnedFallback(t *testing.T) {
 	}
 }
 
+func TestResolveScanConfigPrecedence(t *testing.T) {
+	d := setupDB(t)
+	ctx := context.Background()
+	if err := settings.SetMany(ctx, d, map[string]any{
+		settings.KeyScanASNMode:   "split",
+		settings.KeyScanASNPrefix: "BOX-",
+		settings.KeyScanSplitDPI:  300,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fallback := settings.ScanConfig{ASNMode: "off", ASNPrefix: "ASN", SplitDPI: 150}
+	if got := settings.ResolveScanConfig(ctx, d, fallback); got != (settings.ScanConfig{
+		ASNMode: "split", ASNPrefix: "BOX-", SplitDPI: 300,
+	}) {
+		t.Fatalf("stored scan config = %+v", got)
+	}
+
+	t.Setenv("SCAN_ASN_MODE", "assign")
+	t.Setenv("SCAN_ASN_PREFIX", "ENV")
+	t.Setenv("SCAN_SPLIT_DPI", "450")
+	pinned := settings.ScanConfig{ASNMode: "assign", ASNPrefix: "ENV", SplitDPI: 450}
+	if got := settings.ResolveScanConfig(ctx, d, pinned); got != pinned {
+		t.Fatalf("pinned scan config = %+v, want %+v", got, pinned)
+	}
+
+	if got := settings.ResolveScanConfig(ctx, d, fallback); got != pinned {
+		t.Fatalf("environment scan config = %+v, want %+v", got, pinned)
+	}
+	pins := settings.PinnedScanKeys()
+	if !pins.Mode || !pins.Prefix || !pins.DPI || !pins.Any() {
+		t.Fatalf("pinned scan keys = %+v, want all pinned", pins)
+	}
+}
+
 func TestResolveFSWatchConfig_Precedence(t *testing.T) {
 	d := setupDB(t)
 	ctx := context.Background()

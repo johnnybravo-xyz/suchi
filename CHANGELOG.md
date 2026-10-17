@@ -9,7 +9,9 @@ Notable user-visible changes to Suchi are recorded here.
 - Native archive serial numbers can now be assigned from retained QR labels,
   split feeder scans into atomically created documents, edited from Document
   Detail, searched with `asn:`, and preserved across replacement versions,
-  filesystem sidecars, and manifest-v3 takeouts.
+  filesystem sidecars, and manifest-v3 takeouts. Administrators can change ASN
+  mode, QR prefix, and scan-analysis DPI live under **Advanced > Scan
+  processing**; deployment-managed values are marked read-only.
 
 ## [0.3.0] - 2026-10-14
 
