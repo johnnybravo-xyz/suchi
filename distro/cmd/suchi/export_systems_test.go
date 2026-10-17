@@ -53,7 +53,8 @@ func TestNativeTakeoutAllOwnersStaysInSelectedSystem(t *testing.T) {
  INSERT INTO jd_areas(system_id,code_start,code_end,name,position) VALUES(1,10,19,'Records',0),(2,10,19,'Records',0);
  INSERT INTO jd_categories(system_id,id,area_start,code,name,system) VALUES(1,1,10,13,'Tax',0),(2,2,10,13,'Tax',0);
  INSERT INTO tags(system_id,id,name,slug,created_at,updated_at) VALUES(1,1,'Private audit label','same-name',0,0),(2,2,'Advisory label','same-name',0,0);
- INSERT INTO documents(system_id,id,owner_id,original_blob,original_size,title,title_owner,mime_type,jd_category_id,created_at,updated_at) VALUES(1,147,1,?,22,'Excluded audit file','human','text/plain',1,0,0),(2,148,1,?,22,'First owner','rule','text/plain',2,0,0),(2,149,2,?,22,'Second owner','human','text/plain',2,0,0);`, ref.SHA256, ref.SHA256, ref.SHA256)
+ INSERT INTO documents(system_id,id,owner_id,original_blob,original_size,title,title_owner,mime_type,jd_category_id,created_at,updated_at) VALUES(1,147,1,?,22,'Excluded audit file','human','text/plain',1,0,0),(2,148,1,?,22,'First owner','rule','text/plain',2,0,0),(2,149,2,?,22,'Second owner','human','text/plain',2,0,0);
+ UPDATE documents SET archive_serial_number=4021 WHERE id=148;`, ref.SHA256, ref.SHA256, ref.SHA256)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +110,7 @@ func TestNativeTakeoutAllOwnersStaysInSelectedSystem(t *testing.T) {
 			}
 		}
 	}
-	if manifest.Version != "2" || manifest.SystemCode != "S02" || manifest.SystemName != "Advisory firm" || manifest.Documents != 2 {
+	if manifest.Version != "3" || manifest.SystemCode != "S02" || manifest.SystemName != "Advisory firm" || manifest.Documents != 2 {
 		t.Fatalf("manifest: %+v", manifest)
 	}
 	if len(sidecars) != 2 {
@@ -125,6 +126,13 @@ func TestNativeTakeoutAllOwnersStaysInSelectedSystem(t *testing.T) {
 		side, ok := sidecars[address]
 		if !ok || side.Title != want.title || side.TitleOwner != want.owner || side.Version != 1 || side.JDSystem != "S02" || side.JDCategory != 13 || side.SHA256 != ref.SHA256 {
 			t.Fatalf("wrong source provenance: %+v", side)
+		}
+		if address == "S02.13.148" {
+			if side.ArchiveSerialNumber == nil || *side.ArchiveSerialNumber != 4021 {
+				t.Fatalf("archive serial number missing from sidecar: %+v", side)
+			}
+		} else if side.ArchiveSerialNumber != nil {
+			t.Fatalf("unexpected archive serial number in sidecar: %+v", side)
 		}
 	}
 	invalid := filepath.Join(root, "invalid.zip")

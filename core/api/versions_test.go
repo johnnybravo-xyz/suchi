@@ -18,6 +18,79 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/blob"
 )
 
+func TestUploadNewVersionTransfersArchiveSerialNumberAndDependentLayout(t *testing.T) {
+	s, d, _, principal, previousID := newVersionUploadServer(t, "version-asn-source")
+	if _, err := d.Write.Exec(`
+		INSERT INTO storage_paths(id,system_id,name,slug,path,created_at,updated_at)
+		VALUES (301,1,'ASN folders','asn-folders','Archive/{{ asn }}/{{ title }}',0,0);
+		UPDATE documents
+		SET archive_serial_number=4021, storage_path_id=301
+		WHERE id=?
+	`, previousID); err != nil {
+		t.Fatal(err)
+	}
+
+	req := multipartUploadRequest(t,
+		"/api/documents/1/versions/", "revision.pdf", testPDFBytes(), nil, principal)
+	req.SetPathValue("id", strconv.FormatInt(previousID, 10))
+	rec := httptest.NewRecorder()
+	s.UploadNewVersion(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var response uploadVersionResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.ArchiveSerialNumber == nil || *response.ArchiveSerialNumber != 4021 {
+		t.Fatalf("upload response = %+v", response)
+	}
+
+	var previousASN, previousLayout, headASN, headLayout any
+	if err := d.Read.QueryRow(`
+		SELECT previous.archive_serial_number, previous.storage_path_id,
+		       head.archive_serial_number, head.storage_path_id
+		FROM documents previous
+		JOIN documents head ON head.id=?
+		WHERE previous.id=?
+	`, response.ID, previousID).Scan(&previousASN, &previousLayout, &headASN, &headLayout); err != nil {
+		t.Fatal(err)
+	}
+	if previousASN != nil || previousLayout != nil || headASN != int64(4021) || headLayout != int64(301) {
+		t.Fatalf("previous ASN/layout=%v/%v head=%v/%v", previousASN, previousLayout, headASN, headLayout)
+	}
+
+	var renderJobs int
+	if err := d.Read.QueryRow(`
+		SELECT count(*) FROM jobs
+		WHERE kind='render' AND doc_id IN (?,?)
+	`, previousID, response.ID).Scan(&renderJobs); err != nil {
+		t.Fatal(err)
+	}
+	if renderJobs != 2 {
+		t.Fatalf("render jobs=%d, want 2", renderJobs)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/documents/1/versions/", nil).
+		WithContext(auth.WithPrincipal(context.Background(), principal))
+	listReq.SetPathValue("id", strconv.FormatInt(response.ID, 10))
+	listRec := httptest.NewRecorder()
+	s.ListVersions(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", listRec.Code, listRec.Body.String())
+	}
+	var versions versionListResponse
+	if err := json.Unmarshal(listRec.Body.Bytes(), &versions); err != nil {
+		t.Fatal(err)
+	}
+	if len(versions.Results) != 2 ||
+		versions.Results[0].ArchiveSerialNumber == nil ||
+		*versions.Results[0].ArchiveSerialNumber != 4021 ||
+		versions.Results[1].ArchiveSerialNumber != nil {
+		t.Fatalf("versions = %+v", versions.Results)
+	}
+}
+
 func TestUploadNewVersionCopiesDocumentACLs(t *testing.T) {
 	d := openTestDB(t)
 	inbox := seedStatsJDInbox(t, d)
