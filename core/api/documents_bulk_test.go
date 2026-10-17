@@ -129,7 +129,7 @@ func TestBulkRenderedLayoutRequiresPreviousArchiveNumber(t *testing.T) {
 	}
 	code, _ := doBulkEdit(t, s, request, adminPrincipal(1))
 	if code != http.StatusConflict {
-		t.Fatalf("layout without previous archive number status=%d, want 409", code)
+		t.Fatalf("layout without archive serial number status=%d, want 409", code)
 	}
 	var stored sql.NullInt64
 	if err := s.DB.Read.QueryRow(`SELECT storage_path_id FROM documents WHERE id=?`, docID).Scan(&stored); err != nil {

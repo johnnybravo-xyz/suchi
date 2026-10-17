@@ -123,7 +123,7 @@ func BuiltinActions() []ActionDefinition {
 					return fmt.Errorf("assign_storage_path: unavailable folder layout: %w", err)
 				}
 				if renderpaths.UsesVariable(template, "asn") && !asn.Valid {
-					return errors.New("assign_storage_path: folder layout requires a previous archive number")
+					return errors.New("assign_storage_path: folder layout requires an archive serial number")
 				}
 				if _, err := tx.ExecContext(ctx,
 					`UPDATE documents SET storage_path_id = ? WHERE id = ?`, id, target.DocID); err != nil {

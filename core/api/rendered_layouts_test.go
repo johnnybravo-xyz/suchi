@@ -32,7 +32,7 @@ func TestRenderedLayoutPreviewAndDocumentAssignment(t *testing.T) {
 	}
 
 	created := systemsBoundaryRequest(mux, http.MethodPost, "/api/rendered_layouts/?system=S01",
-		`{"name":"Previous archive folders","path":"Legacy/{{ asn }}/{{ title }}"}`, adminPrincipal(1))
+		`{"name":"ASN folders","path":"Legacy/{{ asn }}/{{ title }}"}`, adminPrincipal(1))
 	if created.Code != http.StatusCreated {
 		t.Fatalf("create: status=%d body=%s", created.Code, created.Body.String())
 	}

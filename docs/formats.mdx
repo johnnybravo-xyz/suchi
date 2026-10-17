@@ -223,55 +223,86 @@ The parser is pure Go stdlib (`net/mail` + `mime/multipart` +
 no external tools. RFC 2047 encoded-word subjects, quoted-printable +
 base64 bodies, and nested multipart trees all decode correctly.
 
-### Multi-doc splitting on QR separator sheets
+### Barcode-assisted physical filing with archive serial numbers
 
-Feeder-scanning a stack of unrelated documents produces one large PDF
-that should really be N docs. Opt in with `SCAN_SPLIT_ENABLED=on` and
-suchi will detect **separator sheets** — pages carrying a QR code with
-a specific payload — and fan out one document per segment.
+An archive serial number (ASN) is a stable integer printed on the paper and
+stored with its digital document. Suchi recognizes a case-sensitive QR payload
+made from `SCAN_ASN_PREFIX` followed immediately by decimal digits. With the
+default prefix, `ASN000042` and `ASN42` both store the integer `42`; the web app
+renders the canonical chip **ASN 42**.
 
-**Setup:**
+Use one of two opt-in modes:
 
-1. Generate a separator sheet:
+```sh
+# One labelled document per PDF; keep every page.
+export SCAN_ASN_MODE=assign
+export SCAN_ASN_PREFIX=ASN
 
-   ```sh
-   qrencode -s 20 -o separator.png SUCHI-SPLIT
-   ```
+# Or one feeder scan containing several labelled documents.
+export SCAN_ASN_MODE=split
+export SCAN_ASN_PREFIX=ASN
+```
 
-   Print several copies. Any QR encoder works; the default token is
-   `SUCHI-SPLIT` (override via `SCAN_SPLIT_TOKEN`).
+- **`assign`** leaves the PDF intact. An unlabelled PDF proceeds normally. If a
+  prefix-looking label is present, the PDF must contain exactly one valid ASN
+  QR code, on any page.
+- **`split`** also leaves an unlabelled PDF alone. Once an ASN label is detected,
+  page 1 must carry exactly one, and every later ASN-labelled page starts the
+  next document. The labelled pages remain as the first pages of their segments;
+  they are not disposable separators.
 
-2. Enable in the environment:
+For a feeder batch, put the label on the first page of each physical document,
+scan the stack into one PDF, and upload it normally. Suchi rasterizes every page
+once at `SCAN_SPLIT_DPI`, enumerates every visible barcode, validates the whole
+plan, then extracts the ranges. Each child gets the integer from its first page,
+its own immutable original and processing job. All child rows, inherited ACLs,
+sources and jobs commit in one writer transaction; only then is the combined
+parent moved to Trash. A transaction failure exposes no partial batch.
 
-   ```sh
-   export SCAN_SPLIT_ENABLED=on
-   ```
+ASN values are unique within one filing system across live documents, Trash and
+version history. Preflight therefore stops a conflicting batch before
+pre-consume or other mutable ingest hooks run. Malformed prefix-looking labels,
+multiple labels in `assign` mode, multiple ASN labels on one split page,
+repeated canonical values, a missing leading label, and a scan mixing ASN and
+legacy separator markers become terminal processing errors. Correct the source
+or retained conflicting document, then ingest again. A replay after a completed
+split returns the existing children rather than creating another set; restoring
+or re-uploading the retired parent cannot silently resurrect it over those
+children.
 
-3. Insert a separator between each document in your feeder stack and
-   scan the whole pile as one PDF. Upload as usual.
+Blank-page cleanup never removes an ASN-labelled segment's first page. The
+combined uploaded original remains in content-addressed storage and its retired
+parent remains recoverable from Trash during the normal retention window.
+Assignment mode likewise preserves the labelled page and original PDF.
 
-**What happens on ingest:**
+Print and scan a small calibration batch before committing to label stock. The
+code must survive the scanner's scale, contrast and compression at the selected
+DPI. Use a prefix that cannot overlap the legacy separator token, allocate each
+integer once, and keep the human-readable number beside the QR code so a filing
+mistake can be diagnosed without software.
 
-- `docsplit` rasterizes each page at 150 DPI and scans for QR codes.
-- Separator pages are dropped; the ranges between them become segments.
-- Each segment becomes a fresh document (with its own `original_blob`
-  and `post-ingest` job), linked via `split_parent_id`.
-- Each child inherits the live parent's owner, title text, capture time,
-  category, and sensitivity in its creation transaction, but starts with
-  automatic title ownership so it can be named from its own extracted content.
-  Edits during extraction are preserved; a trashed parent cannot create new
-  children. Device OCR belongs to the combined scan and is discarded; each
-  child runs server extraction.
-- The parent doc is soft-deleted so the workspace only shows the
-  children. Undelete brings the parent (original combined scan) back
-  if the split was wrong. Retries preserve its original Trash retention date.
+#### Legacy disposable separator sheets
 
-**Why QR-only:** blank-page splitting sounds ergonomic but silently
-breaks legit multi-page docs that happen to contain a mostly-empty
-page. QR is explicit — the user prints separator sheets on purpose.
+`SCAN_SPLIT_ENABLED=on` retains the earlier separator workflow. A barcode whose
+trimmed payload equals `SCAN_SPLIT_TOKEN` is removed, and each non-empty range
+between separators becomes a child document. The default payload is
+`SUCHI-SPLIT`:
 
-**Config knobs:** see [config](/config) for `SCAN_SPLIT_ENABLED`,
-`SCAN_SPLIT_TOKEN`, `SCAN_SPLIT_DPI`.
+```sh
+qrencode -s 20 -o separator.png SUCHI-SPLIT
+```
+
+Legacy separator and ASN detection may be configured together, but one PDF must
+not contain both marker families. Prefer ASN labels when the physical and
+digital copies need a shared durable identifier; use disposable separators when
+the pages should not become part of the child documents.
+
+See [configuration](/config) for `SCAN_ASN_MODE`, `SCAN_ASN_PREFIX`,
+`SCAN_SPLIT_ENABLED`, `SCAN_SPLIT_TOKEN`, and `SCAN_SPLIT_DPI`.
+
+Run `make smoke-asn` to exercise a generated retained-label feeder PDF through
+watched-folder intake, atomic fanout, API projections, metadata conflicts, and
+completed-batch replay.
 
 ### ZUGFeRD / Factur-X / XRechnung
 
@@ -629,6 +660,7 @@ Version, split and attachment documents inherit their source system.
   ],
   "tags": ["utilities", "source:fs-watch"],
   "jd_category": 31,
+  "archive_serial_number": 4021,
   "notes": "auto-picked-up",
   "custom_fields": { "amount_inr": "1420", "billing_period": "March" }
 }
@@ -645,29 +677,32 @@ Version, split and attachment documents inherit their source system.
 | `tags[]`           | array             | Tag slugs. Auto-created on ingest.                                                                                                                           |
 | `jd_category`      | int               | JD code (e.g. `31` = "Utilities" under area 30–39). Falls through to inbox when unresolved.                                                                  |
 | `jd_system`        | string, optional  | Source/expected system code. When supplied, must match the configured intake target; never routes or creates a system.                                       |
+| `archive_serial_number` | int, optional     | Positive integer no greater than `9007199254740991`. Unique within the intake filing system across live, trashed, and historical versions; a conflict rejects the intake atomically. |
 | `jd_address`       | string, optional  | Informational source location. Does not request a document ID or override current filing.                                                                    |
 | `notes`            | string            | Creates an attributed note owned by the intake owner on this exact document revision.                                                                        |
 | `custom_fields`    | object            | Map of exact custom-field name → typed value. The field must already exist (`/api/custom_fields/`); API validation follows its declared type.                |
 
 **Source of truth**: `core/ingest/sidecar/sidecar.go` parses the wire shape;
-`core/ingest/fswatch` applies it. Metadata, the note, typed custom fields, and
-the ingest outbox commit together. An unknown custom field, invalid typed value,
-bad JSON, or explicit-but-mismatched `suchi_sidecar` version rejects the intake
-without partial metadata; the file moves to `<dir>/errors/` with a `.err`
-companion. Producers that omit `suchi_sidecar` get the flat-JSON compatibility
-shape (`title`/`title_owner`/`created`/`correspondent`/`tags` only).
+`core/ingest/fswatch` applies it. Metadata, ASN, the note, typed custom fields,
+and the ingest outbox commit together. An occupied ASN, unknown custom field,
+invalid typed value, bad JSON, or explicit-but-mismatched `suchi_sidecar`
+version rejects the intake without partial metadata. The read-only watcher
+retains the source file and records the bounded failure in Suchi-owned state.
+Producers that omit `suchi_sidecar` get the flat-JSON compatibility shape
+(`title`/`title_owner`/`created`/`correspondent`/`tags` only).
 
 The native `suchi export` sidecar is a partial takeout, not a complete restore
 contract. It carries title ownership with the title, source date,
-correspondents, tags, and JD category, which fs-watch applies. Per-document
-custom-field values and notes are not exported. `sensitivity`, `mime_type`, and
-`sha256` may appear for provenance, but the current sidecar parser ignores
-them; MIME and SHA-256 are recomputed from the file and sensitivity is not
-restored.
-Native takeout manifest version `"2"` identifies one selected system and includes
-these optional source fields while sidecar format remains 1. Reingestion can allocate
-new installation-global IDs; source addresses are not immutable aliases. Full
-DB/blob/key backup, not a sidecar, preserves membership and document relationships.
+correspondents, tags, JD category, and ASN, which fs-watch applies.
+Per-document custom-field values and notes are not exported. `sensitivity`,
+`mime_type`, and `sha256` may appear for provenance, but the current sidecar
+parser ignores them; MIME and SHA-256 are recomputed from the file and
+sensitivity is not restored.
+Native takeout manifest version `"3"` identifies one selected system and
+includes these optional source fields while sidecar format remains 1.
+Reingestion preserves available ASNs but can allocate new installation-global
+document IDs; source addresses are not immutable aliases. Full DB/blob/key
+backup, not a sidecar, preserves membership and document relationships.
 
 ## Docker image matrix
 
