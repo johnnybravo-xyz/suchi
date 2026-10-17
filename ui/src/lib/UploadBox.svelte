@@ -25,6 +25,20 @@
   let pollTimer
   const scope = captureScope()
   const processingQueue = new Set()
+  // Rejected ASN scans end their job error with "<code>[ page=N][ asn=M][ doc=ID]";
+  // see terminalASNError and terminalASNConflict in core/pipeline/postingest.
+  const SCAN_ISSUE_KEYS = {
+    malformed_asn: 'uploadBox.scanIssueMalformedASN',
+    mixed_markers: 'uploadBox.scanIssueMixedMarkers',
+    multiple_asn: 'uploadBox.scanIssueMultipleASN',
+    multiple_asn_on_page: 'uploadBox.scanIssueMultipleASNOnPage',
+    duplicate_asn: 'uploadBox.scanIssueDuplicateASN',
+    missing_leading_asn: 'uploadBox.scanIssueMissingLeadingASN',
+    archive_serial_number_conflict: 'uploadBox.scanIssueASNConflict',
+    archive_serial_number_mismatch: 'uploadBox.scanIssueASNMismatch',
+    archive_serial_number_requires_current_version: 'uploadBox.scanIssueASNRequiresCurrentVersion',
+    archive_serial_number_batch_not_allowed: 'uploadBox.scanIssueASNBatchNotAllowed',
+  }
 
   const waitingCount = $derived(queue.filter(entry => entry.state === 'waiting').length)
   const uploadingCount = $derived(queue.filter(entry => entry.state === 'uploading').length)
@@ -182,7 +196,7 @@
       if (!current(user)) return
       if (!Array.isArray(tasks?.results)) throw new Error(translate("uploadBox.invalidProcessingResponse"))
       const active = tasks.results.some(job => job.state === 'pending' || job.state === 'running')
-      const failed = tasks.results.some(job => job.state === 'dead')
+      const failedJob = tasks.results.find(job => job.state === 'dead')
       if (active) {
         entry.state = 'processing'
         pauseChecks(entry)
@@ -205,15 +219,31 @@
           return
         }
       }
+      const issue = failedJob ? await scanIssue(failedJob.last_error) : ''
+      if (!current(user)) return
       processingQueue.delete(entry)
       entry.doc = doc
-      entry.state = failed ? 'processing_failed' : doc?.content?.trim() ? 'ready' : 'no_text'
+      entry.state = failedJob ? 'processing_failed' : doc?.content?.trim() ? 'ready' : 'no_text'
+      entry.error = issue
       markUploaded()
     } catch {
       if (!current(user)) return
       entry.state = 'status_unknown'
       pauseChecks(entry)
     }
+  }
+
+  async function scanIssue(lastError) {
+    const match = /([a-z_]+)(?: page=(\d+))?(?: asn=(\d+))?(?: doc=(\d+))?$/.exec(lastError || '')
+    const key = match && SCAN_ISSUE_KEYS[match[1]]
+    if (!key) return ''
+    const values = { page: match[2] || '', asn: match[3] || '' }
+    if (match[4]) {
+      // The holder is named only when this uploader may open it.
+      const holder = await getDocument(match[4]).catch(() => null)
+      if (holder?.title) return translate("uploadBox.scanIssueASNConflictWithTitle", { ...values, id: match[4], title: holder.title })
+    }
+    return translate(key, values)
   }
 
   function retry(entry) {
