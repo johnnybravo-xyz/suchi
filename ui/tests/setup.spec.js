@@ -1894,7 +1894,7 @@ test('creates, previews, and deletes Advanced folder layouts', async ({ page }) 
   await page.getByLabel('Layout name').fill('Imported folders')
   await page.getByLabel('Path template').fill('Legacy/{{ asn }}/{{ title }}')
   await expect(page.getByText('Legacy/4021/March electricity bill', { exact: true })).toBeVisible()
-  await expect(page.getByText('Uses previous archive number', { exact: true })).toBeVisible()
+  await expect(page.getByText('Uses archive serial number', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Create layout' }).click()
 
   const saved = page.getByRole('region', { name: 'Saved layouts' })

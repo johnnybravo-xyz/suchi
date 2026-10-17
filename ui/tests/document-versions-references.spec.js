@@ -474,7 +474,6 @@ test('shows only populated typed metadata and keeps compact add and edit control
     { kind: 'field', body: { value: 250.5 } },
     { kind: 'note', body: { note: 'Call the utility' } },
   ])
-  await expect(page.getByText('Previous archive number', { exact: true })).toHaveCount(0)
 })
 
 test('ignores late history and backlink responses after exact-route navigation', async ({ page }) => {
