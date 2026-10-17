@@ -432,6 +432,13 @@ and custom fields. `FilingTreeSettings.svelte` owns presets, tree construction,
 and taxonomy files. `ArchiveSettings.svelte` places
 `FolderLayoutsSettings.svelte` first under Advanced; its editor calls the server
 preview rather than duplicating template semantics in JavaScript.
+`ConfigurationSection.svelte` reuses the archive-settings load/save shell and
+existing radio-card controls for **Scan processing**. It reads and writes the
+effective mode, QR prefix, and DPI through `/api/admin/settings/scan`, hides
+inactive label details, and disables fields named in the response's `managed`
+object. `ArchiveSettings.svelte` projects the same endpoint into the Advanced
+overview status. Marker grammar, deployment precedence, and legacy-token
+collision checks remain server-owned.
 `Automations.svelte` retains action parameter schemas, reuses the existing
 metadata, user-directory, and filing-system-membership APIs, and presents a
 list-first workspace with a mutually exclusive local editor state. Compact rows

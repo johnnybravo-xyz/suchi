@@ -233,6 +233,12 @@ renders the canonical chip **ASN 42**.
 
 Use one of two opt-in modes:
 
+Administrators can choose the mode, prefix, and analysis DPI under **Settings >
+Archive configuration > Advanced > Scan processing**. Those saved values apply
+to future processing jobs immediately. Deployment environment or config-file
+values take precedence and appear read-only without replacing the stored value;
+the equivalent operator configuration is:
+
 ```sh
 # One labelled document per PDF; keep every page.
 export SCAN_ASN_MODE=assign
@@ -275,11 +281,12 @@ combined uploaded original remains in content-addressed storage and its retired
 parent remains recoverable from Trash during the normal retention window.
 Assignment mode likewise preserves the labelled page and original PDF.
 
-Print and scan a small calibration batch before committing to label stock. The
-code must survive the scanner's scale, contrast and compression at the selected
-DPI. Use a prefix that cannot overlap the legacy separator token, allocate each
-integer once, and keep the human-readable number beside the QR code so a filing
-mistake can be diagnosed without software.
+Print and scan a small calibration batch before committing to label stock. Start
+at 300 DPI for physical labels, then calibrate against the smallest printed code
+and the scanner's scale, contrast, and compression; higher DPI costs more CPU and
+memory. Use a prefix that cannot overlap the legacy separator token, allocate
+each integer once, and keep the human-readable number beside the QR code so a
+filing mistake can be diagnosed without software.
 
 #### Legacy disposable separator sheets
 

@@ -381,7 +381,7 @@ Admins also have **Settings > Archive configuration**:
 | **Structure and access** | **Filing tree**, **People**, **Metadata**           |
 | **Document intake**      | **Watched folder**, **Email intake**                |
 | **Processing**           | **Classification**, **Automations**                |
-| **Advanced**             | **Folder layouts**, **OCR and backups**            |
+| **Advanced**             | **Folder layouts**, **Scan processing**, **OCR and backups** |
 
 The configuration frame fills the available screen height. Long sections scroll
 inside the right pane without moving section navigation or the version footer.
@@ -407,6 +407,12 @@ values remain editable.
 import/export. Preview precedes taxonomy Apply; export contains the tree only.
 **What is included?** explains why it does not replace a [full
 backup](/backup-restore).
+
+**Advanced > Scan processing** controls retained ASN QR handling for future PDF
+processing jobs. Administrators choose off, one-ASN assignment, or feeder-PDF
+splitting, plus the case-sensitive QR prefix and detection DPI. Saves apply
+without a restart. Deployment environment or config-file values appear
+read-only; removing an override reveals the previously stored value.
 
 **Advanced > Folder layouts** controls paths in the local rendered filesystem.
 The editor shows supported variables and a server-rendered sample before save.
