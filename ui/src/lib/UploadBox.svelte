@@ -4,7 +4,7 @@
   import { captureScope, scopeCurrent, scopedHash as filingHref } from './systems.svelte.js'
   import { onMount, onDestroy } from 'svelte'
   import { session } from './session.svelte.js'
-  import { uploadDocument, getDocument, listTasks } from './api.js'
+  import { uploadDocument, getDocument, listDocuments, listTasks } from './api.js'
   import { fmtBytes, plural } from './format.js'
   import { markUploaded } from './upload_bus.svelte.js'
   import Icon from './Icon.svelte'
@@ -29,11 +29,11 @@
   const waitingCount = $derived(queue.filter(entry => entry.state === 'waiting').length)
   const uploadingCount = $derived(queue.filter(entry => entry.state === 'uploading').length)
   const acceptedCount = $derived(queue.filter(entry => entry.receipt).length)
-  const readyCount = $derived(queue.filter(entry => entry.state === 'ready' || entry.state === 'no_text').length)
+  const readyCount = $derived(queue.filter(entry => entry.state === 'ready' || entry.state === 'no_text' || entry.state === 'split').length)
   const processingCount = $derived(queue.filter(entry => entry.state === 'processing' || entry.state === 'status_unknown').length)
   const failedCount = $derived(queue.filter(entry => entry.state === 'upload_failed' || entry.state === 'processing_failed').length)
   const settledTransfers = $derived(queue.length - waitingCount - uploadingCount)
-  const completedCount = $derived(queue.filter(entry => entry.state === 'ready' || entry.state === 'no_text').length)
+  const completedCount = $derived(queue.filter(entry => entry.state === 'ready' || entry.state === 'no_text' || entry.state === 'split').length)
   const summary = $derived.by(() => {
     if (!queue.length) return ''
     if (waitingCount || uploadingCount) {
@@ -91,6 +91,7 @@
         statusCode: 0,
         doc: null,
         id: null,
+        children: [],
         address: '',
         checks: 0,
         paused: false,
@@ -189,6 +190,21 @@
       }
       const doc = await getDocument(entry.id)
       if (!current(user)) return
+      if (doc?.trashed_at != null) {
+        const split = await listDocuments({ split_origin_id: entry.id, page_size: 200 })
+        if (!current(user)) return
+        const children = Array.isArray(split?.results)
+          ? [...split.results].sort((a, b) => (a.split_index ?? a.id) - (b.split_index ?? b.id))
+          : []
+        if (children.length) {
+          processingQueue.delete(entry)
+          entry.doc = doc
+          entry.children = children
+          entry.state = 'split'
+          markUploaded()
+          return
+        }
+      }
       processingQueue.delete(entry)
       entry.doc = doc
       entry.state = failed ? 'processing_failed' : doc?.content?.trim() ? 'ready' : 'no_text'
@@ -213,7 +229,7 @@
   }
 
   function clearCompleted() {
-    queue = queue.filter(entry => entry.state !== 'ready' && entry.state !== 'no_text')
+    queue = queue.filter(entry => entry.state !== 'ready' && entry.state !== 'no_text' && entry.state !== 'split')
   }
 
   function statusLabel(entry) {
@@ -235,6 +251,7 @@
         : entry.receipt === 'restored'
           ? translate("uploadBox.restoredNoTextFound")
           : translate("uploadBox.readyNoTextFound")
+      case 'split': return translate("uploadBox.splitIntoDocuments", { count: entry.children.length })
       case 'upload_failed': return translate("uploadBox.uploadFailed")
       case 'processing_failed': return translate("uploadBox.processingNeedsAttention")
       case 'status_unknown': return translate("uploadBox.couldNotCheckProcessingStatus")
@@ -326,7 +343,7 @@
         <article class="card queue-row">
           <span class="state-dot"
                 class:active={entry.state === 'uploading' || entry.state === 'processing'}
-                class:ok={entry.state === 'ready' || entry.state === 'no_text'}
+                class:ok={entry.state === 'ready' || entry.state === 'no_text' || entry.state === 'split'}
                 class:danger={entry.state === 'upload_failed' || entry.state === 'processing_failed'}
                 aria-hidden="true"></span>
           <div class="file-copy">
@@ -337,6 +354,18 @@
             </div>
             {#if entry.doc?.title && entry.doc.title !== entry.name}
               <span title={entry.doc.title}>{translate("uploadBox.filedAsValue", { "title": entry.doc.title })}</span>
+            {/if}
+            {#if entry.children.length}
+              <div class="split-results" role="group" aria-label={translate("uploadBox.documentsCreatedFromThisScan")}>
+                {#each entry.children as child (child.id)}
+                  <a href={filingHref(`#/doc/${child.id}`)}>
+                    {#if child.archive_serial_number != null}
+                      <span class="chip">{translate("common.asnValue", { value: String(child.archive_serial_number) })}</span>
+                    {/if}
+                    <span>{child.title || translate("uploadBox.documentValue", { id: child.id })}</span>
+                  </a>
+                {/each}
+              </div>
             {/if}
             {#if entry.error}<span class="row-error" role="alert">{entry.error}</span>{/if}
             {#if entry.paused}<span>{translate("uploadBox.automaticChecksPausedProcessingContinuesOnThe")}</span>{/if}
@@ -351,7 +380,7 @@
             {#if entry.id && (entry.paused || entry.state === 'processing_failed')}
               <button class="btn sm" onclick={() => watchProcessing(entry)}>{translate("uploadBox.checkAgain")}</button>
             {/if}
-            {#if entry.id}<a class="btn sm" href={filingHref(`#/doc/${entry.id}`)}>{translate("uploadBox.openDocument")}</a>{/if}
+            {#if entry.id && !entry.children.length}<a class="btn sm" href={filingHref(`#/doc/${entry.id}`)}>{translate("uploadBox.openDocument")}</a>{/if}
           </div>
         </article>
       {/each}
@@ -386,6 +415,10 @@
   .file-meta span + span::before { content:'·';margin-right:7px }
   .file-copy .row-status { color:var(--ink);font-weight:600 }
   .file-copy .row-error { color:var(--danger);white-space:normal }
+  .split-results { display:flex; flex-wrap:wrap; gap:5px; margin-top:3px; }
+  .split-results a { display:inline-flex; align-items:center; gap:5px; max-width:100%; padding:3px 7px; border:1px solid var(--line); border-radius:6px; color:var(--ink); font-size:.75rem; text-decoration:none; }
+  .split-results a:hover { border-color:var(--accent); }
+  .split-results a > span:last-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .row-actions,.queue-actions,.queue-footer { display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap }
   .pasted { padding:16px }
   .pasted .sub { margin:6px 0 12px;color:var(--muted);font-size:.82rem }

@@ -862,7 +862,7 @@
                 <select class="input action-value" aria-label={translate("automations.folderLayout")} bind:value={action.params.storage_path_id}>
                   <option value={0}>{translate("automations.chooseFolderLayout")}</option>
                   {#each facets.renderedLayouts as layout}
-                    <option value={layout.id}>{layout.name}{layout.uses_asn ? translate("automations.previousArchiveNumberRequired") : ''}</option>
+                    <option value={layout.id}>{layout.name}{layout.uses_asn ? translate("automations.archiveSerialNumberRequired") : ''}</option>
                   {/each}
                   {#if action.params.storage_path_id && !facets.renderedLayouts.some(layout => Number(layout.id) === Number(action.params.storage_path_id))}
                     <option value={action.params.storage_path_id}>{translate("automations.unavailableFolderLayout")}</option>

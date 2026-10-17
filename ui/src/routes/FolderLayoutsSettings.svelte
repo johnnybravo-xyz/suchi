@@ -16,7 +16,7 @@
     [translate("folderLayoutsSettings.document"), ['title', 'doc_pk', 'created', 'created_year', 'created_month', 'created_day', 'added', 'added_year', 'added_month', 'added_day']],
     [translate("folderLayoutsSettings.filingTree"), ['jd.area.code_start', 'jd.area.code_end', 'jd.area.name', 'jd.category.code', 'jd.category.name', 'jd.system.code', 'jd.system.name', 'jd.address']],
     [translate("folderLayoutsSettings.metadata"), ['correspondent', 'tag_list', 'owner']],
-    [translate("folderLayoutsSettings.compatibility"), ['storage_path', 'asn']],
+    [translate("folderLayoutsSettings.archiveIdentity"), ['storage_path', 'asn']],
   ]
 
   let rows = $state([])
@@ -150,7 +150,7 @@
     <form class="card layout-editor" onsubmit={save}>
       <div class="editor-heading">
         <div><h4>{editingID == null ? translate("folderLayoutsSettings.createALayout") : translate("folderLayoutsSettings.editLayout")}</h4><p>{translate("folderLayoutsSettings.templatesProduceARelativePathBeneathThis")}</p></div>
-        {#if sample?.uses_asn}<span class="pill warn">{translate("folderLayoutsSettings.usesPreviousArchiveNumber")}</span>{/if}
+        {#if sample?.uses_asn}<span class="pill warn">{translate("folderLayoutsSettings.archiveSerialNumberUsed")}</span>{/if}
       </div>
       <label class="field">{translate("folderLayoutsSettings.layoutName")}
         <input class="input" bind:value={draft.name} placeholder={translate("folderLayoutsSettings.eGHouseholdBillsByYear")} required />
@@ -168,7 +168,7 @@
             <div>{#each names as name}<button class="variable" type="button" onclick={() => insertVariable(name)}>{translate("folderLayoutsSettings.value", { "name": name })}</button>{/each}</div>
           </div>
         {/each}
-        <p><code>{`{{ asn }}`}</code> {translate("folderLayoutsSettings.isCompatibilityOnlyAndWorksOnlyFor")}</p>
+        <p><code>{`{{ asn }}`}</code> {translate("folderLayoutsSettings.archiveSerialNumberTemplateHelp")}</p>
       </div>
 
       <div class="sample" class:error={!!previewError}>
@@ -196,7 +196,7 @@
             <article class="layout-row" class:active={editingID === row.id}>
               <div class="layout-row-heading">
                 <strong>{row.name}</strong>
-                {#if row.uses_asn}<span class="pill warn">{translate("folderLayoutsSettings.previousArchiveNumber")}</span>{/if}
+                {#if row.uses_asn}<span class="pill warn">{translate("folderLayoutsSettings.archiveSerialNumber")}</span>{/if}
               </div>
               <code>{row.path}</code>
               <div class="row-actions">
