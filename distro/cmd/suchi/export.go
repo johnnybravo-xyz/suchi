@@ -82,20 +82,21 @@ type exportManifest struct {
 // exportSidecar mirrors sidecar.V1 shape but adds the extra fields
 // we want to round-trip on re-import (jd category code + tags + etc).
 type exportSidecar struct {
-	Version        int              `json:"suchi_sidecar"`
-	Title          string           `json:"title,omitempty"`
-	TitleOwner     string           `json:"title_owner,omitempty"`
-	Created        string           `json:"created,omitempty"` // ISO 8601 from documents.created_at
-	Correspondent  string           `json:"correspondent,omitempty"`
-	Correspondents []exportCorrRole `json:"correspondents,omitempty"`
-	Tags           []string         `json:"tags,omitempty"`
-	Notes          string           `json:"notes,omitempty"`
-	JDCategory     int              `json:"jd_category,omitempty"`
-	JDSystem       string           `json:"jd_system,omitempty"`
-	JDAddress      string           `json:"jd_address,omitempty"`
-	Sensitivity    string           `json:"sensitivity,omitempty"`
-	MIME           string           `json:"mime_type,omitempty"`
-	SHA256         string           `json:"sha256,omitempty"`
+	Version             int              `json:"suchi_sidecar"`
+	Title               string           `json:"title,omitempty"`
+	TitleOwner          string           `json:"title_owner,omitempty"`
+	Created             string           `json:"created,omitempty"` // ISO 8601 from documents.created_at
+	Correspondent       string           `json:"correspondent,omitempty"`
+	Correspondents      []exportCorrRole `json:"correspondents,omitempty"`
+	Tags                []string         `json:"tags,omitempty"`
+	Notes               string           `json:"notes,omitempty"`
+	JDCategory          int              `json:"jd_category,omitempty"`
+	JDSystem            string           `json:"jd_system,omitempty"`
+	JDAddress           string           `json:"jd_address,omitempty"`
+	Sensitivity         string           `json:"sensitivity,omitempty"`
+	MIME                string           `json:"mime_type,omitempty"`
+	SHA256              string           `json:"sha256,omitempty"`
+	ArchiveSerialNumber *int64           `json:"archive_serial_number,omitempty"`
 }
 
 type exportCorrRole struct {
@@ -205,7 +206,7 @@ func runExport(args []string) int {
 	zw = zip.NewWriter(f)
 
 	man := exportManifest{
-		Version:     "2",
+		Version:     "3",
 		SystemCode:  system.Code,
 		SystemName:  system.Name,
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
@@ -423,7 +424,8 @@ func dumpDocuments(ctx context.Context, zw *zip.Writer, d *db.DB, cas *blob.CAS,
 	}
 	rows, err := d.Read.QueryContext(ctx, `
 		SELECT id, title, title_owner, original_blob, mime_type, created_at,
-		       COALESCE(sensitivity, ''), COALESCE(jd_category_id, 0)
+		       COALESCE(sensitivity, ''), COALESCE(jd_category_id, 0),
+		       archive_serial_number
 		  FROM documents `+where+`
 		 ORDER BY id`, args...)
 	if err != nil {
@@ -434,16 +436,20 @@ func dumpDocuments(ctx context.Context, zw *zip.Writer, d *db.DB, cas *blob.CAS,
 	written, skipped := 0, 0
 	for rows.Next() {
 		var (
-			id          int64
-			title       string
-			titleOwner  string
-			blobSHA     string
-			mime        sql.NullString
-			created     int64
-			sensitivity string
-			jdCatID     int64
+			id            int64
+			title         string
+			titleOwner    string
+			blobSHA       string
+			mime          sql.NullString
+			created       int64
+			sensitivity   string
+			jdCatID       int64
+			archiveNumber sql.NullInt64
 		)
-		if err := rows.Scan(&id, &title, &titleOwner, &blobSHA, &mime, &created, &sensitivity, &jdCatID); err != nil {
+		if err := rows.Scan(
+			&id, &title, &titleOwner, &blobSHA, &mime, &created, &sensitivity, &jdCatID,
+			&archiveNumber,
+		); err != nil {
 			return written, skipped, err
 		}
 
@@ -457,6 +463,10 @@ func dumpDocuments(ctx context.Context, zw *zip.Writer, d *db.DB, cas *blob.CAS,
 			SHA256:      blobSHA,
 			MIME:        mime.String,
 			JDSystem:    system.Code,
+		}
+		if archiveNumber.Valid {
+			value := archiveNumber.Int64
+			side.ArchiveSerialNumber = &value
 		}
 		// Tags + correspondents + jd_category — each best-effort;
 		tags, err := loadDocTags(ctx, d, id)

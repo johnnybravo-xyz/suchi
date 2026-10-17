@@ -19,20 +19,23 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
+	renderpaths "github.com/johnnybravo-xyz/suchi/core/render/paths"
+	"github.com/johnnybravo-xyz/suchi/core/render/view"
 )
 
 // VersionView is the JSON projection of one document row in a chain.
 // Same shape whether it's a version or the head — the UI just orders
 // them.
 type VersionView struct {
-	ID                int64  `json:"id"`
-	Title             string `json:"title"`
-	SHA256            string `json:"sha256"`
-	Size              int64  `json:"size"`
-	MIME              string `json:"mime_type"`
-	CreatedAt         int64  `json:"created_at"`
-	PreviousVersionID *int64 `json:"previous_version_id,omitempty"`
-	IsHead            bool   `json:"is_head"`
+	ID                  int64  `json:"id"`
+	Title               string `json:"title"`
+	SHA256              string `json:"sha256"`
+	Size                int64  `json:"size"`
+	MIME                string `json:"mime_type"`
+	CreatedAt           int64  `json:"created_at"`
+	PreviousVersionID   *int64 `json:"previous_version_id,omitempty"`
+	ArchiveSerialNumber *int64 `json:"archive_serial_number,omitempty"`
+	IsHead              bool   `json:"is_head"`
 }
 
 type versionListResponse struct {
@@ -45,15 +48,16 @@ type versionListResponse struct {
 }
 
 type uploadVersionResponse struct {
-	ID                int64  `json:"id"`
-	SystemCode        string `json:"system_code,omitempty"`
-	JDAddress         string `json:"jd_address,omitempty"`
-	PreviousVersionID int64  `json:"previous_version_id"`
-	SHA256            string `json:"sha256"`
-	Size              int64  `json:"size"`
-	MIME              string `json:"mime_type"`
-	Title             string `json:"title"`
-	IdempotentReplay  bool   `json:"idempotent_replay,omitempty"`
+	ID                  int64  `json:"id"`
+	SystemCode          string `json:"system_code,omitempty"`
+	JDAddress           string `json:"jd_address,omitempty"`
+	PreviousVersionID   int64  `json:"previous_version_id"`
+	SHA256              string `json:"sha256"`
+	Size                int64  `json:"size"`
+	MIME                string `json:"mime_type"`
+	Title               string `json:"title"`
+	ArchiveSerialNumber *int64 `json:"archive_serial_number,omitempty"`
+	IdempotentReplay    bool   `json:"idempotent_replay,omitempty"`
 }
 
 type duplicateVersionBlobResponse struct {
@@ -132,18 +136,22 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var (
-		newID           int64
-		duplicateLiveID int64
-		prevOwner       int64
-		prevTitle       string
-		prevTitleOwner  string
-		prevJDCatID     int64
-		prevSensitivity sql.NullString
-		familyKey       sql.NullString
-		title           string
-		response        uploadVersionResponse
-		replay          *storedUploadResponse
-		recoveredReplay bool
+		newID             int64
+		duplicateLiveID   int64
+		prevOwner         int64
+		prevTitle         string
+		prevTitleOwner    string
+		prevJDCatID       int64
+		prevSensitivity   sql.NullString
+		familyKey         sql.NullString
+		prevASN           sql.NullInt64
+		prevLayout        sql.NullInt64
+		title             string
+		response          uploadVersionResponse
+		replay            *storedUploadResponse
+		recoveredReplay   bool
+		transferredASN    sql.NullInt64
+		layoutTransferred bool
 	)
 	authorizeReplayTarget := func(tx *sql.Tx, id int64) error {
 		var one int
@@ -172,10 +180,12 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 		// authorization after acquiring the write lock so ACL revocation or
 		// trashing cannot race the version insert.
 		err := tx.QueryRowContext(r.Context(), `
-			SELECT owner_id, title, title_owner, jd_category_id, sensitivity, version_family_key
+			SELECT owner_id, title, title_owner, jd_category_id, sensitivity,
+			       version_family_key, archive_serial_number, storage_path_id
 			FROM documents WHERE id = ? AND trashed_at IS NULL
 		`, prevID).Scan(
-			&prevOwner, &prevTitle, &prevTitleOwner, &prevJDCatID, &prevSensitivity, &familyKey,
+			&prevOwner, &prevTitle, &prevTitleOwner, &prevJDCatID, &prevSensitivity,
+			&familyKey, &prevASN, &prevLayout,
 		)
 		if errors.Is(err, sql.ErrNoRows) {
 			return errVersionPredecessorChanged
@@ -214,14 +224,16 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 		// content hash, preventing a lost response from becoming either a
 		// duplicate version or a permanent client-side conflict.
 		if upload.Idempotency.Key != "" {
+			var replayASN sql.NullInt64
 			err = tx.QueryRowContext(r.Context(), `
-				SELECT id, original_size, COALESCE(mime_type, ''), title
+				SELECT id, original_size, COALESCE(mime_type, ''), title,
+				       archive_serial_number
 				FROM documents
 				WHERE owner_id = ? AND previous_version_id = ?
 				  AND original_blob = ?
 				ORDER BY (trashed_at IS NULL) DESC, id LIMIT 1
 			`, prevOwner, prevID, upload.SHA256).Scan(
-				&newID, &response.Size, &response.MIME, &response.Title,
+				&newID, &response.Size, &response.MIME, &response.Title, &replayASN,
 			)
 			if err == nil {
 				if err := authorizeReplayTarget(tx, newID); err != nil {
@@ -231,6 +243,10 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 				response.PreviousVersionID = prevID
 				response.SHA256 = upload.SHA256
 				response.IdempotentReplay = true
+				if replayASN.Valid {
+					value := replayASN.Int64
+					response.ArchiveSerialNumber = &value
+				}
 				response.SystemCode, response.JDAddress, err = documentAddress(r.Context(), tx, newID)
 				if err != nil {
 					return err
@@ -352,6 +368,55 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 
+		if prevASN.Valid {
+			if _, err := tx.ExecContext(r.Context(), `
+				UPDATE documents
+				SET archive_serial_number = NULL, updated_at = ?
+				WHERE id = ? AND archive_serial_number = ?
+			`, now, prevID, prevASN.Int64); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(r.Context(), `
+				UPDATE documents
+				SET archive_serial_number = ?, updated_at = ?
+				WHERE id = ?
+			`, prevASN.Int64, now, newID); err != nil {
+				return err
+			}
+			transferredASN = prevASN
+			value := prevASN.Int64
+			response.ArchiveSerialNumber = &value
+
+			if prevLayout.Valid {
+				var template string
+				if err := tx.QueryRowContext(r.Context(), `
+					SELECT path FROM storage_paths
+					WHERE id = ? AND system_id = ?
+				`, prevLayout.Int64, systemID).Scan(&template); err != nil {
+					return err
+				}
+				if renderpaths.UsesVariable(template, "asn") {
+					if _, err := tx.ExecContext(r.Context(), `
+						UPDATE documents SET storage_path_id = NULL, updated_at = ? WHERE id = ?
+					`, now, prevID); err != nil {
+						return err
+					}
+					if _, err := tx.ExecContext(r.Context(), `
+						UPDATE documents SET storage_path_id = ?, updated_at = ? WHERE id = ?
+					`, prevLayout.Int64, now, newID); err != nil {
+						return err
+					}
+					if err := view.EnqueueMove(r.Context(), tx, prevID); err != nil {
+						return err
+					}
+					if err := view.EnqueueMove(r.Context(), tx, newID); err != nil {
+						return err
+					}
+					layoutTransferred = true
+				}
+			}
+		}
+
 		payload, err := json.Marshal(postIngestPayload{
 			SHA256: upload.SHA256, Size: upload.Size, MIME: upload.MIME,
 			Filename: upload.Filename,
@@ -365,6 +430,7 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 		response = uploadVersionResponse{
 			ID: newID, PreviousVersionID: prevID, SHA256: upload.SHA256,
 			Size: upload.Size, MIME: upload.MIME, Title: title,
+			ArchiveSerialNumber: response.ArchiveSerialNumber,
 		}
 		response.SystemCode, response.JDAddress, err = documentAddress(r.Context(), tx, newID)
 		if err != nil {
@@ -433,14 +499,21 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 		s.Jobs.Nudge()
 	}
 	ctx := logx.WithDocID(r.Context(), newID)
+	versionAudit := map[string]any{
+		"previous_version_id": prevID,
+		"sha256":              upload.SHA256, "size": upload.Size, "title": title,
+	}
+	if transferredASN.Valid {
+		versionAudit["archive_serial_number"] = transferredASN.Int64
+	}
+	if layoutTransferred {
+		versionAudit["archive_serial_number_layout_transferred"] = true
+	}
 	audit.Log(ctx, s.DB, s.Log, audit.Event{
 		SystemID: systemID,
 		Actor:    p, Action: "document.version.create",
 		ObjectKind: "document", ObjectID: newID,
-		After: map[string]any{
-			"previous_version_id": prevID,
-			"sha256":              upload.SHA256, "size": upload.Size, "title": title,
-		},
+		After:     versionAudit,
 		RequestID: logx.RequestID(ctx),
 	})
 
@@ -528,7 +601,8 @@ func (s *Server) ListVersions(w http.ResponseWriter, r *http.Request) {
 		             AND predecessor.trashed_at IS NULL
 		             AND predecessor.version_family_key = d.version_family_key
 		             AND (`+predecessorVisibility+`)
-		       ) THEN d.previous_version_id END
+		       ) THEN d.previous_version_id END,
+		       d.archive_serial_number
 		FROM documents d
 		WHERE `+where+`
 		ORDER BY d.id DESC
@@ -543,12 +617,13 @@ func (s *Server) ListVersions(w http.ResponseWriter, r *http.Request) {
 	results := make([]VersionView, 0, pp.PageSize)
 	for rows.Next() {
 		var (
-			view VersionView
-			prev sql.NullInt64
+			view          VersionView
+			prev          sql.NullInt64
+			archiveNumber sql.NullInt64
 		)
 		if err := rows.Scan(
 			&view.ID, &view.Title, &view.SHA256, &view.Size,
-			&view.MIME, &view.CreatedAt, &prev,
+			&view.MIME, &view.CreatedAt, &prev, &archiveNumber,
 		); err != nil {
 			s.serverErr(w, "versions.scan", err)
 			return
@@ -556,6 +631,10 @@ func (s *Server) ListVersions(w http.ResponseWriter, r *http.Request) {
 		if prev.Valid {
 			value := prev.Int64
 			view.PreviousVersionID = &value
+		}
+		if archiveNumber.Valid {
+			value := archiveNumber.Int64
+			view.ArchiveSerialNumber = &value
 		}
 		view.IsHead = head.Valid && view.ID == head.Int64
 		results = append(results, view)
