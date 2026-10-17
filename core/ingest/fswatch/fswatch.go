@@ -265,6 +265,39 @@ func (w *Watcher) ingestOpen(ctx context.Context, path, relativePath string, f *
 			return w.recordObservationInTx(ctx, tx, relativePath, fingerprint, "ingested", id, "")
 		}
 
+		var splitOriginID, splitChildren, trashedChildren int64
+		errSplit := tx.QueryRowContext(ctx, `
+			SELECT parent.id, COUNT(child.id),
+			       SUM(CASE WHEN child.trashed_at IS NOT NULL THEN 1 ELSE 0 END)
+			FROM documents parent
+			JOIN documents child ON child.split_origin_id = parent.id
+			WHERE parent.system_id = ?
+			  AND parent.owner_id = ?
+			  AND parent.original_blob = ?
+			  AND parent.trashed_at IS NOT NULL
+			GROUP BY parent.id
+			ORDER BY parent.trashed_at DESC
+			LIMIT 1
+		`, w.systemID, w.ownerID, ref.SHA256).Scan(
+			&splitOriginID, &splitChildren, &trashedChildren,
+		)
+		if errSplit == nil {
+			docID, deduped = splitOriginID, true
+			if trashedChildren != 0 {
+				w.log.Warn("fswatch.dedup.split_children_trashed",
+					"doc_id", docID,
+					"children", splitChildren,
+					"trashed_children", trashedChildren,
+					"action", "restore or permanently remove the trashed split children")
+			} else {
+				w.log.Info("fswatch.dedup.split_origin",
+					"doc_id", docID, "children", splitChildren)
+			}
+			return record(docID)
+		}
+		if !errors.Is(errSplit, sql.ErrNoRows) {
+			return errSplit
+		}
 		var aliveID int64
 		errAlive := tx.QueryRowContext(ctx,
 			`SELECT id FROM documents
