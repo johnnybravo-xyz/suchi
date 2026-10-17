@@ -12,6 +12,10 @@ Notable user-visible changes to Suchi are recorded here.
   filesystem sidecars, and manifest-v3 takeouts. Administrators can change ASN
   mode, QR prefix, and scan-analysis DPI live under **Advanced > Scan
   processing**; deployment-managed values are marked read-only.
+- The Upload screen explains a rejected ASN scan on the file's row, such as a
+  number already used by another document or repeated within the batch, with
+  the page and number involved. A conflict names the document that holds the
+  number when the uploader can open it.
 
 ## [0.3.0] - 2026-10-14
 

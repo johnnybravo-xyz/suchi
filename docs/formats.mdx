@@ -270,8 +270,12 @@ version history. Preflight therefore stops a conflicting batch before
 pre-consume or other mutable ingest hooks run. Malformed prefix-looking labels,
 multiple labels in `assign` mode, multiple ASN labels on one split page,
 repeated canonical values, a missing leading label, and a scan mixing ASN and
-legacy separator markers become terminal processing errors. Correct the source
-or retained conflicting document, then ingest again. A replay after a completed
+legacy separator markers become terminal processing errors. The Upload screen
+explains the rejection on the file's row, naming the page and number involved
+and, for a conflict, the document that holds the number when the uploader can
+open it;
+administrators also see the raw error under **Approvals > Processing issues**.
+Correct the source or retained conflicting document, then ingest again. A replay after a completed
 split returns the existing children rather than creating another set; restoring
 or re-uploading the retired parent cannot silently resurrect it over those
 children.

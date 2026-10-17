@@ -145,12 +145,17 @@ func TestASNFanoutIsAtomicAndPreservesContext(t *testing.T) {
 func TestASNFanoutConflictIsTerminalAndAtomic(t *testing.T) {
 	d, cas := openPostIngestHarness(t)
 	parentID := seedPostIngestDocument(t, d, cas, "application/pdf", []byte("source scan"))
-	if _, err := d.ExecWrite(t.Context(), `
+	inserted, err := d.ExecWrite(t.Context(), `
 		INSERT INTO documents(system_id,owner_id,original_blob,original_size,title,mime_type,
 			jd_category_id,archive_serial_number,created_at,updated_at)
 		SELECT system_id,owner_id,'conflict',1,'Existing','application/pdf',jd_category_id,42,1,1
 		FROM documents WHERE id=?
-	`, parentID); err != nil {
+	`, parentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	holderID, err := inserted.LastInsertId()
+	if err != nil {
 		t.Fatal(err)
 	}
 	h := New(d, cas, testActions(t), slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -160,7 +165,8 @@ func TestASNFanoutConflictIsTerminalAndAtomic(t *testing.T) {
 	}}
 	fanOut, err := h.fanOutPlan(t.Context(), h.log, parentID, "", []byte("source"), plan,
 		automations.Context{}, "application/pdf", nil)
-	if fanOut || !errors.Is(err, jobs.ErrTerminal) || !strings.Contains(err.Error(), "archive_serial_number_conflict") {
+	wantDetail := fmt.Sprintf("archive_serial_number_conflict page=1 asn=42 doc=%d", holderID)
+	if fanOut || !errors.Is(err, jobs.ErrTerminal) || !strings.HasSuffix(err.Error(), wantDetail) {
 		t.Fatalf("fanout=%v err=%v", fanOut, err)
 	}
 	var children int
