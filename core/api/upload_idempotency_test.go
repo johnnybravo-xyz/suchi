@@ -245,6 +245,9 @@ func TestUploadDocumentReplayRechecksTokenScope(t *testing.T) {
 func TestUploadNewVersionIdempotentReplay(t *testing.T) {
 	s, d, _, _, previousID := newVersionUploadServer(t, "previous-sha")
 	principal := grantVersionEditor(t, d, previousID)
+	if _, err := d.Write.Exec(`UPDATE documents SET archive_serial_number=4021 WHERE id=?`, previousID); err != nil {
+		t.Fatal(err)
+	}
 	first := uploadVersionWithKey(t, s, principal, previousID, testIdempotencyKey, "revision.pdf", testPDFBytes(), nil)
 	replay := uploadVersionWithKey(t, s, principal, previousID, testIdempotencyKey, "revision.pdf", testPDFBytes(), nil)
 	if first.Code != http.StatusCreated || replay.Code != http.StatusCreated {
@@ -257,7 +260,9 @@ func TestUploadNewVersionIdempotentReplay(t *testing.T) {
 	if err := json.Unmarshal(replay.Body.Bytes(), &replayResponse); err != nil {
 		t.Fatal(err)
 	}
-	if firstResponse.ID != replayResponse.ID || firstResponse.IdempotentReplay || !replayResponse.IdempotentReplay {
+	if firstResponse.ID != replayResponse.ID || firstResponse.IdempotentReplay || !replayResponse.IdempotentReplay ||
+		firstResponse.ArchiveSerialNumber == nil || *firstResponse.ArchiveSerialNumber != 4021 ||
+		replayResponse.ArchiveSerialNumber == nil || *replayResponse.ArchiveSerialNumber != 4021 {
 		t.Fatalf("first=%+v replay=%+v", firstResponse, replayResponse)
 	}
 	assertUploadSideEffectCounts(t, d, 2, 1, 1, 1)
