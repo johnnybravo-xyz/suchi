@@ -952,17 +952,12 @@ func (h *Handler) assignScannedASNTx(
 	if splitOrigin != 0 {
 		return terminalASNError("archive_serial_number_batch_not_allowed", page, value)
 	}
-	var conflict bool
-	if err := tx.QueryRowContext(ctx, `
-		SELECT EXISTS(
-			SELECT 1 FROM documents
-			WHERE system_id = ? AND archive_serial_number = ? AND id <> ?
-		)
-	`, systemID, value, docID).Scan(&conflict); err != nil {
+	holderID, err := asnHolder(ctx, tx, systemID, value, docID)
+	if err != nil {
 		return err
 	}
-	if conflict {
-		return terminalASNError("archive_serial_number_conflict", page, value)
+	if holderID != 0 {
+		return terminalASNConflict(page, value, holderID)
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE documents SET archive_serial_number = ?, updated_at = ? WHERE id = ?
@@ -1001,6 +996,12 @@ func terminalASNError(code string, page int, value int64) error {
 		detail += fmt.Sprintf(" asn=%d", value)
 	}
 	return fmt.Errorf("%w: %s", jobs.ErrTerminal, detail)
+}
+
+// terminalASNConflict appends the holder's ID so the upload screen can name
+// the document when the uploader may open it.
+func terminalASNConflict(page int, value, holderID int64) error {
+	return fmt.Errorf("%w doc=%d", terminalASNError("archive_serial_number_conflict", page, value), holderID)
 }
 
 // splitAndFanOut preserves legacy-only automation/pre-consume ordering while
@@ -1311,20 +1312,30 @@ func (h *Handler) precheckSegmentASNs(
 		if segment.ASN == 0 {
 			continue
 		}
-		var conflict bool
-		if err := q.QueryRowContext(ctx, `
-			SELECT EXISTS(
-				SELECT 1 FROM documents
-				WHERE system_id = ? AND archive_serial_number = ? AND id <> ?
-			)
-		`, systemID, segment.ASN, parentID).Scan(&conflict); err != nil {
+		holderID, err := asnHolder(ctx, q, systemID, segment.ASN, parentID)
+		if err != nil {
 			return err
 		}
-		if conflict {
-			return terminalASNError("archive_serial_number_conflict", segment.MarkerPage, segment.ASN)
+		if holderID != 0 {
+			return terminalASNConflict(segment.MarkerPage, segment.ASN, holderID)
 		}
 	}
 	return nil
+}
+
+// asnHolder returns the live, trashed, or historical document that already
+// retains value in the filing system, or 0 when the number is free.
+func asnHolder(ctx context.Context, q asnConflictQuerier, systemID, value, excludeID int64) (int64, error) {
+	var holderID int64
+	err := q.QueryRowContext(ctx, `
+		SELECT id FROM documents
+		WHERE system_id = ? AND archive_serial_number = ? AND id <> ?
+		ORDER BY id LIMIT 1
+	`, systemID, value, excludeID).Scan(&holderID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	return holderID, err
 }
 
 // deleteEmailStagingParent removes an email row that only existed long enough

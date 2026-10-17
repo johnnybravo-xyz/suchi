@@ -251,6 +251,26 @@ test('shows unavailable and failed processing without claiming completion', asyn
   await expect(page.getByRole('button', { name: 'Check again', exact: true })).toBeVisible()
 })
 
+for (const [holder, message] of [
+  [{ status: 200, json: { id: 7, title: 'Loan closure certificate' } },
+    'ASN 4021 (page 2) is already used by #7 “Loan closure certificate”. Change the label and scan it again.'],
+  [{ status: 404, json: { error: 'not found' } },
+    'ASN 4021 (page 2) is already in use. Change the label and scan it again.'],
+]) {
+  test(`explains a rejected ASN scan on the upload row (holder ${holder.status})`, async ({ page }) => {
+    await mockUpload(page, { tasks: route => route.fulfill({ json: { results: [{
+      kind: 'post-ingest',
+      state: 'dead',
+      last_error: 'jobs: terminal error; do not retry: archive_serial_number_conflict page=2 asn=4021 doc=7',
+    }] } }) })
+    await page.route('**/api/documents/7', route => route.fulfill(holder))
+    await page.goto('/#/upload')
+    await page.locator('input[type=file]').setInputFiles(file('batch.png'))
+    await expect(page.getByText('Processing needs attention', { exact: true })).toBeVisible()
+    await expect(page.getByRole('alert')).toHaveText(message)
+  })
+}
+
 test('stops polling and ignores late document details after leaving upload', async ({ page }) => {
   await mockUpload(page)
   let pending
