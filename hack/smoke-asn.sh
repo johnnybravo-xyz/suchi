@@ -54,7 +54,7 @@ go run ./hack/asnfixture -out "$FIXTURE" -first 4021 -second 4022
 pages="$(qpdf --show-npages "$FIXTURE")"
 [ "$pages" = 4 ] || fail "fixture has $pages pages, want 4"
 
-printf '%s\n' '== build and boot Suchi in ASN split mode =='
+printf '%s\n' '== build and boot Suchi with ASN processing off =='
 make build >/dev/null
 PUBLIC_URL="$URL" \
 LISTEN_ADDR="127.0.0.1:$PORT" \
@@ -66,9 +66,6 @@ DATA_DIR="$DATA_DIR" \
 INGEST_FS_DIR="$INGEST_DIR" \
 INGEST_FS_OWNER_EMAIL="$ADMIN_EMAIL" \
 OCR_ENGINE=tesseract \
-SCAN_ASN_MODE=split \
-SCAN_ASN_PREFIX=ASN \
-SCAN_SPLIT_DPI=150 \
 LOG_LEVEL=info \
 "$ROOT/dist/suchi" serve >"$DATA_DIR/suchi.log" 2>&1 &
 SUCHI_PID=$!
@@ -97,6 +94,21 @@ curl -fsS -X POST "$URL/api/login" \
     -H 'Accept: application/json' -H 'Content-Type: application/json' \
     -d "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASSWORD\"}" \
     >/dev/null
+
+printf '%s\n' '== enable ASN splitting through Advanced settings =='
+curl -fsS -X POST "$URL/api/admin/settings/scan" \
+    --cookie "$COOKIES" \
+    -H 'Sec-Fetch-Site: same-origin' -H "Origin: $URL" \
+    -H 'Content-Type: application/json' \
+    -d '{"scan_asn_mode":"split","scan_asn_prefix":"ASN","scan_split_dpi":300}' \
+    >/dev/null
+scan_settings="$(curl -fsS --cookie "$COOKIES" "$URL/api/admin/settings/scan")"
+[ "$(jq -r '.scan_asn_mode' <<<"$scan_settings")" = split ] ||
+    fail 'live ASN mode did not reload'
+[ "$(jq -r '.scan_asn_prefix' <<<"$scan_settings")" = ASN ] ||
+    fail 'live ASN prefix did not reload'
+[ "$(jq -r '.scan_split_dpi' <<<"$scan_settings")" = 300 ] ||
+    fail 'live scan DPI did not reload'
 
 settings_body="$(jq -nc --arg dir "$INGEST_DIR" --arg owner "$ADMIN_EMAIL" \
     '{fs_watch_dir:$dir,fs_watch_owner_email:$owner}')"
