@@ -4,6 +4,13 @@ Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
 
+### Added
+
+- Native archive serial numbers can now be assigned from retained QR labels,
+  split feeder scans into atomically created documents, edited from Document
+  Detail, searched with `asn:`, and preserved across replacement versions,
+  filesystem sidecars, and manifest-v3 takeouts.
+
 ## [0.3.0] - 2026-10-14
 
 ### Changed
