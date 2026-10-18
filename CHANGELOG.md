@@ -10,6 +10,9 @@ Notable user-visible changes to Suchi are recorded here.
   extensions now derive from one format registry. Recognized BMP, DjVu, Outlook,
   EPUB, and macro-enabled Office variants keep the right extension, and DjVu
   reaches `djvutxt` instead of being consumed by the generic image fallback.
+- `suchi gc` now removes empty folders left in `rendered/` after documents move
+  to a new path. The dry run reports them; `--apply` removes only folders with
+  nothing inside.
 - Rendered files are named with the linked file's own extension: `.pdf` for the
   searchable copy, otherwise the original's type. A plain-text upload no longer
   appears as `name__1.pdf`; preview, create, and update reject folder-layout
