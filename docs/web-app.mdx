@@ -53,16 +53,19 @@ sharing, phone, and Trash actions on the right. Live documents show **Similar
 documents**, **Linked documents**, **Versions**, and **Notes** in one tabbed
 card; Notes is last and the first tab is selected whenever a document opens.
 **Linked documents** separates links added on the open document from links added
-elsewhere. Ordinary custom fields with values stay in the metadata card with
-controls matching their declared type. Unset definitions remain available from
-one **Add custom field** selector instead of appearing as empty metadata rows.
+elsewhere. The metadata card always shows filing, sensitivity, dates, sources,
+an assigned archive serial number, the original, tags, correspondents, and
+languages. Custom fields and an unset archive serial number sit behind the
+card's last row, **More**, which counts custom fields that have values. Opening
+it reveals those rows, scrolls them into view, and focuses the first control.
 The **Correspondents** row lists every attached role. **Edit** chooses an
 existing catalog entry as the primary sender; **No sender** removes sender roles
 without removing recipient, cc, or other relations.
 
 The **Notes** tab adds attributed working context to this exact version.
 Authors can edit/delete their own notes and administrators can moderate any
-note; Trash shows Notes read-only. Notes and typed custom fields do not copy to a
+note; Trash shows Notes read-only. A note is visible to everyone who can open the
+document. Notes and typed custom fields do not copy to a
 replacement version. The metadata card shows an assigned archive serial number
 as **ASN _n_**. **Edit** accepts one positive integer or an empty value to clear
 it; a conflict explains that the number remains held by a live, trashed, or
@@ -228,8 +231,9 @@ also happen there; document screens only assign existing tags.
 
 ## Document custom fields
 
-Document Detail shows custom fields that have values. Its final **Custom fields**
-row initially shows only **Edit**; opening it reveals **Add custom field** with
+Document Detail keeps custom fields under **More**, using controls that match
+each field's declared type. Opening it shows fields that have values and a final
+**Custom fields** row whose **Edit** reveals **Add custom field** with
 ordinary user-created definitions. Extraction-managed e-invoice definitions are
 not offered there: they appear when extraction wrote a value and remain editable
 for corrections. Their readable labels, such as **Invoice seller** and **Seller

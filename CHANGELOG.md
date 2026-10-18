@@ -44,6 +44,10 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Changed
 
+- Document Detail's metadata card keeps core fields visible and moves custom
+  fields and an unset archive serial number behind **More**, which shows how
+  many custom fields have values. The Notes tab drops its repeated heading and
+  long hints.
 - The demo corpus now opens with Japanese, Korean and German documents in the
   dashboard's recent-document pile, with native-script metadata, curated source
   dates, and local Japanese and Korean font fallbacks.
