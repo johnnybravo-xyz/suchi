@@ -51,6 +51,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
+	"github.com/johnnybravo-xyz/suchi/core/mimeutil"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/pipeconfig"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
 )
@@ -884,7 +885,7 @@ func (w *Watcher) importOne(ctx context.Context, raw []byte, msgID string, m *im
 	}
 
 	filesOnly := content == emailaccounts.IntakeFilesOnly
-	payload, err := BuildPostIngestPayload(ref.SHA256, ref.Size, "message/rfc822", title, w.account.Folder, m.Envelope, hasAttachment, filesOnly)
+	payload, err := BuildPostIngestPayload(ref.SHA256, ref.Size, mimeutil.MessageRFC822, title, w.account.Folder, m.Envelope, hasAttachment, filesOnly)
 	if err != nil {
 		return outcomeSkipped, fmt.Errorf("marshal post-ingest payload: %w", err)
 	}

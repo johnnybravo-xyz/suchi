@@ -73,12 +73,6 @@ type Email struct {
 	Attachments []Attachment
 }
 
-// Recognized reports whether mime looks like an email message.
-func Recognized(mime string) bool {
-	m := strings.ToLower(mime)
-	return m == "message/rfc822" || m == "message/global"
-}
-
 // SniffLooksLikeEmail returns true when the first ~4KB has the shape
 // of an RFC-822 header block. Used as a fallback when the caller only
 // knows the file extension.

@@ -129,14 +129,6 @@ func DecodeBytes(ctx context.Context, b []byte) ([]Barcode, error) {
 	return Decode(ctx, bytes.NewReader(b))
 }
 
-// Recognized returns true when we can attempt barcode decoding on a
-// mime type. Cheap MIME check the post-ingest handler uses to skip
-// non-image files without a slow decode attempt.
-func Recognized(mime string) bool {
-	mime = strings.ToLower(mime)
-	return strings.HasPrefix(mime, "image/")
-}
-
 func decodeZBarQR(ctx context.Context, img image.Image) ([]Barcode, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

@@ -363,13 +363,14 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 			}
 		}
 	}
+	format := mimeutil.Lookup(mime)
 
 	// Outlook .msg path: convert to RFC 822 via msgconvert, then fall
 	// through to the same handleEmail() as .eml so Message-Id dedup,
 	// attachment fanout, and correspondent inheritance work identically.
 	// When msgconvert isn't installed, Skipped=true and
 	// the doc stays as an opaque blob — same fallback shape as djvu.
-	if msg.Recognized(mime) {
+	if format.IsOutlook() {
 		res, mErr := h.convertMSG(ctx, bytes.NewReader(origBytes), log, msg.Options{})
 		if mErr != nil {
 			return fmt.Errorf("msg: %w", mErr)
@@ -385,7 +386,8 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 			"took", res.Duration.String())
 		// Route the converted working bytes through the EML parser without
 		// changing the source MIME. original_blob still contains CFB bytes.
-		mime = "message/rfc822"
+		mime = mimeutil.MessageRFC822
+		format = mimeutil.Lookup(mime)
 		origBytes = res.EML
 		// Fall through to the shared EML path.
 	}
@@ -393,7 +395,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	// Email path: parse the .eml, set title/correspondent/date on the
 	// parent doc, fan out one child doc per attachment. See
 	// core/pipeline/eml/ for the parser + docs/formats.mdx#email.
-	if eml.Recognized(mime) {
+	if format.IsEmail() {
 		filesOnly := emailFilesOnlyFromPayload(e.Payload)
 		retired, err := h.handleEmail(ctx, log, e.DocID, origBytes, filesOnly)
 		if err != nil {
@@ -407,12 +409,27 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		return h.postContentSteps(ctx, log, e.DocID)
 	}
 
+	// DjVu path: djvutxt extracts the embedded text layer.
+	if format.IsDjVu() {
+		res, err := djvu.Extract(ctx, bytes.NewReader(origBytes), log,
+			djvu.Options{MaxTextBytes: h.limits.DjVu})
+		if err != nil {
+			return fmt.Errorf("djvu: %w", err)
+		}
+		log.Info("post-ingest.route.djvu",
+			"non_blank", res.NonBlank, "skipped", res.Skipped, "truncated", res.Truncated)
+		if err := h.updateDoc(ctx, e.DocID, res.Text, "", 0); err != nil {
+			return err
+		}
+		return h.postContentSteps(ctx, log, e.DocID)
+	}
+
 	// Raster image path: wrap to PDF, run OCR, and merge barcode tokens. Standard
 	// (tessocr) and full (ocrmypdf) both work; the archive PDF stays
 	// as the preview when the OCR engine is absent. When magick is
 	// missing entirely, falls through to barcode-only content, which
 	// matches the pre-change behavior for these MIME types.
-	if imgpdf.Recognized(mime) {
+	if format.IsRasterImage() {
 		bcs, berr := barcode.DecodeBytes(ctx, origBytes)
 		if berr != nil {
 			log.Info("post-ingest.image.decode_failed", "err", berr.Error())
@@ -420,7 +437,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		barcodeTokens := barcode.TokensFor(bcs)
 
 		pdfRes, perr := imgpdf.Convert(ctx, bytes.NewReader(origBytes), log,
-			imgpdf.Options{Ext: imgpdf.ExtFromMIME(mime)})
+			imgpdf.Options{Ext: strings.TrimPrefix(format.Extension, ".")})
 		if perr != nil {
 			return fmt.Errorf("imgpdf: %w", perr)
 		}
@@ -475,7 +492,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	// (SVG, x-icon, etc.) still gets a barcode decode pass so QR
 	// values land in content. No OCR here — these formats either
 	// don't rasterize well (SVG) or don't come with printable text.
-	if barcode.Recognized(mime) {
+	if format.IsImage() {
 		bcs, berr := barcode.DecodeBytes(ctx, origBytes)
 		if berr != nil {
 			log.Info("post-ingest.image.decode_failed", "err", berr.Error())
@@ -487,28 +504,13 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		return h.postContentSteps(ctx, log, e.DocID)
 	}
 
-	// DjVu path: djvutxt extracts the embedded text layer.
-	if djvu.Recognized(mime) {
-		res, err := djvu.Extract(ctx, bytes.NewReader(origBytes), log,
-			djvu.Options{MaxTextBytes: h.limits.DjVu})
-		if err != nil {
-			return fmt.Errorf("djvu: %w", err)
-		}
-		log.Info("post-ingest.route.djvu",
-			"non_blank", res.NonBlank, "skipped", res.Skipped, "truncated", res.Truncated)
-		if err := h.updateDoc(ctx, e.DocID, res.Text, "", 0); err != nil {
-			return err
-		}
-		return h.postContentSteps(ctx, log, e.DocID)
-	}
-
 	// EPUB and office documents route through anydoc. A missing binary is a
 	// soft skip so the original can be reprocessed after installation.
-	if anydoc.Recognized(mime) {
+	if format.IsAnyDoc() {
 		res, err := anydoc.Extract(ctx, bytes.NewReader(origBytes), log,
 			anydoc.Options{
 				MaxTextBytes: h.limits.AnyDoc,
-				Ext:          anydoc.ExtFromMIME(mime),
+				Ext:          format.Extension,
 			})
 		if err != nil {
 			return fmt.Errorf("anydoc: %w", err)
@@ -526,7 +528,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	// no external tool is needed. Populating documents.content here means
 	// FTS, list snippets, and similar-docs all work for these files
 	// instead of matching on titles alone.
-	if isTextMIME(mime) {
+	if format.IsDirectText() {
 		const cap = 1 << 20 // 1 MiB — generous for markdown/html; caps runaway logs
 		text := string(origBytes)
 		truncated := false
@@ -542,7 +544,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		return h.postContentSteps(ctx, log, e.DocID)
 	}
 
-	if !strings.HasPrefix(strings.ToLower(mime), "application/pdf") {
+	if !format.IsPDF() {
 		log.Info("post-ingest.skip.non_pdf", "mime", mime)
 		if err := h.updateDoc(ctx, e.DocID, "", "", 0); err != nil {
 			return err
@@ -1571,7 +1573,7 @@ func (h *Handler) generateThumb(ctx context.Context, log *slog.Logger, docID int
 		blobSHA = archive.String
 	case dec.Valid && dec.String != "":
 		blobSHA = dec.String
-	case orig.Valid && orig.String != "" && mime.Valid && mime.String == "application/pdf":
+	case orig.Valid && orig.String != "" && mime.Valid && mimeutil.Lookup(mime.String).IsPDF():
 		blobSHA = orig.String
 	}
 	if blobSHA == "" {
@@ -1750,22 +1752,6 @@ func (h *Handler) updateDocWithSource(
 			time.Now().Unix(), id)
 		return err
 	})
-}
-
-// isTextMIME reports whether the MIME type identifies a text source
-// whose bytes are already the extracted content (plain, markdown,
-// HTML). Charset parameters are tolerated: `text/plain; charset=utf-8`
-// matches.
-func isTextMIME(mime string) bool {
-	m := strings.ToLower(mime)
-	if idx := strings.IndexByte(m, ';'); idx > 0 {
-		m = strings.TrimSpace(m[:idx])
-	}
-	switch m {
-	case "text/plain", "text/markdown", "text/html":
-		return true
-	}
-	return false
 }
 
 func firstNonEmpty(a, b string) string {

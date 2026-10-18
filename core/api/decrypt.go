@@ -31,6 +31,7 @@ import (
 	suchicrypto "github.com/johnnybravo-xyz/suchi/core/crypto"
 	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
+	"github.com/johnnybravo-xyz/suchi/core/mimeutil"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/qpdf"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
@@ -369,7 +370,7 @@ func (s *Server) attemptDecrypt(r *http.Request, docID, ownerID int64, blobSHA s
 		payload, _ := json.Marshal(map[string]any{
 			"sha256":    ref.SHA256,
 			"size":      ref.Size,
-			"mime_type": "application/pdf",
+			"mime_type": mimeutil.ApplicationPDF,
 		})
 		return jobs.Enqueue(r.Context(), tx, postingest.Kind, docID, systemID, string(payload))
 	})

@@ -6,6 +6,10 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- MIME aliases, filename refinement, ingestion routing, and rendered/downloaded
+  extensions now derive from one format registry. Recognized BMP, DjVu, Outlook,
+  EPUB, and macro-enabled Office variants keep the right extension, and DjVu
+  reaches `djvutxt` instead of being consumed by the generic image fallback.
 - `suchi export` sidecars now carry custom-field values, so a reingested
   takeout keeps typed values such as hand-entered amounts and dates.
   Document-link values and extraction-managed `invoice_*` fields are left out;

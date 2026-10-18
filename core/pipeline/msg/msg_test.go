@@ -13,26 +13,6 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/msg"
 )
 
-func TestRecognized(t *testing.T) {
-	cases := []struct {
-		mime string
-		want bool
-	}{
-		{"application/vnd.ms-outlook", true},
-		{"application/x-outlook-msg", true},
-		{"application/ms-outlook", true},
-		{"APPLICATION/VND.MS-OUTLOOK", true},
-		{"message/rfc822", false},
-		{"application/pdf", false},
-		{"", false},
-	}
-	for _, tc := range cases {
-		if got := msg.Recognized(tc.mime); got != tc.want {
-			t.Errorf("Recognized(%q) = %v, want %v", tc.mime, got, tc.want)
-		}
-	}
-}
-
 func TestConvertFixture(t *testing.T) {
 	if _, err := exec.LookPath(msg.DefaultBinary); err != nil {
 		t.Skip("msgconvert is not installed")

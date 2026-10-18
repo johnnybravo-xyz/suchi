@@ -55,12 +55,6 @@ type Result struct {
 	StderrTail string
 }
 
-// Recognized reports whether mime looks like DjVu.
-func Recognized(mime string) bool {
-	m := strings.ToLower(mime)
-	return m == "image/vnd.djvu" || m == "image/x-djvu" || m == "image/djvu"
-}
-
 // Extract streams src to a tempfile and runs djvutxt against it.
 // Skipped=true when the binary is missing — safe caller behavior is
 // "leave content empty; someone can ingest via OCR later once tools

@@ -205,10 +205,10 @@ func (w *Watcher) ingestOpen(ctx context.Context, path, relativePath string, f *
 	mime, err := w.sniffMIME(ref.SHA256)
 	if err != nil {
 		w.log.Warn("fswatch.mime_sniff", "err", err.Error())
-		mime = "application/octet-stream"
+		mime = mimeutil.ApplicationOctetStream
 	}
 	if emlLooksLikeEmail(w.cas, ref.SHA256) {
-		mime = "message/rfc822"
+		mime = mimeutil.MessageRFC822
 	}
 	mime = mimeutil.RefineByFilename(mime, path)
 

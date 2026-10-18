@@ -65,6 +65,7 @@ import (
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
 	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
+	"github.com/johnnybravo-xyz/suchi/core/mimeutil"
 )
 
 // exportManifest is the archive-level provenance record.
@@ -509,7 +510,7 @@ func dumpDocuments(ctx context.Context, zw *zip.Writer, d *db.DB, cas *blob.CAS,
 		if err != nil {
 			return written, skipped, fmt.Errorf("cas get doc %d: %w", id, err)
 		}
-		bw, err := zw.Create("documents/" + safeName + extForMIME(mime.String))
+		bw, err := zw.Create("documents/" + safeName + mimeutil.Extension(mime.String))
 		if err != nil {
 			rc.Close()
 			return written, skipped, err
@@ -641,29 +642,6 @@ func safeExportName(title string, id int64, _ string) string {
 		base = string(baseRunes[:60])
 	}
 	return filepath.Clean(base + "-" + strconv.FormatInt(id, 10))
-}
-
-// extForMIME picks a filename extension per MIME. Not exhaustive —
-// we only care about common ingest types; unknown falls back to no
-// extension so downstream tooling can sniff.
-func extForMIME(mime string) string {
-	switch mime {
-	case "application/pdf":
-		return ".pdf"
-	case "image/png":
-		return ".png"
-	case "image/jpeg":
-		return ".jpg"
-	case "image/heic", "image/heif":
-		return ".heic"
-	case "message/rfc822":
-		return ".eml"
-	case "application/vnd.ms-outlook":
-		return ".msg"
-	case "text/plain":
-		return ".txt"
-	}
-	return ""
 }
 
 // writeReadme drops a small README into the archive so a recipient
