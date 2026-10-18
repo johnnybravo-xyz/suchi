@@ -409,8 +409,10 @@ backup](/backup-restore).
 The editor shows supported variables and a server-rendered sample before save.
 Leave the file extension out: preview and save reject it because Suchi appends
 each linked file's own extension. Saved rows can be edited or deleted; deleting
-returns assigned documents to the default filing-tree projection. Both
-**Automations** entry points open the same
+returns assigned documents to the default filing-tree projection. Suchi refuses
+the delete while an automation still assigns the layout and names those rules,
+so remove the action from them first. Both **Automations** entry points open the
+same
 list-first workspace. Compact rows summarize each rule as a sentence, expose its
 enabled state, and run from top to bottom; drag the handle or focus it and use
 the arrow keys to reorder custom rules. An empty list offers starter patterns,

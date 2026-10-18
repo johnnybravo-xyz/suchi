@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -131,6 +132,7 @@ func TestRenderedLayoutPreviewAndDocumentAssignment(t *testing.T) {
 		t.Fatalf("render jobs after layout delete = %d, want %d", jobsAfterDelete, jobsBeforeDelete+1)
 	}
 }
+
 func TestRenderedLayoutWritesRejectFileExtensions(t *testing.T) {
 	s, mux := newSystemsBoundaryServer(t)
 	seedSystemsBoundary(t, s)
@@ -190,5 +192,42 @@ func TestRenderedLayoutWritesRejectFileExtensions(t *testing.T) {
 	}
 	if pathAfter != pathBefore {
 		t.Fatalf("rejected update changed path from %q to %q", pathBefore, pathAfter)
+	}
+}
+
+func TestRenderedLayoutDeleteRefusesWhileRulesAssignIt(t *testing.T) {
+	s, mux := newSystemsBoundaryServer(t)
+	seedSystemsBoundary(t, s)
+	if _, err := s.DB.Write.Exec(`
+		INSERT INTO automations(id,system_id,name,created_at,updated_at) VALUES (301,1,'Bills go to Bills by year',0,0);
+		INSERT INTO automation_actions(automation_id,order_index,kind,params_json,created_at)
+			VALUES (301,0,'assign_storage_path','{"storage_path_id":101}',0)`); err != nil {
+		t.Fatal(err)
+	}
+	path := "/api/rendered_layouts/101?system=S01"
+
+	refused := systemsBoundaryRequest(mux, http.MethodDelete, path, "", adminPrincipal(1))
+	var body struct {
+		Code  string `json:"code"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(refused.Body.Bytes(), &body); err != nil {
+		t.Fatal(err, refused.Body.String())
+	}
+	if refused.Code != http.StatusConflict || body.Code != "rendered_layout_in_use" ||
+		!strings.Contains(body.Error, "Bills go to Bills by year") {
+		t.Fatalf("delete while in use: status=%d body=%s", refused.Code, refused.Body.String())
+	}
+	var layouts int
+	if err := s.DB.Read.QueryRow(`SELECT count(*) FROM storage_paths WHERE id=101`).Scan(&layouts); err != nil || layouts != 1 {
+		t.Fatalf("refused delete removed the layout: count=%d err=%v", layouts, err)
+	}
+
+	if _, err := s.DB.Write.Exec(`DELETE FROM automation_actions WHERE automation_id=301`); err != nil {
+		t.Fatal(err)
+	}
+	deleted := systemsBoundaryRequest(mux, http.MethodDelete, path, "", adminPrincipal(1))
+	if deleted.Code != http.StatusNoContent {
+		t.Fatalf("delete after rule change: status=%d body=%s", deleted.Code, deleted.Body.String())
 	}
 }

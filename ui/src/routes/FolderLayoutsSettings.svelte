@@ -188,9 +188,9 @@
 
     <section class="saved-layouts" aria-labelledby="saved-layouts-heading">
       <h4 id="saved-layouts-heading">{translate("folderLayoutsSettings.savedLayouts")}</h4>
-      {#if error}<div class="err" role="alert">{error} <button class="btn sm" onclick={load}>{translate("common.retry")}</button></div>
-      {:else if loading}<p class="empty">{translate("folderLayoutsSettings.loadingFolderLayouts")}</p>
-      {:else}
+      {#if error}<div class="err" role="alert">{error} <button class="btn sm" onclick={load}>{translate("common.retry")}</button></div>{/if}
+      {#if loading}<p class="empty">{translate("folderLayoutsSettings.loadingFolderLayouts")}</p>
+      {:else if rows.length || !error}
         <div class="layout-list">
           {#each rows as row (row.id)}
             <article class="layout-row" class:active={editingID === row.id}>

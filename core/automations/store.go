@@ -91,6 +91,37 @@ func ListTx(ctx context.Context, tx *sql.Tx, systemID int64) ([]Automation, erro
 	return out, nil
 }
 
+// AutomationNamesAssigningRenderedLayout lists automations in the layout's
+// filing system whose "Assign folder layout" action points at it.
+func AutomationNamesAssigningRenderedLayout(
+	ctx context.Context,
+	q systems.Queryer,
+	layoutID int64,
+) ([]string, error) {
+	rows, err := q.QueryContext(ctx, `
+		SELECT DISTINCT a.name
+		  FROM automation_actions aa
+		  JOIN automations a ON a.id = aa.automation_id
+		  JOIN storage_paths sp ON sp.id = ? AND sp.system_id = a.system_id
+		 WHERE aa.kind = 'assign_storage_path'
+		   AND json_type(aa.params_json, '$.storage_path_id') = 'integer'
+		   AND json_extract(aa.params_json, '$.storage_path_id') = sp.id
+		 ORDER BY a.name`, layoutID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		names = append(names, name)
+	}
+	return names, rows.Err()
+}
+
 // Get returns one automation by ID or sql.ErrNoRows.
 func (s *Store) Get(ctx context.Context, systemID, id int64) (*Automation, error) {
 	var a Automation

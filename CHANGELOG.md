@@ -6,10 +6,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
-- MIME aliases, filename refinement, ingestion routing, and rendered/downloaded
-  extensions now derive from one format registry. Recognized BMP, DjVu, Outlook,
-  EPUB, and macro-enabled Office variants keep the right extension, and DjVu
-  reaches `djvutxt` instead of being consumed by the generic image fallback.
+- Deleting a folder layout that an automation still assigns is refused instead
+  of leaving rules that fail on every new matching document. The UI keeps the
+  layout visible and names the rules that must change.
 - `suchi gc` now removes empty folders left in `rendered/` after documents move
   to a new path. The dry run reports them; `--apply` removes only folders with
   nothing inside.
@@ -17,6 +16,10 @@ Notable user-visible changes to Suchi are recorded here.
   searchable copy, otherwise the original's type. A plain-text upload no longer
   appears as `name__1.pdf`; preview, create, and update reject folder-layout
   templates that include an extension.
+- MIME aliases, filename refinement, ingestion routing, and rendered/downloaded
+  extensions now derive from one format registry. Recognized BMP, DjVu, Outlook,
+  EPUB, and macro-enabled Office variants keep the right extension, and DjVu
+  reaches `djvutxt` instead of being consumed by the generic image fallback.
 - `suchi export` sidecars now carry custom-field values, so a reingested
   takeout keeps typed values such as hand-entered amounts and dates.
   Document-link values and extraction-managed `invoice_*` fields are left out;

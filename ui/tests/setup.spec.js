@@ -674,9 +674,21 @@ async function mockAPI(page, options = {}) {
     else if (path === '/api/correspondents/') body = { results: options.correspondents || [] }
     else if (path === '/api/rendered_layouts/preview' && request.method() === 'POST') {
       const template = request.postDataJSON().template
+      const lastVariable = template.lastIndexOf('}}')
+      const trailingLiteral = template.slice(lastVariable < 0 ? template.lastIndexOf('/') + 1 : lastVariable + 2).trim()
+      if (/\.[^./\s]+$/.test(trailingLiteral)) {
+        await route.fulfill({
+          status: 400,
+          json: {
+            code: 'bad_template',
+            error: 'folder layout must not include file extension ".pdf"; Suchi appends the linked file\'s extension',
+          },
+        })
+        return
+      }
       const usesASN = template.includes('{{ asn }}')
       body = {
-        path: usesASN ? 'Legacy/4021/March electricity bill' : '10-19 Home/13 Utilities',
+        path: usesASN ? 'Legacy/4021/March electricity bill.pdf' : '10-19 Home/13 Utilities.pdf',
         uses_asn: usesASN,
       }
     }
@@ -695,6 +707,16 @@ async function mockAPI(page, options = {}) {
       body = { id: Number(renderedLayout[1]) }
     }
     else if (renderedLayout && request.method() === 'DELETE') {
+      if (options.renderedLayoutDeleteConflict) {
+        await route.fulfill({
+          status: 409,
+          json: {
+            code: 'rendered_layout_in_use',
+            error: options.renderedLayoutDeleteConflict,
+          },
+        })
+        return
+      }
       renderedLayouts = renderedLayouts.filter(layout => Number(layout.id) !== Number(renderedLayout[1]))
       await route.fulfill({ status: 204, body: '' })
       return
@@ -1889,11 +1911,14 @@ test('creates, previews, and deletes Advanced folder layouts', async ({ page }) 
 
   await expect(page.getByRole('heading', { name: 'Folder layouts' })).toBeVisible()
   await expect(page.getByText('Bills by year', { exact: true })).toBeVisible()
-  await expect(page.getByText('10-19 Home/13 Utilities', { exact: true })).toBeVisible()
+  await expect(page.getByText('10-19 Home/13 Utilities.pdf', { exact: true })).toBeVisible()
 
   await page.getByLabel('Layout name').fill('Imported folders')
+  await page.getByLabel('Path template').fill('Legacy/{{ asn }}/{{ title }}.pdf')
+  await expect(page.getByRole('alert').getByText(/must not include file extension/)).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Create layout' })).toBeDisabled()
   await page.getByLabel('Path template').fill('Legacy/{{ asn }}/{{ title }}')
-  await expect(page.getByText('Legacy/4021/March electricity bill', { exact: true })).toBeVisible()
+  await expect(page.getByText('Legacy/4021/March electricity bill.pdf', { exact: true })).toBeVisible()
   await expect(page.getByText('Uses previous archive number', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Create layout' }).click()
 
@@ -1905,6 +1930,26 @@ test('creates, previews, and deletes Advanced folder layouts', async ({ page }) 
   await expect(confirmation).toBeVisible()
   await confirmation.getByRole('button', { name: 'Delete layout' }).click()
   await expect(saved.getByText('Imported folders', { exact: true })).toHaveCount(0)
+})
+
+test('keeps a folder layout when an automation blocks deletion', async ({ page }) => {
+  await mockAPI(page, {
+    renderedLayouts: [{
+      id: 4, name: 'Bills by year',
+      path: 'Bills/{{ created_year }}/{{ title }}', uses_asn: false,
+    }],
+    renderedLayoutDeleteConflict: 'folder layout is used by automations: File utility bills; remove those assignments first',
+  })
+  await page.goto('/#/settings?tab=archive&section=folder-layouts')
+
+  const saved = page.getByRole('region', { name: 'Saved layouts' })
+  const bills = saved.locator('.layout-row').filter({ hasText: 'Bills by year' })
+  await bills.getByRole('button', { name: 'Delete' }).click()
+  await page.getByRole('alertdialog', { name: 'Delete folder layout?' })
+    .getByRole('button', { name: 'Delete layout' }).click()
+
+  await expect(saved.getByRole('alert')).toContainText('File utility bills')
+  await expect(saved.getByText('Bills by year', { exact: true })).toBeVisible()
 })
 
 test('lists every automation in run order', async ({ page }) => {

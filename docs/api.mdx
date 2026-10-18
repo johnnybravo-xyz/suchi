@@ -1614,7 +1614,7 @@ filesystem view.
 | GET    | `/api/rendered_layouts/`            | Paged authenticated list |
 | POST   | `/api/rendered_layouts/`            | Admin create; body `{"name":"Bills by year","path":"Bills/{{ created_year }}/{{ title }}"}` |
 | PATCH  | `/api/rendered_layouts/{id}`        | Sparse name/template update |
-| DELETE | `/api/rendered_layouts/{id}`        | Delete; assigned documents return to the default filing-tree projection |
+| DELETE | `/api/rendered_layouts/{id}`        | Delete; assigned documents return to the default filing-tree projection. `409 rendered_layout_in_use` names the automations that still assign it |
 | POST   | `/api/rendered_layouts/preview`     | Admin validation/sample rendering; body `{"template":"..."}` |
 
 Preview returns `{"path":"Bills/2026/March electricity bill.pdf","uses_asn":false}`.
