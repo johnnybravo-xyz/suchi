@@ -1304,7 +1304,7 @@
   "folderLayoutsSettings.savedLayouts": "Saved layouts",
   "folderLayoutsSettings.saveLayout": "Save layout",
   "folderLayoutsSettings.supportedVariables": "Supported variables",
-  "folderLayoutsSettings.templatesProduceARelativePathBeneathThis": "Templates produce a relative path beneath this filing system.",
+  "folderLayoutsSettings.templatesProduceARelativePathBeneathThis": "Templates produce a relative path beneath this filing system. Suchi adds the file extension.",
   "folderLayoutsSettings.thisTemplateCouldNotBeRendered": "This template could not be rendered.",
   "folderLayoutsSettings.usesPreviousArchiveNumber": "Uses previous archive number",
   "folderLayoutsSettings.value": "{{ {name} }}",

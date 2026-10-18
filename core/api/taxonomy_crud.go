@@ -143,6 +143,12 @@ func previewRenderedLayout(template string) (string, bool, error) {
 	if err != nil {
 		return "", false, err
 	}
+	if ext := renderedLayoutExtension(template); len(ext) > 1 {
+		return "", false, fmt.Errorf(
+			"folder layout must not include file extension %q; Suchi appends the linked file's extension",
+			ext,
+		)
+	}
 	if filepath.IsAbs(rendered) {
 		return "", false, errors.New("folder layout must be relative")
 	}
@@ -153,7 +159,16 @@ func previewRenderedLayout(template string) (string, bool, error) {
 	if renderpaths.IsIndexPath(rendered) {
 		return "", false, fmt.Errorf("%q is reserved for the filing index", renderpaths.IndexDirectory)
 	}
-	return rendered, renderpaths.UsesVariable(template, "asn"), nil
+	// The renderer appends the linked file's extension; the sample is a PDF.
+	return rendered + ".pdf", renderpaths.UsesVariable(template, "asn"), nil
+}
+
+func renderedLayoutExtension(template string) string {
+	component := filepath.Base(filepath.ToSlash(strings.TrimSpace(template)))
+	if end := strings.LastIndex(component, "}}"); end >= 0 {
+		component = component[end+2:]
+	}
+	return filepath.Ext(strings.TrimSpace(component))
 }
 
 // ---------- shared implementation ----------

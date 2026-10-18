@@ -1617,9 +1617,11 @@ filesystem view.
 | DELETE | `/api/rendered_layouts/{id}`        | Delete; assigned documents return to the default filing-tree projection |
 | POST   | `/api/rendered_layouts/preview`     | Admin validation/sample rendering; body `{"template":"..."}` |
 
-Preview returns `{"path":"Bills/2026/March electricity bill","uses_asn":false}`.
-Create/update reject absolute, empty, unknown-expression, traversal, and reserved
-filing-index paths. Supported variables:
+Preview returns `{"path":"Bills/2026/March electricity bill.pdf","uses_asn":false}`.
+The sample is a PDF; real documents get their linked file's extension. Preview,
+create, and update therefore reject templates whose final component has a file
+extension. They also reject absolute, empty, unknown-expression, traversal, and
+reserved filing-index paths. Supported variables:
 
 - document: `title`, `doc_pk`, `created`, `created_year`, `created_month`,
   `created_day`, `added`, `added_year`, `added_month`, `added_day`;

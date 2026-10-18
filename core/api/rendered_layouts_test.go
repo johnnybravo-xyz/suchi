@@ -5,6 +5,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -21,7 +22,7 @@ func TestRenderedLayoutPreviewAndDocumentAssignment(t *testing.T) {
 	if err := json.Unmarshal(preview.Body.Bytes(), &sample); err != nil {
 		t.Fatal(err)
 	}
-	if sample.Path != "Bills/2026/City Energy/March electricity bill-4021" || !sample.UsesASN {
+	if sample.Path != "Bills/2026/City Energy/March electricity bill-4021.pdf" || !sample.UsesASN {
 		t.Fatalf("preview = %+v", sample)
 	}
 
@@ -128,5 +129,66 @@ func TestRenderedLayoutPreviewAndDocumentAssignment(t *testing.T) {
 	}
 	if jobsAfterDelete != jobsBeforeDelete+1 {
 		t.Fatalf("render jobs after layout delete = %d, want %d", jobsAfterDelete, jobsBeforeDelete+1)
+	}
+}
+func TestRenderedLayoutWritesRejectFileExtensions(t *testing.T) {
+	s, mux := newSystemsBoundaryServer(t)
+	seedSystemsBoundary(t, s)
+
+	valid := systemsBoundaryRequest(mux, http.MethodPost,
+		"/api/rendered_layouts/preview?system=S01",
+		`{"template":"Archive/{{ jd.address }}"}`, adminPrincipal(1))
+	if valid.Code != http.StatusOK {
+		t.Fatalf("dotted variable preview: status=%d body=%s", valid.Code, valid.Body.String())
+	}
+	var sample renderedLayoutPreview
+	if err := json.Unmarshal(valid.Body.Bytes(), &sample); err != nil {
+		t.Fatal(err)
+	}
+	if sample.Path != "Archive/S01.13.1842.pdf" {
+		t.Fatalf("dotted variable preview path = %q", sample.Path)
+	}
+
+	for name, request := range map[string]*httptest.ResponseRecorder{
+		"preview": systemsBoundaryRequest(mux, http.MethodPost,
+			"/api/rendered_layouts/preview?system=S01",
+			`{"template":"Archive/{{ title }}.pdf"}`, adminPrincipal(1)),
+		"create": systemsBoundaryRequest(mux, http.MethodPost,
+			"/api/rendered_layouts/?system=S01",
+			`{"name":"PDF layout","path":"Archive/{{ title }}.pdf"}`, adminPrincipal(1)),
+	} {
+		var body struct {
+			Code string `json:"code"`
+		}
+		if err := json.Unmarshal(request.Body.Bytes(), &body); err != nil {
+			t.Fatal(err, request.Body.String())
+		}
+		if request.Code != http.StatusBadRequest || body.Code != "bad_template" {
+			t.Fatalf("%s with extension: status=%d body=%s", name, request.Code, request.Body.String())
+		}
+	}
+
+	var pathBefore string
+	if err := s.DB.Read.QueryRow(`SELECT path FROM storage_paths WHERE id=101`).Scan(&pathBefore); err != nil {
+		t.Fatal(err)
+	}
+	updated := systemsBoundaryRequest(mux, http.MethodPatch,
+		"/api/rendered_layouts/101?system=S01",
+		`{"path":"Archive/{{ title }}.pdf"}`, adminPrincipal(1))
+	var body struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(updated.Body.Bytes(), &body); err != nil {
+		t.Fatal(err, updated.Body.String())
+	}
+	if updated.Code != http.StatusBadRequest || body.Code != "bad_template" {
+		t.Fatalf("update with extension: status=%d body=%s", updated.Code, updated.Body.String())
+	}
+	var pathAfter string
+	if err := s.DB.Read.QueryRow(`SELECT path FROM storage_paths WHERE id=101`).Scan(&pathAfter); err != nil {
+		t.Fatal(err)
+	}
+	if pathAfter != pathBefore {
+		t.Fatalf("rejected update changed path from %q to %q", pathBefore, pathAfter)
 	}
 }

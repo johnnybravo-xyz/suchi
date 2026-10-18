@@ -10,6 +10,10 @@ Notable user-visible changes to Suchi are recorded here.
   extensions now derive from one format registry. Recognized BMP, DjVu, Outlook,
   EPUB, and macro-enabled Office variants keep the right extension, and DjVu
   reaches `djvutxt` instead of being consumed by the generic image fallback.
+- Rendered files are named with the linked file's own extension: `.pdf` for the
+  searchable copy, otherwise the original's type. A plain-text upload no longer
+  appears as `name__1.pdf`; preview, create, and update reject folder-layout
+  templates that include an extension.
 - `suchi export` sidecars now carry custom-field values, so a reingested
   takeout keeps typed values such as hand-entered amounts and dates.
   Document-link values and extraction-managed `invoice_*` fields are left out;
