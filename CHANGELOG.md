@@ -10,6 +10,8 @@ Notable user-visible changes to Suchi are recorded here.
   takeout keeps typed values such as hand-entered amounts and dates.
   Document-link values and extraction-managed `invoice_*` fields are left out;
   the latter are read again from the original.
+- Query examples now filter by imported document type with
+  `tag:"type:invoice"`; bare `type:` is not a query filter.
 
 ## [0.3.0] - 2026-10-14
 
