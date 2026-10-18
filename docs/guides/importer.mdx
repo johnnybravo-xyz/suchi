@@ -153,7 +153,7 @@ The importer:
    CAS by SHA-256, then inserts one `documents` row plus tag junctions and
    custom-field values in a single transaction. `legacy_id` is preserved for
    round-tripping and dedup; a source archive serial number is retained as
-   read-only compatibility metadata.
+   system-scoped physical-filing metadata.
 
 Document-type assignments therefore remain searchable without creating a
 second metadata vocabulary. Storage templates using `{{document_type}}` become
@@ -319,7 +319,7 @@ rule degrades (for example, a source rendered-layout rule becomes text search);
 | -------------------------------------------------------------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | 0 title contains                                                     | `q`                       | Full                                                                                                                                     |
 | 1 content contains                                                   | `q`                       | Partial (q matches title+content combined)                                                                                               |
-| 2 ASN is / 18 not-has ASN / 23-24 ASN gt/lt                          | `q` with `asn:`          | Full — exact, `none`, greater-than, and less-than retain read-only compatibility retrieval                                                |
+| 2 ASN is / 18 not-has ASN / 23-24 ASN gt/lt                          | `q` with `asn:`          | Full — exact, `none`, greater-than, and less-than archive-serial-number retrieval                                                             |
 | 3 correspondent is                                                   | `correspondents__id__in`  | Full                                                                                                                                     |
 | 4 document type is                                                   | `tags__id__in`            | Full                                                                                                                                     |
 | 5 is in inbox                                                        | —                         | Partial — suchi surfaces Inbox natively                                                                                                  |

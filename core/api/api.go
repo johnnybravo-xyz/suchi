@@ -79,6 +79,21 @@ type RuntimePreferencesStatus struct {
 	OCRLanguages        []string `json:"ocr_languages"`
 }
 
+type ScanSettingsStatus struct {
+	ASNMode   string               `json:"scan_asn_mode"`
+	ASNPrefix string               `json:"scan_asn_prefix"`
+	SplitDPI  int                  `json:"scan_split_dpi"`
+	Managed   *ScanSettingsManaged `json:"managed,omitempty"`
+}
+
+// ScanSettingsManaged identifies values controlled by deployment
+// configuration and therefore read-only through the settings API.
+type ScanSettingsManaged struct {
+	Mode   bool `json:"scan_asn_mode"`
+	Prefix bool `json:"scan_asn_prefix"`
+	DPI    bool `json:"scan_split_dpi"`
+}
+
 type FSWatchSettingsStatus struct {
 	Dir        string `json:"fs_watch_dir"`
 	OwnerEmail string `json:"fs_watch_owner_email"`
@@ -159,6 +174,8 @@ type Server struct {
 	// reloaders so saves affect future work immediately.
 	RuntimePreferencesReader   func(context.Context) (RuntimePreferencesStatus, error)
 	RuntimePreferencesReloader func(context.Context) error
+	ScanSettingsReader         func(context.Context) (ScanSettingsStatus, error)
+	ScanSettingsReloader       func(context.Context) error
 	FSWatchSettingsReader      func(context.Context) (FSWatchSettingsStatus, error)
 	FSWatchReloader            func(context.Context) error
 	// TokenIssuer inserts a system-bound token in the caller's write transaction.

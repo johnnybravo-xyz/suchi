@@ -57,6 +57,10 @@
   let titleOwnerBusy = $state(false)
   let editingLanguages = $state(false)
   let languagesDraft = $state('')
+  let editingArchiveSerialNumber = $state(false)
+  let archiveSerialNumberDraft = $state('')
+  let archiveSerialNumberBusy = $state(false)
+  let archiveSerialNumberError = $state('')
   let editingTags = $state(false)
   let tagOptions = $state([])
   let tagsBusy = $state(false)
@@ -254,6 +258,10 @@
     editingTitle = false
     titleOwnerBusy = false
     editingLanguages = false
+    editingArchiveSerialNumber = false
+    archiveSerialNumberDraft = ''
+    archiveSerialNumberBusy = false
+    archiveSerialNumberError = ''
     editingTags = false
     tagOptions = []
     tagsBusy = false
@@ -293,6 +301,7 @@
       if (version !== loadVersion || !scopeCurrent(scope)) return
       doc = loaded
       titleDraft = loaded.title
+      archiveSerialNumberDraft = loaded.archive_serial_number == null ? '' : String(loaded.archive_serial_number)
       if (loaded.trashed_at != null) {
         relatedTab = 'notes'
         return
@@ -797,6 +806,44 @@
       notify?.(label || translate("documentDetail.saved"))
     } catch (ex) {
       if (!disposed && version === loadVersion) notify?.(ex.message || translate("documentDetail.couldNotSave"))
+    }
+  }
+
+  function startEditArchiveSerialNumber() {
+    archiveSerialNumberDraft = doc?.archive_serial_number == null ? '' : String(doc.archive_serial_number)
+    archiveSerialNumberError = ''
+    editingArchiveSerialNumber = true
+  }
+
+  function cancelEditArchiveSerialNumber() {
+    editingArchiveSerialNumber = false
+    archiveSerialNumberError = ''
+  }
+
+  async function saveArchiveSerialNumber(event) {
+    event.preventDefault()
+    if (archiveSerialNumberBusy) return
+    const raw = archiveSerialNumberDraft.trim()
+    const value = raw === '' ? null : Number(raw)
+    if (value !== null && (!/^\d+$/.test(raw) || !Number.isSafeInteger(value) || value <= 0)) {
+      archiveSerialNumberError = translate("documentDetail.invalidArchiveSerialNumber")
+      return
+    }
+    const version = loadVersion
+    archiveSerialNumberBusy = true
+    archiveSerialNumberError = ''
+    try {
+      await patchDocument(id, { archive_serial_number: value })
+      if (disposed || version !== loadVersion) return
+      doc = { ...doc, archive_serial_number: value }
+      editingArchiveSerialNumber = false
+      notify?.(translate("documentDetail.archiveSerialNumberSaved"))
+    } catch (ex) {
+      if (!disposed && version === loadVersion) {
+        archiveSerialNumberError = ex.message || translate("documentDetail.couldNotSave")
+      }
+    } finally {
+      if (!disposed && version === loadVersion) archiveSerialNumberBusy = false
     }
   }
 
@@ -1486,10 +1533,44 @@
             <dt title={translate("documentDetail.dateCarriedFromTheOriginalFileWhen")}>{translate("documentDetail.originalFileDate")}</dt>
             <dd>{fmtDate(doc.source_mtime || doc.created_at)}</dd>
           {/if}
-          {#if doc.archive_serial_number != null}
-            <dt title={translate("documentDetail.readOnlyCompatibilityMetadataRetainedFromThe")}>{translate("documentDetail.previousArchiveNumber")}</dt>
-            <dd><span class="mono">#{doc.archive_serial_number}</span> <span class="sub" title={translate("documentDetail.keptForOldReferencesAndImportedLayouts")}>{translate("documentDetail.readOnly")}</span></dd>
-          {/if}
+          <dt>{translate("documentDetail.archiveSerialNumber")}</dt>
+          <dd>
+            {#if trashed}
+              {#if doc.archive_serial_number != null}
+                <span class="chip">{translate("common.asnValue", { value: String(doc.archive_serial_number) })}</span>
+              {:else}
+                <span class="sub">{translate("documentDetail.notSet")}</span>
+              {/if}
+            {:else if editingArchiveSerialNumber}
+              <form class="archive-serial-form" onsubmit={saveArchiveSerialNumber}>
+                <input class="input mono" inputmode="numeric" maxlength="16"
+                       aria-label={translate("documentDetail.archiveSerialNumber")}
+                       placeholder="4021" bind:value={archiveSerialNumberDraft} />
+                <button class="btn primary sm" type="submit" disabled={archiveSerialNumberBusy}>
+                  {archiveSerialNumberBusy ? translate("common.saving") : translate("common.save")}
+                </button>
+                <button class="btn sm" type="button" disabled={archiveSerialNumberBusy}
+                        onclick={cancelEditArchiveSerialNumber}>{translate("common.cancel")}</button>
+                <span class="sub archive-serial-help">{translate("documentDetail.archiveSerialNumberHelp")}</span>
+                {#if archiveSerialNumberError}<span class="row-error" role="alert">{archiveSerialNumberError}</span>{/if}
+              </form>
+            {:else}
+              <div class="metadata-display">
+                <span class="metadata-value">
+                  {#if doc.archive_serial_number != null}
+                    <span class="chip">{translate("common.asnValue", { value: String(doc.archive_serial_number) })}</span>
+                  {:else}
+                    <span class="sub">{translate("documentDetail.notSet")}</span>
+                  {/if}
+                </span>
+                <div class="metadata-actions">
+                  <button class="btn sm" type="button" onclick={startEditArchiveSerialNumber}>
+                    {translate("documentDetail.edit")}
+                  </button>
+                </div>
+              </div>
+            {/if}
+          </dd>
           <dt>{translate("documentDetail.original")}</dt><dd>{doc.mime_type} · {fmtBytes(doc.original_size)}</dd>
           {#if doc.archive_blob}
             <dt>{translate("documentDetail.archive")}</dt>
@@ -1916,6 +1997,7 @@
                     <a class="irow" href={filingHref(`#/doc/${v.id}`)} style="padding:8px 4px">
                       <span class="dot" class:accent={String(v.id) === String(id)}></span>
                       <span class="title grow">#{v.id} {v.title || ''}</span>
+                      {#if v.archive_serial_number != null}<span class="chip">{translate("common.asnValue", { value: String(v.archive_serial_number) })}</span>{/if}
                       {#if v.is_head}<span class="pill accent">{translate("documentDetail.latest")}</span>{/if}
                       {#if String(v.id) === String(id)}<span class="pill">{translate("documentDetail.viewing")}</span>{/if}
                       {#if !v.is_head}<span class="pill warn">{translate("documentDetail.earlier")}</span>{/if}
@@ -2252,6 +2334,10 @@
   .metadata-value { display:flex; flex:1 1 90px; align-items:center; flex-wrap:wrap; gap:6px; min-width:0; }
   .metadata-actions { display:flex; flex:0 1 auto; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:6px; margin-left:auto; }
   .metadata-actions .btn { flex:none; }
+  .archive-serial-form { display:flex; align-items:center; flex-wrap:wrap; gap:7px; width:100%; }
+  .archive-serial-form .input { flex:1 1 120px; width:auto; max-width:180px; padding:4px 8px; font-size:.8rem; }
+  .archive-serial-help, .archive-serial-form .row-error { flex-basis:100%; white-space:normal; }
+  .archive-serial-form .row-error { color:var(--danger); font-size:.72rem; }
   .tag-pills, .tag-actions { display:flex; flex-wrap:wrap; align-items:center; gap:6px }
   .tag-pills .pill { max-width:100%; white-space:normal }
   .tag-remove { display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; padding:0; border:0; background:transparent; color:inherit; cursor:pointer }

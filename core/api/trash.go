@@ -3,6 +3,7 @@
 package api
 
 import (
+	"database/sql"
 	"errors"
 	"net/http"
 	"time"
@@ -15,13 +16,14 @@ import (
 
 // TrashRow is the compact projection used by the Trash interface.
 type TrashRow struct {
-	ID        int64  `json:"id"`
-	Title     string `json:"title"`
-	MIME      string `json:"mime_type,omitempty"`
-	Size      int64  `json:"original_size"`
-	CreatedAt int64  `json:"created_at"`
-	TrashedAt int64  `json:"trashed_at"`
-	DeletesAt int64  `json:"deletes_at"`
+	ID                  int64  `json:"id"`
+	Title               string `json:"title"`
+	MIME                string `json:"mime_type,omitempty"`
+	Size                int64  `json:"original_size"`
+	CreatedAt           int64  `json:"created_at"`
+	TrashedAt           int64  `json:"trashed_at"`
+	DeletesAt           int64  `json:"deletes_at"`
+	ArchiveSerialNumber *int64 `json:"archive_serial_number,omitempty"`
 }
 
 // ListTrash returns the caller's recoverable documents. Members see their own
@@ -51,7 +53,7 @@ func (s *Server) ListTrash(w http.ResponseWriter, r *http.Request) {
 	}
 	pp := ParsePageParams(r, 50, 200)
 	query := `SELECT id, title, COALESCE(mime_type, ''), original_size,
-	              created_at, COALESCE(trashed_at, 0)
+	              created_at, COALESCE(trashed_at, 0), archive_serial_number
 	      FROM documents
 	      WHERE ` + where + `
 	      ORDER BY trashed_at DESC, id DESC
@@ -66,12 +68,17 @@ func (s *Server) ListTrash(w http.ResponseWriter, r *http.Request) {
 	var out []TrashRow
 	for rows.Next() {
 		var row TrashRow
+		var archiveNumber sql.NullInt64
 		if err := rows.Scan(&row.ID, &row.Title, &row.MIME, &row.Size,
-			&row.CreatedAt, &row.TrashedAt); err != nil {
+			&row.CreatedAt, &row.TrashedAt, &archiveNumber); err != nil {
 			s.serverErr(w, "trash.scan", err)
 			return
 		}
 		row.DeletesAt = row.TrashedAt + int64(trash.Retention/time.Second)
+		if archiveNumber.Valid {
+			value := archiveNumber.Int64
+			row.ArchiveSerialNumber = &value
+		}
 		out = append(out, row)
 	}
 	if err := rows.Err(); err != nil {

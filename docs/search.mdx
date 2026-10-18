@@ -91,7 +91,7 @@ into:
 2. fixed SQL predicates for metadata filters;
 3. typed custom-field value predicates plus presence predicates, with target
    ACL/liveness inside a `documentlink` `EXISTS`;
-4. numeric/null predicates for read-only previous archive numbers;
+4. numeric/null predicates for archive serial numbers;
 5. the caller's source-document visibility predicate;
 6. the caller-relative version currentness predicate; and
 7. live-document exclusion unless `is:trash` controls trash state.
@@ -119,8 +119,8 @@ therefore cannot change a count or page in a way that claims the link is present
 compilation. Text-like equality checks the typed text column, multi-choice
 equality tests JSON membership, numbers/money compare `value_number`, dates
 compare `value_date`, and booleans compare `value_bool`. `asn:` compares the
-nullable compatibility column on the document row. These predicates stay inside
-the same visible/current candidate query used for counts and pages.
+nullable archive serial number on the document row. These predicates stay
+inside the same visible/current candidate query used for counts and pages.
 
 Searches first materialize only the requested page of document IDs and scores.
 Row-ID-restricted FTS passes then build one snippet for each page result, so

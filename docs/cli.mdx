@@ -408,11 +408,11 @@ policy and full boundary.
 ## `suchi export --out FILE.zip`
 
 Portable takeout of live originals and selected metadata from one system.
-Manifest version **`"2"`** identifies its code/name. The ZIP contains original
+Manifest version **`"3"`** identifies its code/name. The ZIP contains original
 bytes, `documents/<name>-<id>.json` sidecars and selected-system taxonomy-table
 dumps, not a database restore graph. Sidecar format stays **1**, adding optional
-`title_owner`, `jd_system`, `jd_address`, and `custom_fields`. Document IDs can
-change on intake.
+`title_owner`, `jd_system`, `jd_address`, `custom_fields`, and
+`archive_serial_number`. Document IDs can change on intake.
 
 ```sh
 suchi export --out /tmp/my-suchi.zip --owner-id 1
@@ -431,19 +431,22 @@ explicit recovery override, and the manifest records its skipped originals.
 
 After extracting the zip, placing each original beside its sidecar in an
 fs-watch staging directory restores title ownership, title, source date,
-correspondents, tags, JD category, and custom-field values within the configured
-target. Follow the [takeout reingestion guide](/guides/export-import) for target
-preparation, safe copy order and verification steps. This is not a full metadata
-round trip: notes, document-link field values, and extraction-managed `invoice_*`
-fields are omitted (the last are read again from the original on intake), while
-exported `sensitivity`, `mime_type`, and `sha256` sidecar fields are currently
+correspondents, tags, JD category, custom-field values, and available ASNs within
+the configured target. An ASN already retained by a live, trashed, or historical
+row rejects that document without a partial import. Follow the [takeout
+reingestion guide](/guides/export-import) for target preparation, safe copy order
+and verification steps. This is not a full metadata round trip: notes,
+document-link field values, and extraction-managed `invoice_*` fields are omitted
+(the last are read again from the original on intake), while exported
+`sensitivity`, `mime_type`, and `sha256` sidecar fields are currently
 informational and ignored on ingest.
 MIME and SHA-256 are recomputed from the bytes, and sensitivity uses the target
 instance default.
 An input `jd_system` must match the watcher's configured target; it cannot route
-or create a system. `jd_address` is informational source metadata, not a requested
-new identity. To retain IDs, memberships, ACLs and relationships exactly, use a
-[whole-instance backup](/backup-restore), not native takeout or Paperless import.
+or create a system. `jd_address` is informational source metadata, not a
+requested new identity. To retain IDs, memberships, ACLs and relationships
+exactly, use a [whole-instance backup](/backup-restore), not native takeout or
+Paperless import.
 
 **Not included** in this version:
 
