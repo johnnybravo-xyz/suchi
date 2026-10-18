@@ -45,20 +45,21 @@ import (
 // history) — a 100-row page shouldn't drag OCR text into every
 // response. Detail hydration happens on the /{id} route.
 type DocumentListRow struct {
-	ID             int64  `json:"id"`
-	SystemCode     string `json:"system_code,omitempty"`
-	JDAddress      string `json:"jd_address,omitempty"`
-	Title          string `json:"title"`
-	MIME           string `json:"mime_type,omitempty"`
-	OriginalSize   int64  `json:"original_size,omitempty"`
-	JDCategoryID   int64  `json:"jd_category_id,omitempty"`
-	JDCategoryCode int64  `json:"jd_category_code,omitempty"`
-	JDCategoryName string `json:"jd_category_name,omitempty"`
-	JDAreaName     string `json:"jd_area_name,omitempty"`
-	Sensitivity    string `json:"sensitivity,omitempty"`
-	ThumbSHA       string `json:"thumb_sha,omitempty"` // client renders /api/documents/{id}/thumb when set
-	SplitOriginID  int64  `json:"split_origin_id,omitempty"`
-	SplitIndex     *int64 `json:"split_index,omitempty"`
+	ID                  int64  `json:"id"`
+	SystemCode          string `json:"system_code,omitempty"`
+	JDAddress           string `json:"jd_address,omitempty"`
+	Title               string `json:"title"`
+	MIME                string `json:"mime_type,omitempty"`
+	OriginalSize        int64  `json:"original_size,omitempty"`
+	JDCategoryID        int64  `json:"jd_category_id,omitempty"`
+	JDCategoryCode      int64  `json:"jd_category_code,omitempty"`
+	JDCategoryName      string `json:"jd_category_name,omitempty"`
+	JDAreaName          string `json:"jd_area_name,omitempty"`
+	Sensitivity         string `json:"sensitivity,omitempty"`
+	ThumbSHA            string `json:"thumb_sha,omitempty"` // client renders /api/documents/{id}/thumb when set
+	SplitOriginID       int64  `json:"split_origin_id,omitempty"`
+	SplitIndex          *int64 `json:"split_index,omitempty"`
+	ArchiveSerialNumber *int64 `json:"archive_serial_number,omitempty"`
 	// EncryptionState is "" (never encrypted, or decrypted-at-boot),
 	// "encrypted" (needs a password), or "decrypted". The SPA reads
 	// this to render an inline unlock affordance on the Inbox row —
@@ -191,6 +192,7 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 		       COALESCE(d.sensitivity, ''),
 		       COALESCE(d.thumb_sha, ''),
 		       d.split_origin_id, d.split_index,
+		       d.archive_serial_number,
 		       COALESCE(d.encryption_state, ''),
 		       d.created_at, d.updated_at, d.trashed_at
 		  FROM `+fromSQL+`
@@ -210,13 +212,14 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 	var ids []int64
 	for rows.Next() {
 		var (
-			row        DocumentListRow
-			trashed    sql.NullInt64
-			splitIndex sql.NullInt64
+			row           DocumentListRow
+			trashed       sql.NullInt64
+			splitIndex    sql.NullInt64
+			archiveNumber sql.NullInt64
 		)
 		if err := rows.Scan(&row.ID, &row.Title, &row.SystemCode, &row.MIME, &row.OriginalSize,
 			&row.JDCategoryID, &row.JDCategoryCode, &row.JDCategoryName, &row.JDAreaName,
-			&row.Sensitivity, &row.ThumbSHA, &row.SplitOriginID, &splitIndex,
+			&row.Sensitivity, &row.ThumbSHA, &row.SplitOriginID, &splitIndex, &archiveNumber,
 			&row.EncryptionState, &row.CreatedAt, &row.UpdatedAt, &trashed); err != nil {
 			s.serverErr(w, "docs.list.scan", err)
 			return
@@ -228,6 +231,10 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 		if splitIndex.Valid {
 			v := splitIndex.Int64
 			row.SplitIndex = &v
+		}
+		if archiveNumber.Valid {
+			v := archiveNumber.Int64
+			row.ArchiveSerialNumber = &v
 		}
 		row.JDAddress = systems.Address(row.SystemCode, int(row.JDCategoryCode), row.ID)
 		row.Tags = []string{}

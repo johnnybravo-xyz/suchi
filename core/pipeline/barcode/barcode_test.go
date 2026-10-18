@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"image"
 	"image/color"
+	"image/draw"
 	"image/png"
 	"testing"
 
@@ -65,6 +66,39 @@ func TestDecodeQR(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("QR text not in results: %+v", got)
+	}
+}
+
+func TestDecodeAllQRs(t *testing.T) {
+	left, _, err := image.Decode(bytes.NewReader(makeQRImagePNG(t, "ASN000042")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, _, err := image.Decode(bytes.NewReader(makeQRImagePNG(t, "unrelated-content")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	canvas := image.NewGray(image.Rect(0, 0, 440, 220))
+	draw.Draw(canvas, canvas.Bounds(), image.NewUniform(color.White), image.Point{}, draw.Src)
+	draw.Draw(canvas, image.Rect(10, 10, 210, 210), left, image.Point{}, draw.Src)
+	draw.Draw(canvas, image.Rect(230, 10, 430, 210), right, image.Point{}, draw.Src)
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, canvas); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := barcode.DecodeAllBytes(t.Context(), encoded.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := make(map[string]int)
+	for _, code := range got {
+		if code.Format == "QR" {
+			seen[code.Text]++
+		}
+	}
+	if seen["ASN000042"] != 1 || seen["unrelated-content"] != 1 || len(seen) != 2 {
+		t.Fatalf("decoded QR values = %v; all results = %+v", seen, got)
 	}
 }
 

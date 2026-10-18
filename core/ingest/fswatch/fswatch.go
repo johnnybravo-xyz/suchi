@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/asn"
 	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/customfield"
 	"github.com/johnnybravo-xyz/suchi/core/db"
@@ -265,6 +266,39 @@ func (w *Watcher) ingestOpen(ctx context.Context, path, relativePath string, f *
 			return w.recordObservationInTx(ctx, tx, relativePath, fingerprint, "ingested", id, "")
 		}
 
+		var splitOriginID, splitChildren, trashedChildren int64
+		errSplit := tx.QueryRowContext(ctx, `
+			SELECT parent.id, COUNT(child.id),
+			       SUM(CASE WHEN child.trashed_at IS NOT NULL THEN 1 ELSE 0 END)
+			FROM documents parent
+			JOIN documents child ON child.split_origin_id = parent.id
+			WHERE parent.system_id = ?
+			  AND parent.owner_id = ?
+			  AND parent.original_blob = ?
+			  AND parent.trashed_at IS NOT NULL
+			GROUP BY parent.id
+			ORDER BY parent.trashed_at DESC
+			LIMIT 1
+		`, w.systemID, w.ownerID, ref.SHA256).Scan(
+			&splitOriginID, &splitChildren, &trashedChildren,
+		)
+		if errSplit == nil {
+			docID, deduped = splitOriginID, true
+			if trashedChildren != 0 {
+				w.log.Warn("fswatch.dedup.split_children_trashed",
+					"doc_id", docID,
+					"children", splitChildren,
+					"trashed_children", trashedChildren,
+					"action", "restore or permanently remove the trashed split children")
+			} else {
+				w.log.Info("fswatch.dedup.split_origin",
+					"doc_id", docID, "children", splitChildren)
+			}
+			return record(docID)
+		}
+		if !errors.Is(errSplit, sql.ErrNoRows) {
+			return errSplit
+		}
 		var aliveID int64
 		errAlive := tx.QueryRowContext(ctx,
 			`SELECT id FROM documents
@@ -349,6 +383,28 @@ func (w *Watcher) ingestOpen(ctx context.Context, path, relativePath string, f *
 // transaction, so producers never get a partially annotated document.
 func applySidecar(ctx context.Context, tx *sql.Tx, docID int64, s *sidecar.V1, ownerID, systemID int64) error {
 	now := time.Now().Unix()
+	if s.ArchiveSerialNumber != nil {
+		if err := asn.ValidateValue(*s.ArchiveSerialNumber); err != nil {
+			return fmt.Errorf("archive serial number: %w", err)
+		}
+		var conflict bool
+		if err := tx.QueryRowContext(ctx, `
+			SELECT EXISTS(
+				SELECT 1 FROM documents
+				WHERE system_id = ? AND archive_serial_number = ? AND id <> ?
+			)
+		`, systemID, *s.ArchiveSerialNumber, docID).Scan(&conflict); err != nil {
+			return err
+		}
+		if conflict {
+			return fmt.Errorf("archive serial number %d is already retained in this filing system", *s.ArchiveSerialNumber)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE documents SET archive_serial_number = ? WHERE id = ?
+		`, *s.ArchiveSerialNumber, docID); err != nil {
+			return err
+		}
+	}
 
 	// Correspondents. Multi-party (roles) form takes precedence when
 	// set; singular Correspondent is kept for backwards-compat and

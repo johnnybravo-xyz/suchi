@@ -18,6 +18,7 @@ func TestParseValid(t *testing.T) {
 		"created": "2026-03-02",
 		"notes": "auto-fetched",
 		"jd_category": 31,
+		"archive_serial_number": 4021,
 		"custom_fields": {"Financial Year": "2025-26"}
 	}`)
 	s, err := sidecar.Parse(b)
@@ -45,6 +46,9 @@ func TestParseValid(t *testing.T) {
 	if got, ok := s.CustomFields["Financial Year"].(string); !ok || got != "2025-26" {
 		t.Errorf("CustomFields Financial Year=%v", s.CustomFields["Financial Year"])
 	}
+	if s.ArchiveSerialNumber == nil || *s.ArchiveSerialNumber != 4021 {
+		t.Errorf("ArchiveSerialNumber=%v", s.ArchiveSerialNumber)
+	}
 }
 
 func TestParseMinimal(t *testing.T) {
@@ -63,11 +67,13 @@ func TestParseMinimal(t *testing.T) {
 
 func TestParseRejects(t *testing.T) {
 	cases := map[string]string{
-		"no-version-no-flat-keys": `{"unrelated": "x"}`,
-		"empty-object":            `{}`,
-		"wrong-version":           `{"suchi_sidecar": 99}`,
-		"malformed-json":          `{`,
-		"invalid-title-owner":     `{"suchi_sidecar": 1, "title": "x", "title_owner": "model"}`,
+		"no-version-no-flat-keys":     `{"unrelated": "x"}`,
+		"empty-object":                `{}`,
+		"wrong-version":               `{"suchi_sidecar": 99}`,
+		"malformed-json":              `{`,
+		"invalid-title-owner":         `{"suchi_sidecar": 1, "title": "x", "title_owner": "model"}`,
+		"zero-archive-serial-number":  `{"suchi_sidecar": 1, "archive_serial_number": 0}`,
+		"large-archive-serial-number": `{"suchi_sidecar": 1, "archive_serial_number": 9007199254740992}`,
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {

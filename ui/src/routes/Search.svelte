@@ -177,6 +177,7 @@
           <span class="grow">
             <span class="title" style="display:block">{h.title || translate("search.documentValue", { "id": h.id })}</span>
             {#if h.jd_address}<span class="chip">{h.jd_address}</span>{/if}
+            {#if h.archive_serial_number != null}<span class="chip">{translate("common.asnValue", { value: String(h.archive_serial_number) })}</span>{/if}
             {#if h.snippet}<span class="sub" style="white-space:normal">{@html safeSnippet(h.snippet)}</span>{/if}
           </span>
           <span class="sub">{fmtDate(h.created_at)}</span>

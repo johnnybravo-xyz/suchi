@@ -129,6 +129,64 @@ test('shows explicit revision state and retries an uncertain replacement with on
   expect(keys[1]).toBe(keys[0])
 })
 
+test('edits archive serial numbers and shows them on the current version', async ({ page }) => {
+  const patches = []
+  await installDetailAPI(page, async ({ route, request, path }) => {
+    if (path === '/api/documents/42' && request.method() === 'GET') {
+      await route.fulfill({ json: detail(42, { archive_serial_number: 4021 }) })
+      return true
+    }
+    if (path === '/api/documents/42' && request.method() === 'PATCH') {
+      const patch = request.postDataJSON()
+      patches.push(patch)
+      if (patch.archive_serial_number === 4022) {
+        await route.fulfill({
+          status: 409,
+          json: {
+            code: 'archive_serial_number_conflict',
+            error: 'archive serial number is already retained; search ASN 4022 including Trash and versions',
+          },
+        })
+      } else {
+        await route.fulfill({ json: { id: 42 } })
+      }
+      return true
+    }
+    if (path === '/api/documents/42/versions/' && request.method() === 'GET') {
+      await route.fulfill({ json: {
+        count: 1,
+        head_id: 42,
+        can_upload: true,
+        results: [{ id: 42, title: 'Document 42', created_at: 1780000042, is_head: true, archive_serial_number: 4021 }],
+      } })
+      return true
+    }
+    return false
+  })
+
+  await page.goto('/#/doc/42')
+  const label = page.getByText('Archive serial number', { exact: true })
+  const field = label.locator('xpath=following-sibling::dd[1]')
+  await expect(field.getByText('ASN 4021', { exact: true })).toBeVisible()
+  await field.getByRole('button', { name: 'Edit', exact: true }).click()
+  const input = field.getByRole('textbox', { name: 'Archive serial number' })
+  await input.fill('0')
+  await field.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(field.getByText('Enter a positive whole number no greater than 9007199254740991.', { exact: true })).toBeVisible()
+  expect(patches).toHaveLength(0)
+
+  await input.fill('4022')
+  await field.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(field.getByText('archive serial number is already retained; search ASN 4022 including Trash and versions', { exact: true })).toBeVisible()
+  await input.fill('4023')
+  await field.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(field.getByText('ASN 4023', { exact: true })).toBeVisible()
+  expect(patches).toEqual([{ archive_serial_number: 4022 }, { archive_serial_number: 4023 }])
+
+  const versions = await openVersions(page)
+  await expect(versions.getByText('ASN 4021', { exact: true })).toBeVisible()
+})
+
 for (const failure of [
   {
     name: 'duplicate conflict',
@@ -416,7 +474,6 @@ test('shows only populated typed metadata and keeps compact add and edit control
     { kind: 'field', body: { value: 250.5 } },
     { kind: 'note', body: { note: 'Call the utility' } },
   ])
-  await expect(page.getByText('Previous archive number', { exact: true })).toHaveCount(0)
 })
 
 test('ignores late history and backlink responses after exact-route navigation', async ({ page }) => {
