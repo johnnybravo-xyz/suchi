@@ -135,11 +135,14 @@ and authorization. Keyed response receipts commit with document/job in
 
 Device OCR is provisional PDF text subject to configured confidence. Native PDF
 text remains authoritative; empty extraction cannot erase accepted device text.
-Mail/post-ingest use `core/mimeutil` to refine missing, generic or malformed MIME
-from bytes while retaining specific valid source types. Rescans can therefore
-repair mislabeled PDFs and reach encryption handling without rewriting originals
-or changing the pipeline revision. [Supported formats](/formats) owns dispatch,
-format limits and real-tool requirements.
+`core/mimeutil` owns the normalized document-format registry: MIME aliases,
+filename-refinement hints, output extensions, and post-ingest capabilities.
+Mail, filesystem intake, post-ingest routing, downloads, and rendered filenames
+derive from that registry instead of carrying independent format lists. Byte
+sniffing still retains specific valid source types and repairs missing, generic,
+or malformed MIME, so rescans can reach PDF encryption handling without rewriting
+originals or changing the pipeline revision. [Supported formats](/formats) owns
+dispatch, format limits and real-tool requirements.
 
 Split extraction/CAS work stays outside the writer. Child insertion then reads
 the **current live parent inside the transaction**, inheriting system, owner,

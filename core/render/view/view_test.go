@@ -33,8 +33,8 @@ func TestRenderAndMovePreserveBlobContents(t *testing.T) {
 	}
 	if _, err := database.ExecWrite(ctx, `
 		INSERT INTO documents(system_id, id, owner_id, original_blob, original_size, title,
-			jd_category_id, created_at, updated_at)
-		VALUES (1, 1, 1, ?, ?, 'Receipt', 1, 0, 0)
+			mime_type, jd_category_id, created_at, updated_at)
+		VALUES (1, 1, 1, ?, ?, 'Receipt', 'application/pdf', 1, 0, 0)
 	`, original.SHA256, original.Size); err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestDefaultDateFallbackAndExplicitTemplates(t *testing.T) {
 			}
 			created := time.Date(2025, 4, 3, 18, 0, 0, 0, time.UTC).Unix()
 			added := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC).Unix()
-			if _, err := database.ExecWrite(t.Context(), `INSERT INTO documents(system_id,id,owner_id,original_blob,original_size,title,jd_category_id,created_at,added_at,updated_at) VALUES(1,1,1,?,?,'Receipt',1,?,?,0)`, blob.SHA256, blob.Size, created, added); err != nil {
+			if _, err := database.ExecWrite(t.Context(), `INSERT INTO documents(system_id,id,owner_id,original_blob,original_size,title,mime_type,jd_category_id,created_at,added_at,updated_at) VALUES(1,1,1,?,?,'Receipt','application/pdf',1,?,?,0)`, blob.SHA256, blob.Size, created, added); err != nil {
 				t.Fatal(err)
 			}
 			for _, tc := range []struct {
@@ -192,7 +192,7 @@ func TestDefaultDateFallbackAndExplicitTemplates(t *testing.T) {
 					t.Fatalf("date filename=%q want %q", rendered, tc.want)
 				}
 			}
-			if _, err := database.ExecWrite(t.Context(), `INSERT INTO storage_paths(system_id,id,name,slug,path,created_at,updated_at) VALUES(1,1,'Custom','custom','custom/{{ title }}__{{ doc_pk }}.pdf',0,0); UPDATE documents SET storage_path_id=1 WHERE id=1`); err != nil {
+			if _, err := database.ExecWrite(t.Context(), `INSERT INTO storage_paths(system_id,id,name,slug,path,created_at,updated_at) VALUES(1,1,'Custom','custom','custom/{{ title }}__{{ doc_pk }}',0,0); UPDATE documents SET storage_path_id=1 WHERE id=1`); err != nil {
 				t.Fatal(err)
 			}
 			if err := renderer.Move(t.Context(), 1); err != nil {

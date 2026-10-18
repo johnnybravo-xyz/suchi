@@ -39,16 +39,6 @@ type Result struct {
 	StderrTail string
 }
 
-// Recognized reports whether mime is an Outlook .msg variant.
-// application/vnd.ms-outlook is the IANA-registered type; the others
-// are seen in the wild.
-func Recognized(mime string) bool {
-	m := strings.ToLower(mime)
-	return m == "application/vnd.ms-outlook" ||
-		m == "application/x-outlook-msg" ||
-		m == "application/ms-outlook"
-}
-
 // Convert streams src through msgconvert. A missing binary or invalid input is
 // a soft skip so the original remains available for later reprocessing.
 func Convert(ctx context.Context, src io.Reader, log *slog.Logger, opts Options) (*Result, error) {

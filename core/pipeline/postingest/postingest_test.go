@@ -198,6 +198,23 @@ func TestHandleRoutingContracts(t *testing.T) {
 	}
 }
 
+func TestHandleRoutesDjVuBeforeGenericImage(t *testing.T) {
+	ctx := context.Background()
+	d, cas := openPostIngestHarness(t)
+	docID := seedPostIngestDocument(t, d, cas, "image/vnd.djvu", []byte("djvu bytes"))
+	binDir := t.TempDir()
+	writeExecutable(t, filepath.Join(binDir, "djvutxt"),
+		"#!/bin/sh\nprintf 'DjVu embedded text reaches the document content field.'\n")
+	t.Setenv("PATH", binDir)
+
+	h := New(d, cas, testActions(t), slog.New(slog.NewTextHandler(io.Discard, nil)),
+		WithLLMClassifier(true))
+	if err := h.Handle(ctx, pluginapi.Event{DocID: docID}); err != nil {
+		t.Fatal(err)
+	}
+	assertPostContentEffects(t, d, docID, true, "DjVu embedded text")
+}
+
 func TestPDFContentAuthority(t *testing.T) {
 	tests := []struct {
 		name       string

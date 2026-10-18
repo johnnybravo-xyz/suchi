@@ -27,7 +27,8 @@ func TestRenderJDDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
-	want := "20-29 Money/22 Tax/2026/2026-03-02 ITR 1 A Sharma__142.pdf"
+	// The renderer appends the linked file's extension; the template carries none.
+	want := "20-29 Money/22 Tax/2026/2026-03-02 ITR 1 A Sharma__142"
 	if got != want {
 		t.Errorf("render mismatch\n got %q\nwant %q", got, want)
 	}

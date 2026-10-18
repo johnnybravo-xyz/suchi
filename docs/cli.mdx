@@ -67,6 +67,12 @@ The blob's on-disk mtime gates a grace window. It is a retention buffer, not
 protection against concurrent writes: an upload can reuse an old blob before
 committing its new database reference.
 
+It also counts empty folders under `$DATA_DIR/rendered/`. When documents move,
+because a title, category or folder layout changed, the server removes only the
+old link and leaves its folders in place. GC removes folders that contain nothing,
+deepest first, and never `rendered/` itself. A file or link added to a folder keeps
+that folder, because removal refuses a non-empty directory.
+
 Dry-run by default. Nothing is deleted until you pass `--apply`.
 Before applying, stop Suchi and every other archive writer, including CLI
 imports. Keep them stopped until GC finishes. Do not apply GC while a backup
@@ -77,7 +83,7 @@ is copying the blob tree.
 | Flag                      | Default          | Purpose                                                  |
 | ------------------------- | ---------------- | -------------------------------------------------------- |
 | `--older-than <duration>` | `720h` (30 days) | Skip blobs newer than this; not a concurrency guarantee. |
-| `--apply`                 | off              | Delete candidate blobs with all archive writers stopped. |
+| `--apply`                 | off              | Delete candidate blobs and empty rendered-view folders with all archive writers stopped. |
 | `--verbose`               | off              | Log every kept and every candidate blob.                 |
 
 Trash and its automatic retention remove document rows and rendered files,

@@ -65,50 +65,6 @@ type Result struct {
 	StderrTail string
 }
 
-// supportedMIMEs is the anydoc coverage set, keyed to the MIME types
-// suchi's sniffer emits for these formats. Kept as an exact-match
-// allowlist so a wildcard trailing charset (e.g. "text/csv; charset=utf-8")
-// still routes correctly via Recognized() below, which strips params
-// before lookup.
-var supportedMIMEs = map[string]bool{
-	"application/epub+zip": true,
-	"application/epub":     true,
-	// Word
-	"application/msword": true, // .doc
-	"application/vnd.openxmlformats-officedocument.wordprocessingml.document": true, // .docx
-	"application/vnd.ms-word.document.macroenabled.12":                        true, // .docm
-	// PowerPoint
-	"application/vnd.ms-powerpoint":                                             true, // .ppt, .pps, .pot
-	"application/vnd.openxmlformats-officedocument.presentationml.presentation": true, // .pptx
-	"application/vnd.ms-powerpoint.presentation.macroenabled.12":                true, // .pptm
-	"application/vnd.openxmlformats-officedocument.presentationml.slideshow":    true, // .ppsx
-	"application/vnd.ms-powerpoint.slideshow.macroenabled.12":                   true, // .ppsm
-	// Excel
-	"application/vnd.ms-excel": true, // .xls
-	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": true, // .xlsx
-	"application/vnd.ms-excel.sheet.macroenabled.12":                    true, // .xlsm
-	"application/vnd.ms-excel.sheet.binary.macroenabled.12":             true, // .xlsb
-	// OpenDocument
-	"application/vnd.oasis.opendocument.text":         true, // .odt
-	"application/vnd.oasis.opendocument.spreadsheet":  true, // .ods
-	"application/vnd.oasis.opendocument.presentation": true, // .odp
-	// Rich Text
-	"application/rtf": true, // .rtf
-	"text/rtf":        true,
-	// CSV
-	"text/csv": true,
-}
-
-// Recognized reports whether mime is one anydoc converts. Strips
-// content-type params (`; charset=…`) before lookup.
-func Recognized(mime string) bool {
-	if i := strings.IndexByte(mime, ';'); i >= 0 {
-		mime = mime[:i]
-	}
-	mime = strings.ToLower(strings.TrimSpace(mime))
-	return supportedMIMEs[mime]
-}
-
 // Extract streams src to a tempfile and runs anydoc against it.
 // Skipped=true when the binary is missing — safe caller behavior is
 // "leave content empty; install anydoc + re-ingest later".
@@ -188,55 +144,6 @@ func Extract(ctx context.Context, src io.Reader, log *slog.Logger, opts Options)
 		Duration:   dur,
 		StderrTail: tail(res.Stderr),
 	}, nil
-}
-
-// ExtFromMIME picks a reasonable filename extension for a MIME so the
-// tempfile written for anydoc keeps the format hint. Postingest passes
-// this through so the caller doesn't have to know the MIME→ext table.
-func ExtFromMIME(mime string) string {
-	if i := strings.IndexByte(mime, ';'); i >= 0 {
-		mime = mime[:i]
-	}
-	mime = strings.ToLower(strings.TrimSpace(mime))
-	switch mime {
-	case "application/epub+zip", "application/epub":
-		return ".epub"
-	case "application/msword":
-		return ".doc"
-	case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-		return ".docx"
-	case "application/vnd.ms-word.document.macroenabled.12":
-		return ".docm"
-	case "application/vnd.ms-powerpoint":
-		return ".ppt"
-	case "application/vnd.openxmlformats-officedocument.presentationml.presentation":
-		return ".pptx"
-	case "application/vnd.ms-powerpoint.presentation.macroenabled.12":
-		return ".pptm"
-	case "application/vnd.openxmlformats-officedocument.presentationml.slideshow":
-		return ".ppsx"
-	case "application/vnd.ms-powerpoint.slideshow.macroenabled.12":
-		return ".ppsm"
-	case "application/vnd.ms-excel":
-		return ".xls"
-	case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
-		return ".xlsx"
-	case "application/vnd.ms-excel.sheet.macroenabled.12":
-		return ".xlsm"
-	case "application/vnd.ms-excel.sheet.binary.macroenabled.12":
-		return ".xlsb"
-	case "application/vnd.oasis.opendocument.text":
-		return ".odt"
-	case "application/vnd.oasis.opendocument.spreadsheet":
-		return ".ods"
-	case "application/vnd.oasis.opendocument.presentation":
-		return ".odp"
-	case "application/rtf", "text/rtf":
-		return ".rtf"
-	case "text/csv":
-		return ".csv"
-	}
-	return ""
 }
 
 func countNonWhitespace(s string) int {

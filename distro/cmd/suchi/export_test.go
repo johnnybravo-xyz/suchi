@@ -33,20 +33,3 @@ func TestSafeExportName(t *testing.T) {
 		}
 	}
 }
-
-func TestExtForMIME(t *testing.T) {
-	cases := map[string]string{
-		"application/pdf":            ".pdf",
-		"image/png":                  ".png",
-		"image/jpeg":                 ".jpg",
-		"message/rfc822":             ".eml",
-		"application/vnd.ms-outlook": ".msg",
-		"application/octet-stream":   "",
-		"":                           "",
-	}
-	for mime, want := range cases {
-		if got := extForMIME(mime); got != want {
-			t.Errorf("extForMIME(%q) = %q, want %q", mime, got, want)
-		}
-	}
-}

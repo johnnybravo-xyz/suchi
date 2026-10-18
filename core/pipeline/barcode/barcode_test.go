@@ -82,21 +82,6 @@ func TestTokensFor(t *testing.T) {
 	}
 }
 
-func TestRecognized(t *testing.T) {
-	yes := []string{"image/png", "image/jpeg", "IMAGE/GIF"}
-	no := []string{"application/pdf", "text/plain", ""}
-	for _, m := range yes {
-		if !barcode.Recognized(m) {
-			t.Errorf("%q should be recognized", m)
-		}
-	}
-	for _, m := range no {
-		if barcode.Recognized(m) {
-			t.Errorf("%q should not be recognized", m)
-		}
-	}
-}
-
 func TestDecodeEmpty(t *testing.T) {
 	if _, err := barcode.DecodeBytes(t.Context(), nil); err == nil {
 		t.Error("nil bytes should error")

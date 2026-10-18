@@ -127,15 +127,6 @@ func TestSniffLooksLikeEmail(t *testing.T) {
 	}
 }
 
-func TestRecognized(t *testing.T) {
-	if !Recognized("message/rfc822") || !Recognized("MESSAGE/RFC822") {
-		t.Error("rfc822 not recognized")
-	}
-	if Recognized("text/plain") {
-		t.Error("text/plain should not be recognized")
-	}
-}
-
 func TestParse_NestedMultipart(t *testing.T) {
 	// multipart/mixed containing a multipart/alternative + an attachment.
 	// The alternative has both text/plain and text/html — text/plain wins.

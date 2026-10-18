@@ -38,10 +38,13 @@ func TestRefineByFilename(t *testing.T) {
 		{"application/zip", "report.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
 		{"application/zip", "slides.odp", "application/vnd.oasis.opendocument.presentation"},
 		{"application/zip", "book.epub", "application/epub+zip"},
+		{"application/zip", "report.docm", "application/vnd.ms-word.document.macroenabled.12"},
+		{"application/zip", "workbook.xlsb", "application/vnd.ms-excel.sheet.binary.macroenabled.12"},
 		{"text/plain; charset=utf-8", "contacts.csv", "text/csv"},
 		{"application/octet-stream", "book.djvu", "image/vnd.djvu"},
 		{"application/octet-stream", "photo.heic", "image/heic"},
 		{"text/plain; charset=utf-8", "message.eml", "message/rfc822"},
+		{"text/plain; charset=utf-8", "notes.md", "text/markdown"},
 		{"application/pdf", "renamed.msg", "application/pdf"},
 		{"application/octet-stream", "unknown.bin", "application/octet-stream"},
 	}

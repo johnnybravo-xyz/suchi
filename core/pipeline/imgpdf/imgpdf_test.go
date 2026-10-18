@@ -26,35 +26,6 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/sandbox"
 )
 
-func TestRecognized(t *testing.T) {
-	cases := []struct {
-		mime string
-		want bool
-	}{
-		{"image/jpeg", true},
-		{"image/png", true},
-		{"image/tiff", true},
-		{"image/webp", true},
-		{"image/gif", true},
-		{"image/bmp", true},
-		{"IMAGE/JPEG", true},
-		{"image/jpeg; charset=binary", true},
-		{"image/heic", true},
-		{"image/heif", true},
-		{"image/heic-sequence", true},
-		{"image/heif-sequence", true},
-		{"image/svg+xml", false},
-		{"application/pdf", false},
-		{"text/plain", false},
-		{"", false},
-	}
-	for _, tc := range cases {
-		if got := imgpdf.Recognized(tc.mime); got != tc.want {
-			t.Errorf("Recognized(%q) = %v, want %v", tc.mime, got, tc.want)
-		}
-	}
-}
-
 func TestConvertPreservesPixelsAndHonorsCameraOrientation(t *testing.T) {
 	if _, err := exec.LookPath(imgpdf.DefaultBinary); err != nil {
 		t.Skip("ImageMagick not available")
@@ -121,27 +92,6 @@ func TestConvertPreservesPixelsAndHonorsCameraOrientation(t *testing.T) {
 	}
 }
 
-func TestExtFromMIME(t *testing.T) {
-	cases := map[string]string{
-		"image/jpeg":                 "jpg",
-		"image/png":                  "png",
-		"image/tiff":                 "tiff",
-		"image/webp":                 "webp",
-		"image/gif":                  "gif",
-		"image/bmp":                  "bmp",
-		"image/jpeg; charset=binary": "jpg",
-		"image/heic":                 "heic",
-		"image/heif":                 "heif",
-		"image/heic-sequence":        "heic",
-		"image/heif-sequence":        "heif",
-	}
-	for mime, want := range cases {
-		if got := imgpdf.ExtFromMIME(mime); got != want {
-			t.Errorf("ExtFromMIME(%q) = %q, want %q", mime, got, want)
-		}
-	}
-}
-
 // Exercise real encoders and parse their output, not just a PDF-looking name.
 func TestConvert(t *testing.T) {
 	binary, err := exec.LookPath(imgpdf.DefaultBinary)
@@ -156,18 +106,19 @@ func TestConvert(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		mime   string
+		ext    string
 		frames int
 		pages  int
 	}{
-		{"image/png", 1, 1},
-		{"image/jpeg", 1, 1},
-		{"image/heic", 1, 1},
-		{"image/heif-sequence", 2, 1},
-		{"image/tiff", 2, 2},
+		{"image/png", "png", 1, 1},
+		{"image/jpeg", "jpg", 1, 1},
+		{"image/heic", "heic", 1, 1},
+		{"image/heif-sequence", "heif", 2, 1},
+		{"image/tiff", "tiff", 2, 2},
 	} {
 		t.Run(tc.mime, func(t *testing.T) {
 			dir := t.TempDir()
-			ext := imgpdf.ExtFromMIME(tc.mime)
+			ext := tc.ext
 			inputPath := filepath.Join(dir, "in."+ext)
 			args := []string{"-size", "64x64", "xc:red"}
 			if tc.frames == 2 {

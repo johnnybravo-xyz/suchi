@@ -9,6 +9,11 @@ if the binary a branch needs isn't installed, the doc is still stored
 and searchable, `documents.content` just lands empty until the tool
 shows up.
 
+`core/mimeutil` is the source of truth for document MIME aliases, filename
+refinement, output extensions, and the capabilities that select these branches.
+Adding a supported format there updates ingestion routing and linked/downloaded
+filenames together.
+
 ## Format matrix
 
 | MIME                                                   | What happens                                                                                                                                                             | Binary needed                                                       |            Standard image            |               Full image               |

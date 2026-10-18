@@ -22,6 +22,7 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
+	"github.com/johnnybravo-xyz/suchi/core/automations"
 	renderpaths "github.com/johnnybravo-xyz/suchi/core/render/paths"
 	"github.com/johnnybravo-xyz/suchi/core/render/view"
 	"github.com/johnnybravo-xyz/suchi/core/slug"
@@ -143,6 +144,12 @@ func previewRenderedLayout(template string) (string, bool, error) {
 	if err != nil {
 		return "", false, err
 	}
+	if ext := renderedLayoutExtension(template); len(ext) > 1 {
+		return "", false, fmt.Errorf(
+			"folder layout must not include file extension %q; Suchi appends the linked file's extension",
+			ext,
+		)
+	}
 	if filepath.IsAbs(rendered) {
 		return "", false, errors.New("folder layout must be relative")
 	}
@@ -153,7 +160,16 @@ func previewRenderedLayout(template string) (string, bool, error) {
 	if renderpaths.IsIndexPath(rendered) {
 		return "", false, fmt.Errorf("%q is reserved for the filing index", renderpaths.IndexDirectory)
 	}
-	return rendered, renderpaths.UsesVariable(template, "asn"), nil
+	// The renderer appends the linked file's extension; the sample is a PDF.
+	return rendered + ".pdf", renderpaths.UsesVariable(template, "asn"), nil
+}
+
+func renderedLayoutExtension(template string) string {
+	component := filepath.Base(filepath.ToSlash(strings.TrimSpace(template)))
+	if end := strings.LastIndex(component, "}}"); end >= 0 {
+		component = component[end+2:]
+	}
+	return filepath.Ext(strings.TrimSpace(component))
 }
 
 // ---------- shared implementation ----------
@@ -496,6 +512,13 @@ func (s *Server) taxonomyDelete(w http.ResponseWriter, r *http.Request, table st
 		}
 		var renderedDocuments []int64
 		if table == "storage_paths" {
+			rules, err := automations.AutomationNamesAssigningRenderedLayout(r.Context(), tx, id)
+			if err != nil {
+				return err
+			}
+			if len(rules) > 0 {
+				return &layoutInUseError{rules: rules}
+			}
 			rows, err := tx.QueryContext(r.Context(),
 				`SELECT id FROM documents WHERE storage_path_id = ? AND trashed_at IS NULL ORDER BY id`, id)
 			if err != nil {
@@ -540,10 +563,23 @@ func (s *Server) taxonomyDelete(w http.ResponseWriter, r *http.Request, table st
 			s.writeError(w, http.StatusNotFound, "not_found", "no such row")
 			return
 		}
+		var inUse *layoutInUseError
+		if errors.As(err, &inUse) {
+			s.writeError(w, http.StatusConflict, "rendered_layout_in_use", inUse.Error())
+			return
+		}
 		s.serverErr(w, "taxonomy.delete."+table, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// layoutInUseError names the rules that would keep assigning a deleted layout.
+type layoutInUseError struct{ rules []string }
+
+func (e *layoutInUseError) Error() string {
+	return "folder layout is used by automations: " + strings.Join(e.rules, ", ") +
+		"; remove it from those rules before deleting it"
 }
 
 func enqueueRenderedLayoutDocuments(ctx context.Context, tx *sql.Tx, layoutID int64) error {
