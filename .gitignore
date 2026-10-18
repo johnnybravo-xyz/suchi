@@ -9,6 +9,7 @@
 # local dev data
 /data/
 /tmp/
+/desktop/
 *.db
 *.db-wal
 *.db-shm
