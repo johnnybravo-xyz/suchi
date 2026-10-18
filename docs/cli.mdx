@@ -405,7 +405,8 @@ Portable takeout of live originals and selected metadata from one system.
 Manifest version **`"2"`** identifies its code/name. The ZIP contains original
 bytes, `documents/<name>-<id>.json` sidecars and selected-system taxonomy-table
 dumps, not a database restore graph. Sidecar format stays **1**, adding optional
-`title_owner`, `jd_system`, and `jd_address`. Document IDs can change on intake.
+`title_owner`, `jd_system`, `jd_address`, and `custom_fields`. Document IDs can
+change on intake.
 
 ```sh
 suchi export --out /tmp/my-suchi.zip --owner-id 1
@@ -424,12 +425,13 @@ explicit recovery override, and the manifest records its skipped originals.
 
 After extracting the zip, placing each original beside its sidecar in an
 fs-watch staging directory restores title ownership, title, source date,
-correspondents, tags, and JD category within the configured target. Follow the
-[takeout reingestion guide](/guides/export-import) for target preparation, safe
-copy order and verification steps. This is not a full metadata
-round trip: per-document custom
-field values and notes are omitted, while exported `sensitivity`, `mime_type`,
-and `sha256` sidecar fields are currently informational and ignored on ingest.
+correspondents, tags, JD category, and custom-field values within the configured
+target. Follow the [takeout reingestion guide](/guides/export-import) for target
+preparation, safe copy order and verification steps. This is not a full metadata
+round trip: notes, document-link field values, and extraction-managed `invoice_*`
+fields are omitted (the last are read again from the original on intake), while
+exported `sensitivity`, `mime_type`, and `sha256` sidecar fields are currently
+informational and ignored on ingest.
 MIME and SHA-256 are recomputed from the bytes, and sensitivity uses the target
 instance default.
 An input `jd_system` must match the watcher's configured target; it cannot route
@@ -443,7 +445,7 @@ new identity. To retain IDs, memberships, ACLs and relationships exactly, use a
 - Document versions history.
 - Approvals + audit history.
 - Share links + saved views.
-- Per-document custom-field values and notes.
+- Notes, document-link field values, and extraction-managed `invoice_*` values.
 
 Bumps to the export format land a new `version` in `manifest.json`
 so importers can gate on it.

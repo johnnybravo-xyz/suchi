@@ -45,8 +45,11 @@ The zip contains original files and matching JSON sidecars under
 automatically installed by the restore process.
 Manifest version `"2"` identifies the selected system code/name; `--all` means
 all owners there, not all systems. Sidecar format stays 1 with optional
-`title_owner`, `jd_system`, and `jd_address`. Those preserve naming precedence
-and record the source system, not an ID-preserving restore protocol.
+`title_owner`, `jd_system`, `jd_address`, and `custom_fields`. Those preserve
+naming precedence, typed values, and the source system; they are not an
+ID-preserving restore protocol. `custom_fields` leaves out document-link values,
+whose target IDs change, and extraction-managed `invoice_*` fields, which intake
+reads again from the original.
 
 ## Prepare the fresh instance
 
@@ -55,7 +58,11 @@ and record the source system, not an ID-preserving restore protocol.
    introduce the same target code through a prefixed taxonomy import first.
    Sidecar `jd_system` must match the watcher target; it cannot create or route a
    system. Category codes resolve there; an absent code falls back to its Inbox.
-3. Grant the intended owner entry and configure the watcher for that target.
+3. Recreate the custom-field definitions listed in `taxonomy/custom_fields.json`
+   with the same names, types, and choices; skip the `invoice_*` fields, which
+   Suchi creates itself. A sidecar that names an undefined field rejects that
+   document.
+4. Grant the intended owner entry and configure the watcher for that target.
 
 The watcher can be configured in **Settings**, or with environment variables:
 

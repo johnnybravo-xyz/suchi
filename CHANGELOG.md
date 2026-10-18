@@ -4,6 +4,13 @@ Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
 
+### Fixed
+
+- `suchi export` sidecars now carry custom-field values, so a reingested
+  takeout keeps typed values such as hand-entered amounts and dates.
+  Document-link values and extraction-managed `invoice_*` fields are left out;
+  the latter are read again from the original.
+
 ## [0.3.0] - 2026-10-14
 
 ### Changed

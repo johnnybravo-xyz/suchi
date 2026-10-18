@@ -89,6 +89,7 @@ type exportSidecar struct {
 	Correspondent  string           `json:"correspondent,omitempty"`
 	Correspondents []exportCorrRole `json:"correspondents,omitempty"`
 	Tags           []string         `json:"tags,omitempty"`
+	CustomFields   map[string]any   `json:"custom_fields,omitempty"`
 	Notes          string           `json:"notes,omitempty"`
 	JDCategory     int              `json:"jd_category,omitempty"`
 	JDSystem       string           `json:"jd_system,omitempty"`
@@ -469,6 +470,11 @@ func dumpDocuments(ctx context.Context, zw *zip.Writer, d *db.DB, cas *blob.CAS,
 			return written, skipped, fmt.Errorf("load correspondents for document %d: %w", id, err)
 		}
 		side.Correspondents = corrs
+		fields, err := loadDocCustomFields(ctx, d, id)
+		if err != nil {
+			return written, skipped, fmt.Errorf("load custom fields for document %d: %w", id, err)
+		}
+		side.CustomFields = fields
 		for _, c := range corrs {
 			if c.Role == "sender" || c.Role == "" {
 				side.Correspondent = c.Name
@@ -534,6 +540,55 @@ func loadDocTags(ctx context.Context, d *db.DB, docID int64) ([]string, error) {
 			return nil, err
 		}
 		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// loadDocCustomFields returns values in the shapes sidecar intake validates:
+// strings, numbers, booleans, "YYYY-MM-DD" dates, and choice lists.
+// Extraction-managed fields are re-read from the original on reingest, and
+// document links name IDs that a reingest does not preserve, so both are left out.
+func loadDocCustomFields(ctx context.Context, d *db.DB, docID int64) (map[string]any, error) {
+	rows, err := d.Read.QueryContext(ctx, `
+		SELECT f.name, f.data_type, v.value_text, v.value_number, v.value_bool, v.value_date
+		  FROM document_custom_field_values v
+		  JOIN custom_fields f ON f.id = v.field_id
+		 WHERE v.document_id = ? AND f.managed_by = '' AND f.data_type <> 'documentlink'
+		 ORDER BY f.name`, docID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]any{}
+	for rows.Next() {
+		var (
+			name, dataType string
+			text           sql.NullString
+			number         sql.NullFloat64
+			boolean, date  sql.NullInt64
+		)
+		if err := rows.Scan(&name, &dataType, &text, &number, &boolean, &date); err != nil {
+			return nil, err
+		}
+		switch {
+		case dataType == "multi" && text.Valid:
+			var choices []string
+			if err := json.Unmarshal([]byte(text.String), &choices); err != nil {
+				return nil, fmt.Errorf("custom field %q: %w", name, err)
+			}
+			out[name] = choices
+		case dataType == "date" && date.Valid:
+			out[name] = time.Unix(date.Int64, 0).UTC().Format("2006-01-02")
+		case dataType == "bool" && boolean.Valid:
+			out[name] = boolean.Int64 == 1
+		case (dataType == "number" || dataType == "monetary") && number.Valid:
+			out[name] = number.Float64
+		case text.Valid:
+			out[name] = text.String
+		}
+	}
+	if len(out) == 0 {
+		return nil, rows.Err()
 	}
 	return out, rows.Err()
 }
