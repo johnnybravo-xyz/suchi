@@ -23,6 +23,12 @@ Notable user-visible changes to Suchi are recorded here.
   service invoice to its purchase invoice. Writes use the existing API checks
   for type, permission, Trash, self-links and version history.
 
+### Changed
+
+- Saved decryption passwords now separate their editable label, last-used date,
+  and most recently unlocked document into labeled columns. Labels remain plain
+  text until the pencil action opens inline editing.
+
 ### Fixed
 
 - A document-link write with a fractional, negative or zero document ID is
