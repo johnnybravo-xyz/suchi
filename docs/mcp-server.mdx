@@ -114,12 +114,48 @@ The response contains an absolute `/s/<token>` URL. Network links use
 `PUBLIC_URL`; Public links use the configured `SHARE_PUBLIC_URL` and fail while
 public ingress is unavailable.
 
+### `list_custom_fields`
+
+Lists custom-field definitions in the token's bound system through
+`GET /api/custom_fields/?page_size=500`: ID, name, `data_type`, and type
+options such as select choices. A `documentlink` field is a named relationship
+to another document. Requires `documents:read`.
+
+### `set_custom_field`
+
+Writes one value through `PUT /api/documents/{id}/custom_fields/{field}` and
+replaces any existing value. Requires `documents:write`.
+
+- `document_id`: required source document ID
+- `field`: required exact field name or numeric ID in the bound system
+- `value`: required typed value; for `documentlink`, the target document ID
+
+Suchi applies the same validation and permission checks as Document Detail. A
+link requires change permission on the source and view permission on the live
+target; a self-link, a link inside one version history, or a trashed, hidden or
+missing document is refused. A link target must be a positive whole number:
+fractional, negative and zero IDs are rejected rather than rounded or treated
+as removal. A null or blank value is refused; use `clear_custom_field`.
+
+Values belong to one exact version. A replacement version starts without them,
+and a link keeps naming the version it was written to, so agents should link
+the current version that `search_documents` returns. The tool returns
+`{"document_id":…,"field":…,"status":"set"}`.
+
+### `clear_custom_field`
+
+Removes one value, including a link, through
+`DELETE /api/documents/{id}/custom_fields/{field}`. Takes `document_id` and
+`field`; requires `documents:write`.
+
 ## Current limits
 
 MCP v0.1 does not expose arbitrary document mutation, raw document listing,
-MCP Resources, or bulk maintenance operations. Add server behavior to the REST
-API first; MCP tools should remain curated adapters rather than a second
-business-logic surface.
+MCP Resources, or bulk maintenance operations. Apart from resolving approvals,
+custom-field values and document links are the only document metadata it
+changes. It cannot read **Documents linking to this version**; outgoing links
+appear in `get_document`. Add server behavior to the REST API first; MCP tools
+should remain curated adapters rather than a second business-logic surface.
 
 See [Connect an MCP client](/guides/mcp-connect) for client-specific examples
 and [API](/api) for the underlying endpoint contracts.

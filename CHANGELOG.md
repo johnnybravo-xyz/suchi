@@ -16,6 +16,10 @@ Notable user-visible changes to Suchi are recorded here.
   number already used by another document or repeated within the batch, with
   the page and number involved. A conflict names the document that holds the
   number when the uploader can open it.
+- The MCP adapter can now list custom fields and set or clear a document's
+  custom-field values, so an agent can record an odometer reading or link a
+  service invoice to its purchase invoice. Writes use the existing API checks
+  for type, permission, Trash, self-links and version history.
 
 ### Fixed
 
