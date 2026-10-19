@@ -74,6 +74,12 @@ func (s *Server) SetCustomField(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_value", err.Error())
 		return
 	}
+	// An empty value removes a link; a literal 0 names no document and must
+	// not silently remove one.
+	if dataType == "documentlink" && typed.(int64) == 0 && !emptyCustomFieldValue(req.Value) {
+		s.writeError(w, http.StatusBadRequest, "bad_value", "document link: document id must be positive")
+		return
+	}
 
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		if ok, err := s.authorized(r.Context(), tx, p, authz.KindDocument, docID, authz.PermChange); err != nil {
@@ -130,6 +136,11 @@ func (s *Server) SetCustomField(w http.ResponseWriter, r *http.Request) {
 		After: map[string]any{"field_id": fieldID, "data_type": dataType},
 	})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func emptyCustomFieldValue(value any) bool {
+	text, isText := value.(string)
+	return value == nil || (isText && strings.TrimSpace(text) == "")
 }
 
 // DeleteCustomField removes the value row for a (doc, field) pair.
