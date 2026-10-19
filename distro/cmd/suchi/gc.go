@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/blob"
@@ -24,7 +25,7 @@ func runGC(args []string) int {
 	fs := flag.NewFlagSet("suchi gc", flag.ContinueOnError)
 	var (
 		grace   = fs.Duration("older-than", 30*24*time.Hour, "skip blobs newer than this; does not protect concurrent uploads")
-		apply   = fs.Bool("apply", false, "delete candidate blobs; stop the server and all other archive writers first (default is dry-run)")
+		apply   = fs.Bool("apply", false, "delete candidate blobs and empty rendered-view folders; stop the server and all other archive writers first (default is dry-run)")
 		verbose = fs.Bool("verbose", false, "log every candidate + skipped blob (default is summary only)")
 	)
 	if err := fs.Parse(args); err != nil {
@@ -71,6 +72,11 @@ func runGC(args []string) int {
 		log.Error("gc.run", "err", err.Error())
 		return 1
 	}
+	folders, err := gc.PruneEmptyFolders(filepath.Join(cfg.DataDir, "rendered"), *apply, log)
+	if err != nil {
+		log.Error("gc.folders", "err", err.Error())
+		return 1
+	}
 	fmt.Fprintf(os.Stderr, `
 suchi gc (apply=%v, grace=%s).
   Referenced blobs:     %d
@@ -79,16 +85,22 @@ suchi gc (apply=%v, grace=%s).
   Deleted:              %d
   Bytes reclaimable:    %d
   Failures:             %d
+  Empty view folders:   %d
+  Folders removed:      %d
 `, *apply, grace.String(),
 		rep.Referenced, rep.OrphanCandidates, rep.Skipped,
-		rep.Deleted, rep.BytesReclaimable, len(rep.Failures))
-	if len(rep.Failures) > 0 {
+		rep.Deleted, rep.BytesReclaimable, len(rep.Failures)+len(folders.Failures),
+		folders.Empty, folders.Removed)
+	if len(rep.Failures)+len(folders.Failures) > 0 {
 		fmt.Fprintln(os.Stderr, "\nFailures:")
 		for _, f := range rep.Failures {
 			fmt.Fprintf(os.Stderr, "  %s: %s\n", f.SHA256, f.Err)
 		}
+		for _, f := range folders.Failures {
+			fmt.Fprintf(os.Stderr, "  %s: %s\n", f.Path, f.Err)
+		}
 	}
-	if !*apply && rep.OrphanCandidates > 0 {
+	if !*apply && (rep.OrphanCandidates > 0 || folders.Empty > 0) {
 		fmt.Fprintln(os.Stderr, "\nDry-run — stop the server and all other archive writers before re-running with --apply.")
 	}
 	return 0

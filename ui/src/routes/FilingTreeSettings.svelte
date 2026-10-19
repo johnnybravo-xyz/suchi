@@ -233,7 +233,7 @@
       <h2 id="filing-tree-heading">{translate("filingTreeSettings.filingTree")}</h2>
       <p>{translate("filingTreeSettings.chooseAReadyMadeTreeCombineFocused")}</p>
     </div>
-    {#if currentPreset}<span class="current-chip">{translate("filingTreeSettings.currentValue", { "_": currentPreset.replaceAll('_', ' ') })}</span>{/if}
+    {#if currentPreset}<span class="current-chip">{translate("filingTreeSettings.currentValue", { "name": currentPreset.replaceAll('_', ' ') })}</span>{/if}
   </header>
 
   {#if loading}

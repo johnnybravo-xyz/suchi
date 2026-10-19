@@ -57,26 +57,6 @@ type Result struct {
 	StderrTail string
 }
 
-// Recognized reports whether mime is a raster image format we can
-// wrap. Explicitly excludes vector formats (SVG) — they don't need image OCR.
-func Recognized(mime string) bool {
-	m := strings.ToLower(mime)
-	if idx := strings.IndexByte(m, ';'); idx > 0 {
-		m = strings.TrimSpace(m[:idx])
-	}
-	switch m {
-	case "image/jpeg", "image/jpg", "image/pjpeg",
-		"image/png",
-		"image/tiff", "image/x-tiff",
-		"image/heic", "image/heif", "image/heic-sequence", "image/heif-sequence",
-		"image/webp",
-		"image/gif",
-		"image/bmp", "image/x-bmp", "image/x-ms-bmp":
-		return true
-	}
-	return false
-}
-
 // Convert streams image bytes to a tempfile and runs ImageMagick to
 // produce a PDF. Skipped=true when no ImageMagick is installed — safe
 // caller behavior is "keep the image as-is; someone can install magick
@@ -193,34 +173,6 @@ func Convert(ctx context.Context, src io.Reader, log *slog.Logger, opts Options)
 		Duration:   dur,
 		StderrTail: tail(res.Stderr),
 	}, nil
-}
-
-// ExtFromMIME returns the conventional file extension for a MIME type
-// so callers can pass a helpful Ext hint. Unknown returns "img".
-func ExtFromMIME(mime string) string {
-	m := strings.ToLower(mime)
-	if idx := strings.IndexByte(m, ';'); idx > 0 {
-		m = strings.TrimSpace(m[:idx])
-	}
-	switch m {
-	case "image/jpeg", "image/jpg", "image/pjpeg":
-		return "jpg"
-	case "image/png":
-		return "png"
-	case "image/tiff", "image/x-tiff":
-		return "tiff"
-	case "image/heic", "image/heic-sequence":
-		return "heic"
-	case "image/heif", "image/heif-sequence":
-		return "heif"
-	case "image/webp":
-		return "webp"
-	case "image/gif":
-		return "gif"
-	case "image/bmp", "image/x-bmp", "image/x-ms-bmp":
-		return "bmp"
-	}
-	return "img"
 }
 
 func tail(b []byte) string {

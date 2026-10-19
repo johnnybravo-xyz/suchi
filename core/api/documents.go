@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/asn"
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
@@ -42,6 +43,8 @@ type UploadResponse struct {
 	Deduplicated     bool   `json:"deduplicated,omitempty"` // existing live document reused
 	IdempotentReplay bool   `json:"idempotent_replay,omitempty"`
 }
+
+var errSplitOriginChildrenTrashed = errors.New("split origin has trashed children")
 
 // UploadDocument accepts a multipart upload, streams it into the CAS,
 // and inserts (or resurrects) a document row.
@@ -120,6 +123,61 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 			replay = &stored
 			outID = stored.DocumentID
 			return nil
+		}
+
+		// A completed byte-identical split keeps its staging origin retired.
+		// Resolve it before ordinary live/Trash dedup so re-upload cannot
+		// resurrect the combined feeder PDF beside its children.
+		var (
+			splitOriginID    int64
+			splitOriginTitle string
+			splitChildren    int
+			trashedChildren  int
+		)
+		errSplit := tx.QueryRowContext(r.Context(), `
+			SELECT parent.id, parent.title, COUNT(child.id),
+			       SUM(CASE WHEN child.trashed_at IS NOT NULL THEN 1 ELSE 0 END)
+			FROM documents parent
+			JOIN documents child ON child.split_origin_id = parent.id
+			WHERE parent.system_id = ?
+			  AND parent.owner_id = ?
+			  AND parent.original_blob = ?
+			  AND parent.trashed_at IS NOT NULL
+			GROUP BY parent.id, parent.title
+			ORDER BY parent.trashed_at DESC
+			LIMIT 1
+		`, systemID, principal.UserID, upload.SHA256).Scan(
+			&splitOriginID, &splitOriginTitle, &splitChildren, &trashedChildren,
+		)
+		if errSplit == nil {
+			if splitChildren == 0 {
+				return fmt.Errorf("completed split origin has no children")
+			}
+			if trashedChildren != 0 {
+				return errSplitOriginChildrenTrashed
+			}
+			outID = splitOriginID
+			deduplicated = true
+			if err := ingest.RecordSource(r.Context(), tx, outID, upload.SourceKind,
+				upload.SourceLabel, upload.Filename, time.Now().Unix()); err != nil {
+				return err
+			}
+			status = http.StatusOK
+			response = UploadResponse{
+				ID: outID, SHA256: upload.SHA256, Size: upload.Size,
+				MIME: upload.MIME, Title: splitOriginTitle, Deduplicated: true,
+			}
+			response.SystemCode, response.JDAddress, err = documentAddress(r.Context(), tx, outID)
+			if err != nil {
+				return err
+			}
+			return storeUploadResponse(
+				r.Context(), tx, principal.UserID, upload.Idempotency,
+				upload.SHA256, outID, status, response,
+			)
+		}
+		if !errors.Is(errSplit, sql.ErrNoRows) {
+			return errSplit
 		}
 
 		// A live match reuses the document and records this acquisition.
@@ -271,6 +329,11 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 	if errors.Is(err, errIdempotencyConflict) {
 		s.writeError(w, http.StatusConflict, "idempotency_conflict",
 			"Idempotency-Key was already used for a different upload")
+		return
+	}
+	if errors.Is(err, errSplitOriginChildrenTrashed) {
+		s.writeError(w, http.StatusConflict, "split_origin_children_trashed",
+			"one or more documents from this scanned batch are in Trash")
 		return
 	}
 	if err != nil {
@@ -437,7 +500,9 @@ func (s *Server) RestoreDocument(w http.ResponseWriter, r *http.Request) {
 
 var (
 	errRenderedLayoutUnavailable = errors.New("rendered layout is unavailable")
-	errRenderedLayoutNeedsASN    = errors.New("rendered layout requires a previous archive number")
+	errRenderedLayoutNeedsASN    = errors.New("rendered layout requires an archive serial number")
+	errASNConflict               = errors.New("archive serial number conflict")
+	errASNRequiresCurrent        = errors.New("archive serial number requires current version")
 )
 
 // PatchDocument — PATCH /api/documents/{id}. Partial update of the
@@ -480,6 +545,11 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.RenderedLayoutID != nil && *in.RenderedLayoutID < 0 {
 		s.writeError(w, http.StatusBadRequest, "bad_rendered_layout", "rendered_layout_id must be zero or a positive integer")
+		return
+	}
+	asnUpdate, asnPresent, err := parseArchiveSerialNumberUpdate(in.ArchiveSerialNumber)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_archive_serial_number", err.Error())
 		return
 	}
 
@@ -544,6 +614,17 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 		after["languages"] = strings.Trim(normalised, ",")
 		after["languages_locked"] = lock == 1
 	}
+	hasNonASNUpdate := len(sets) != 0
+	if asnPresent {
+		sets = append(sets, "archive_serial_number = ?")
+		if asnUpdate.Valid {
+			args = append(args, asnUpdate.Int64)
+			after["archive_serial_number"] = asnUpdate.Int64
+		} else {
+			args = append(args, sql.NullInt64{})
+			after["archive_serial_number"] = nil
+		}
+	}
 	if len(sets) == 0 {
 		s.writeError(w, http.StatusBadRequest, "no_fields", "no updateable fields in body")
 		return
@@ -559,11 +640,13 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 		curSensitivity      sql.NullString
 		curJDCatID          sql.NullInt64
 		curRenderedLayoutID sql.NullInt64
+		curASN              sql.NullInt64
 	)
 	err = s.DB.Read.QueryRowContext(r.Context(),
-		`SELECT title, title_owner, sensitivity, jd_category_id, storage_path_id FROM documents
-		 WHERE id = ?`,
-		id).Scan(&curTitle, &curTitleOwner, &curSensitivity, &curJDCatID, &curRenderedLayoutID)
+		`SELECT title, title_owner, sensitivity, jd_category_id, storage_path_id,
+		        archive_serial_number
+		 FROM documents WHERE id = ?`,
+		id).Scan(&curTitle, &curTitleOwner, &curSensitivity, &curJDCatID, &curRenderedLayoutID, &curASN)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "document not found")
 		return
@@ -595,6 +678,19 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 			before["rendered_layout_id"] = int64(0)
 		}
 	}
+	if asnPresent {
+		if curASN.Valid {
+			before["archive_serial_number"] = curASN.Int64
+		} else {
+			before["archive_serial_number"] = nil
+		}
+	}
+
+	var (
+		asnNoop                bool
+		asnChanged             bool
+		effectiveLayoutUsesASN bool
+	)
 
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		allowed, err := s.authorized(r.Context(), tx, principal, authz.KindDocument, id, authz.PermChange)
@@ -603,6 +699,50 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 		}
 		if !allowed {
 			return errNotFound
+		}
+		var (
+			txSystemID int64
+			txASN      sql.NullInt64
+			txLayout   sql.NullInt64
+			txTrashed  sql.NullInt64
+			historical bool
+		)
+		if err := tx.QueryRowContext(r.Context(), `
+			SELECT d.system_id, d.archive_serial_number, d.storage_path_id,
+			       d.trashed_at,
+			       EXISTS(
+				       SELECT 1 FROM documents newer
+				       WHERE d.version_family_key IS NOT NULL
+				         AND newer.system_id = d.system_id
+				         AND newer.version_family_key = d.version_family_key
+				         AND newer.id > d.id
+			       )
+			FROM documents d WHERE d.id = ?
+		`, id).Scan(&txSystemID, &txASN, &txLayout, &txTrashed, &historical); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return errNotFound
+			}
+			return err
+		}
+		asnNoop = asnPresent && txASN.Valid == asnUpdate.Valid &&
+			(!txASN.Valid || txASN.Int64 == asnUpdate.Int64)
+		asnChanged = asnPresent && !asnNoop
+		if asnPresent && asnUpdate.Valid {
+			if txTrashed.Valid || historical {
+				return errASNRequiresCurrent
+			}
+			var conflict bool
+			if err := tx.QueryRowContext(r.Context(), `
+				SELECT EXISTS(
+					SELECT 1 FROM documents
+					WHERE system_id = ? AND archive_serial_number = ? AND id <> ?
+				)
+			`, txSystemID, asnUpdate.Int64, id).Scan(&conflict); err != nil {
+				return err
+			}
+			if conflict {
+				return errASNConflict
+			}
 		}
 		if in.JDCategoryID != nil {
 			var one int
@@ -616,26 +756,36 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 		}
-		if in.RenderedLayoutID != nil && *in.RenderedLayoutID != 0 {
-			var (
-				template string
-				asn      sql.NullInt64
-			)
+		effectiveASN := txASN
+		if asnPresent {
+			effectiveASN = asnUpdate
+		}
+		effectiveLayout := txLayout
+		if in.RenderedLayoutID != nil {
+			effectiveLayout = sql.NullInt64{
+				Int64: *in.RenderedLayoutID,
+				Valid: *in.RenderedLayoutID != 0,
+			}
+		}
+		if effectiveLayout.Valid {
+			var template string
 			err := tx.QueryRowContext(r.Context(), `
-				SELECT sp.path, d.archive_serial_number
-				FROM storage_paths sp
-				JOIN documents d ON d.system_id = sp.system_id
-				WHERE sp.id = ? AND d.id = ?
-			`, *in.RenderedLayoutID, id).Scan(&template, &asn)
+				SELECT path FROM storage_paths
+				WHERE id = ? AND system_id = ?
+			`, effectiveLayout.Int64, txSystemID).Scan(&template)
 			if errors.Is(err, sql.ErrNoRows) {
 				return errRenderedLayoutUnavailable
 			}
 			if err != nil {
 				return err
 			}
-			if renderpaths.UsesVariable(template, "asn") && !asn.Valid {
+			effectiveLayoutUsesASN = renderpaths.UsesVariable(template, "asn")
+			if effectiveLayoutUsesASN && !effectiveASN.Valid {
 				return errRenderedLayoutNeedsASN
 			}
+		}
+		if asnNoop && !hasNonASNUpdate {
+			return nil
 		}
 		res, err := tx.ExecContext(r.Context(),
 			"UPDATE documents SET "+strings.Join(sets, ", ")+
@@ -653,7 +803,8 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 		if err := reconcileClassifierReview(r.Context(), tx, selectedSystemID(r.Context()), []int64{id}); err != nil {
 			return err
 		}
-		if in.Title != nil || in.JDCategoryID != nil || in.RenderedLayoutID != nil {
+		if in.Title != nil || in.JDCategoryID != nil || in.RenderedLayoutID != nil ||
+			asnChanged && effectiveLayoutUsesASN {
 			return view.EnqueueMove(r.Context(), tx, id)
 		}
 		return nil
@@ -672,11 +823,29 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, errRenderedLayoutNeedsASN) {
-			s.writeError(w, http.StatusConflict, "rendered_layout_requires_archive_number", "this folder layout requires a previous archive number")
+			s.writeError(w, http.StatusConflict, "rendered_layout_requires_archive_number", "this folder layout requires an archive serial number")
+			return
+		}
+		if errors.Is(err, errASNConflict) {
+			s.writeError(w, http.StatusConflict, "archive_serial_number_conflict",
+				"archive serial number is already retained; try asn:<n>, asn:<n> is:trash, and asn:<n> version:all, or ask an archive admin")
+			return
+		}
+		if errors.Is(err, errASNRequiresCurrent) {
+			s.writeError(w, http.StatusConflict, "archive_serial_number_requires_current_version",
+				"archive serial numbers can only be assigned to a live current version")
 			return
 		}
 		s.serverErr(w, "api.patch.update", err)
 		return
+	}
+	if asnNoop {
+		delete(before, "archive_serial_number")
+		delete(after, "archive_serial_number")
+		if !hasNonASNUpdate {
+			s.writeJSON(w, http.StatusOK, map[string]any{"id": id})
+			return
+		}
 	}
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
 		SystemID: selectedSystemID(r.Context()),
@@ -766,16 +935,32 @@ type DocumentSource struct {
 // pointers so unset != empty — the handler only writes columns the
 // client explicitly named.
 type DocumentUpdate struct {
-	Title            *string `json:"title,omitempty"`
-	TitleOwner       *string `json:"title_owner,omitempty"`
-	Sensitivity      *string `json:"sensitivity,omitempty"`
-	JDCategoryID     *int64  `json:"jd_category_id,omitempty"`
-	RenderedLayoutID *int64  `json:"rendered_layout_id,omitempty"`
+	Title               *string         `json:"title,omitempty"`
+	TitleOwner          *string         `json:"title_owner,omitempty"`
+	Sensitivity         *string         `json:"sensitivity,omitempty"`
+	JDCategoryID        *int64          `json:"jd_category_id,omitempty"`
+	RenderedLayoutID    *int64          `json:"rendered_layout_id,omitempty"`
+	ArchiveSerialNumber json.RawMessage `json:"archive_serial_number"`
 	// Languages accepts either a CSV string ("de,en") or a JSON array
 	// (["de","en"]). Normalised server-side to the comma-bracketed
 	// storage format. Setting this implicitly sets languages_locked=1
 	// — human overrides must survive rescans.
 	Languages *json.RawMessage `json:"languages,omitempty"`
+}
+
+func parseArchiveSerialNumberUpdate(raw json.RawMessage) (sql.NullInt64, bool, error) {
+	if raw == nil {
+		return sql.NullInt64{}, false, nil
+	}
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "null" {
+		return sql.NullInt64{}, true, nil
+	}
+	var value int64
+	if trimmed == "" || json.Unmarshal(raw, &value) != nil || asn.ValidateValue(value) != nil {
+		return sql.NullInt64{}, true, fmt.Errorf("archive_serial_number must be null or an integer in [1,%d]", asn.MaxValue)
+	}
+	return sql.NullInt64{Int64: value, Valid: true}, true, nil
 }
 
 // parseLanguagesUpdate normalises a PATCH body's `languages`

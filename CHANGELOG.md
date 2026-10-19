@@ -5,7 +5,6 @@ Notable user-visible changes to Suchi are recorded here.
 ## [Unreleased]
 
 ### Added
-
 - Native Suchi desktop packages for universal macOS and amd64/arm64 Linux,
   using the existing local server and web app with tray-controlled lifecycle.
 - Complete `.suchi-backup` archives, CLI verification/restore/recovery, and
@@ -13,20 +12,70 @@ Notable user-visible changes to Suchi are recorded here.
 - Exact migration from the final managed legacy local installer, preserving its
   archive, configuration, port, and launch-at-login choice.
 
-### Changed
+- Native archive serial numbers can now be assigned from retained QR labels,
+  split feeder scans into atomically created documents, edited from Document
+  Detail, searched with `asn:`, and preserved across replacement versions,
+  filesystem sidecars, and manifest-v3 takeouts. Administrators can change ASN
+  mode, QR prefix, and scan-analysis DPI live under **Advanced > Scan
+  processing**; deployment-managed values are marked read-only.
+- The Upload screen explains a rejected ASN scan on the file's row, such as a
+  number already used by another document or repeated within the batch, with
+  the page and number involved. A conflict names the document that holds the
+  number when the uploader can open it.
+- Demo corpus manifests can give a fixture an `archive_serial_number`, so the
+  public demo can show retained originals found with `asn:`.
+- The MCP adapter can now list custom fields and set or clear a document's
+  custom-field values, so an agent can record an odometer reading or link a
+  service invoice to its purchase invoice. Writes use the existing API checks
+  for type, permission, Trash, self-links and version history.
 
+### Changed
 - The server-enforced `desktop_local` profile is loopback-only and disables
   model connections, managed mail, share links, and mobile pairing. The desktop
   app reports optional local parsers instead of downloading them.
 - Archive ownership is exclusive across servers and offline backup operations;
   schema compatibility is checked before startup can mutate an archive.
-- Suchi Desktop now uses a bundled offline PDF renderer with page and zoom
-  controls; browser access retains the browser's native PDF preview.
+- Suchi Desktop uses a bundled offline PDF renderer with page and zoom controls;
+  browser access retains the browser's native PDF preview.
+
+- Saved decryption passwords now separate their editable label, last-used date,
+  and most recently unlocked document into labeled columns. Labels remain plain
+  text until the pencil action opens inline editing.
+
+### Fixed
+
+- A document-link write with a fractional, negative or zero document ID is
+  rejected. A fractional ID was previously rounded down to a different
+  document, and a zero ID removed the existing link.
+- Deleting a folder layout that an automation still assigns is refused instead
+  of leaving rules that fail on every new matching document. The UI keeps the
+  layout visible and names the rules that must change.
+- `suchi gc` now removes empty folders left in `rendered/` after documents move
+  to a new path. The dry run reports them; `--apply` removes only folders with
+  nothing inside.
+- Rendered files are named with the linked file's own extension: `.pdf` for the
+  searchable copy, otherwise the original's type. A plain-text upload no longer
+  appears as `name__1.pdf`; preview, create, and update reject folder-layout
+  templates that include an extension.
+- MIME aliases, filename refinement, ingestion routing, and rendered/downloaded
+  extensions now derive from one format registry. Recognized BMP, DjVu, Outlook,
+  EPUB, and macro-enabled Office variants keep the right extension, and DjVu
+  reaches `djvutxt` instead of being consumed by the generic image fallback.
+- `suchi export` sidecars now carry custom-field values, so a reingested
+  takeout keeps typed values such as hand-entered amounts and dates.
+  Document-link values and extraction-managed `invoice_*` fields are left out;
+  the latter are read again from the original.
+- Query examples now filter by imported document type with
+  `tag:"type:invoice"`; bare `type:` is not a query filter.
 
 ## [0.3.0] - 2026-10-14
 
 ### Changed
 
+- Document Detail's metadata card keeps core fields visible and moves custom
+  fields and an unset archive serial number behind **More**, which shows how
+  many custom fields have values. The Notes tab drops its repeated heading and
+  long hints.
 - The demo corpus now opens with Japanese, Korean and German documents in the
   dashboard's recent-document pile, with native-script metadata, curated source
   dates, and local Japanese and Korean font fallbacks.

@@ -6,6 +6,8 @@ import (
 	"archive/zip"
 	"io"
 	"strings"
+
+	"github.com/johnnybravo-xyz/suchi/core/mimeutil"
 )
 
 // refineZipMIME identifies OOXML, OpenDocument, and EPUB containers.
@@ -33,11 +35,11 @@ func refineZipMIME(r io.ReaderAt, size int64) (string, error) {
 	}
 	switch {
 	case hasDocx:
-		return "application/vnd.openxmlformats-officedocument.wordprocessingml.document", nil
+		return mimeutil.ApplicationDOCX, nil
 	case hasXlsx:
-		return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", nil
+		return mimeutil.ApplicationXLSX, nil
 	case hasPptx:
-		return "application/vnd.openxmlformats-officedocument.presentationml.presentation", nil
+		return mimeutil.ApplicationPPTX, nil
 	}
 
 	for _, f := range zr.File {
@@ -55,10 +57,10 @@ func refineZipMIME(r io.ReaderAt, size int64) (string, error) {
 		}
 		got := strings.TrimSpace(string(buf))
 		switch got {
-		case "application/vnd.oasis.opendocument.text",
-			"application/vnd.oasis.opendocument.spreadsheet",
-			"application/vnd.oasis.opendocument.presentation",
-			"application/epub+zip":
+		case mimeutil.ApplicationODT,
+			mimeutil.ApplicationODS,
+			mimeutil.ApplicationODP,
+			mimeutil.ApplicationEPUBZip:
 			return got, nil
 		}
 		break

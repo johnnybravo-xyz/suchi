@@ -19,6 +19,7 @@
   let loadErrors = $state({})
   const LOAD_ERROR_MESSAGES = {
     llm: translate("configurationSection.couldNotLoadClassificationSettings"),
+
   }
 
   function loadOnce(key, fn) {
@@ -162,6 +163,7 @@
   let llmTestGeneration = 0
 
 
+
   async function loadLLM() {
     const st = await getLLMSettings()
     llmStatus = st
@@ -209,6 +211,7 @@
     catch (ex) { err = ex.message || translate("configurationSection.theServerRejectedThat") }
     finally { busy = false }
   }
+
 
 
   // POST and test reject unknown fields; keep PATCH-only settings out here.
@@ -513,6 +516,7 @@
                 onclick={() => saveAnd(() => saveClassifier(true), translate("configurationSection.modelEnabled")).then(() => (modelDialogOpen = false))}>{translate("configurationSection.enableModel")}</button></div>
         </div>
       {/if}
+
 
   {/if}
   </div>

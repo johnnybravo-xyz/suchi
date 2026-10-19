@@ -264,12 +264,12 @@ func makeFixtureIngest(d *db.DB, cas *blob.CAS, ownerID int64, now int64) func(c
 				INSERT INTO documents(
 					system_id, owner_id, original_blob, original_size, title, mime_type,
 					jd_category_id, sensitivity, languages, added_at, created_at, updated_at,
-					previous_version_id, version_family_key
-				) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+					previous_version_id, version_family_key, archive_serial_number
+				) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT DO NOTHING RETURNING id
 			`, ownerID, ref.SHA256, ref.Size, title, mimeType,
 				jdCatID, nullString(f.Sensitivity), f.Language, now, now, now,
-				previousID, familyKey).Scan(&docID)
+				previousID, familyKey, nullIfZero(f.ArchiveSerialNumber)).Scan(&docID)
 			if errors.Is(err, sql.ErrNoRows) {
 				return nil
 			}

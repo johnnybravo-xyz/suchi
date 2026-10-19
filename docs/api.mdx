@@ -35,7 +35,7 @@ carry it into bug reports. See [Errors](#errors) for the JSON error contract.
 | Approvals               | `/api/approvals/…` ([guide](/approvals))                                                                                                                                              |
 | Groups + ACLs           | `/api/groups/…`, `/api/acls/{kind}/{id}` ([guide](/permissions))                                                                                                                      |
 | Share links             | `/api/share_links/…`, public `/s/{token}` + `/s/{token}/{doc_id}/download`. Multi-doc bundles: pass 1–200 `doc_ids` on POST, one token covers all of them.                            |
-| Admin                   | `/api/admin/users`, `GET /api/admin/setup/state`, `POST /api/admin/setup/preset/{preview,apply}`, `/api/admin/settings/{llm,preferences,ingest}`, `/api/admin/taxonomy/{import,export}` |
+| Admin                   | `/api/admin/users`, `GET /api/admin/setup/state`, `POST /api/admin/setup/preset/{preview,apply}`, `/api/admin/settings/{llm,preferences,scan,ingest}`, `/api/admin/taxonomy/{import,export}` |
 
 ## Auth
 
@@ -712,6 +712,7 @@ detail for that):
       "thumb_sha": "ab12...",
       "split_origin_id": 84,
       "split_index": 1,
+      "archive_serial_number": 4021,
       "created_at": 1746662400,
       "updated_at": 1746662400,
       "tags": ["utilities", "bescom"],
@@ -724,21 +725,24 @@ detail for that):
 `thumb_sha` non-empty means the row has a thumbnail at
 `/api/documents/{id}/thumb` (client can render immediately without
 a HEAD probe).
-`split_origin_id` is the immutable id of the upload that produced a QR-split
-child; `split_index` is its one-based part number. Unlike `split_parent_id`,
-the origin survives later hard deletion of the retired parent. Poll the accepted
-upload until its active job is gone, then request
-`?split_origin_id=<accepted-id>`. A trashed accepted row normally denotes a
-split parent; a 404 means it was later hard-deleted. Report a multi-document
-success only after every returned live child has completed post-ingest.
+`split_origin_id` is the immutable id of the upload that produced a split child;
+`split_index` is its one-based part number. Unlike `split_parent_id`, the origin
+survives later hard deletion of the retired parent. ASN split children also
+carry `archive_serial_number`. Poll the accepted upload until its active job is
+gone, then request `?split_origin_id=<accepted-id>`. A trashed accepted row
+normally denotes a split parent; a 404 means it was later hard-deleted. A
+completed-origin retry returns the same child set instead of restoring or
+duplicating the parent. A trashed child makes the result a conflict. Report a
+multi-document success only after every returned live child has completed
+post-ingest.
 
 ### `GET /api/documents/{id}`
 
 Full projection of one document: title and title ownership, extracted content
 (post-OCR), MIME, blobs, JD category, tags (slug list), correspondents,
 attributed notes, typed custom-field values, selected rendered layout, and an
-optional read-only previous archive number. Trashed docs are visible with
-`trashed_at` set so mobile clients can render the undelete flow. `owner_id`
+optional archive serial number. Trashed docs are visible with `trashed_at` set
+so mobile clients can render the undelete flow. `owner_id`
 identifies the document owner; trashed documents also include `deletes_at`,
 exactly 30 days after `trashed_at`. Live and restored documents omit both
 deletion timestamps.
@@ -859,13 +863,22 @@ stored target ID separately.
 
 `notes` always belongs to this exact revision. `can_edit` reflects author/admin
 ownership; document change permission is checked again when mutating a note.
-`archive_serial_number` is omitted when absent and has no PATCH field.
+`archive_serial_number` is omitted when absent. A sparse PATCH accepts a positive
+integer no greater than `9007199254740991`, or `null` to clear it. Assignment is
+allowed only on the live current version; clearing is allowed on Trash and
+history. Values are unique within the selected filing system across live,
+trashed, and historical rows. Repeating the current value is an idempotent
+success. Invalid input returns `400 bad_archive_serial_number`; retained
+uniqueness returns `409 archive_serial_number_conflict`; assignment to Trash or
+an older version returns `409 archive_serial_number_requires_current_version`.
+
 `rendered_layout` is omitted when the document uses the default JD layout.
 PATCH with `{"rendered_layout_id":7}` assigns a same-system layout; `0` returns
 to the default. A layout that uses `{{ asn }}` returns
-`409 rendered_layout_requires_archive_number` for a document without retained
-compatibility metadata. Assignment and path-visible metadata changes enqueue
-the rendered move in the document transaction.
+`409 rendered_layout_requires_archive_number` for a document without an ASN.
+Combined ASN/layout PATCHes validate the resulting state. Assignment, clearing,
+and other path-visible metadata changes enqueue the rendered move in the
+document transaction.
 
 `content_source` is `device_ocr`, `server`, or empty and names the authority for
 the active `content`. Device provenance remains available after authoritative
@@ -982,6 +995,7 @@ requested row.
       "size": 12890,
       "mime_type": "application/pdf",
       "created_at": 1785783100,
+      "archive_serial_number": 4021,
       "previous_version_id": 5,
       "is_head": true
     },
@@ -1013,11 +1027,15 @@ authoritative family-head check without exposing hidden revision identity.
 Upload a replacement with `previous_version_id={id}`. Uses the
 [document upload multipart, device OCR, source timestamp and idempotency rules](#post-apidocuments).
 The new row keeps the predecessor's system, owner, JD category, sensitivity,
-explicit ACL grants, manual tags (including `type:` tags), correspondents, and its title.
-It gets fresh extraction/generated state and does not copy custom-field values,
-document links, notes, the previous archive number, classifier-owned tags,
-accepted dates, or other exact-revision metadata. A conflicting requested system
-fails.
+explicit ACL grants, manual tags (including `type:` tags), correspondents, and
+title. The predecessor's ASN moves to the new head and is cleared from the old
+row. A selected rendered layout follows only when its template uses `{{ asn }}`;
+both affected revisions receive rendered-move jobs in that transaction.
+The replacement gets fresh extraction/generated state and does not copy
+custom-field values, document links, notes, non-ASN layouts,
+classifier-owned tags, accepted dates, or other exact-revision metadata. A
+conflicting requested system fails. The success and replay response includes
+`archive_serial_number` when one moved.
 
 The predecessor must be the current family head and must itself be live. A
 newer family member, including one in Trash, causes
@@ -1061,7 +1079,7 @@ Scope: `documents:write`. Cap: 500 documents per call.
 | method                   | parameters                                                                                                                                                                                                                   |
 | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `set_correspondent`      | `{correspondent_id}` promotes a positive ID to primary sender; `0` removes all sender roles while retaining recipient, cc, and other relations.                                                                                |
-| `set_rendered_layout`    | `{rendered_layout_id}`; `0` selects the default JD layout. `{{ asn }}` layouts require every selected document to have a previous archive number.                                                                    |
+| `set_rendered_layout`    | `{rendered_layout_id}`; `0` selects the default JD layout. `{{ asn }}` layouts require every selected document to have an archive serial number.                                                                    |
 | `set_jd_category`        | `{jd_category_id}`                                                                                                                                                                                                           |
 | `set_sensitivity`        | `{sensitivity}` — one of `""`, `public`, `internal`, `confidential`, `restricted`                                                                                                                                            |
 | `add_tag`                | `{tag_id}` — idempotent (INSERT OR IGNORE)                                                                                                                                                                                   |
@@ -1199,9 +1217,10 @@ trashed document returns `404` and remains eligible for automatic purge.
 
 ### `GET /api/trash/`
 
-Returns a paginated envelope of trashed documents in the selected system. Members
-see their own documents; administrators see all owners there, never other systems.
-Each row includes `trashed_at` and `deletes_at`, the Unix timestamp 30 days later.
+Returns a paginated envelope of trashed documents in the selected system.
+Members see their own documents; administrators see all owners there, never
+other systems. Each row includes `trashed_at`, `deletes_at` (the Unix timestamp
+30 days later), and `archive_serial_number` when retained.
 
 ### `DELETE /api/trash/{id}`
 
@@ -1254,10 +1273,11 @@ changing authorization or ranking.
 
 **Response shape** — `{count, next, previous, results}` DRF envelope.
 Each hit carries `{id, title, snippet, rank, created_at, mime_type,
-sensitivity}`. `snippet` wraps a matching span in `<mark>...</mark>` for
-non-sensitive documents. Confidential and Restricted hits still participate in
-ranking but return an empty snippet; clients must render a sensitivity
-placeholder rather than hidden OCR text. Malformed queries return
+sensitivity}` plus `archive_serial_number` when assigned. `snippet` wraps a
+matching span in `<mark>...</mark>` for non-sensitive documents. Confidential
+and Restricted hits still participate in ranking but return an empty snippet;
+clients must render a sensitivity placeholder rather than hidden OCR text.
+Malformed queries return
 `400 bad_query`; logs contain only a SHA-256 correlation value, never the raw
 query.
 
@@ -1555,9 +1575,9 @@ accept only same-system live targets.
 | `bool`         | boolean OR any of `"yes"`/`"no"`/`"1"`/`"0"`                                                                 |
 | `select`       | string; must appear in the field's `extra_data.choices`                                                      |
 | `multi`        | `["a","b"]` OR comma-separated string; each element must be in choices                                       |
-| `documentlink` | integer document id; refuses trashed/missing targets, self-links, and targets in the source's version family |
+| `documentlink` | positive whole-number document id; refuses fractional, negative and zero ids, trashed/missing targets, self-links, and targets in the source's version family |
 
-`url` validates as `http`/`https`. Empty value ⇒ row is deleted.
+`url` validates as `http`/`https`. Empty value (`null` or a blank string) ⇒ row is deleted.
 
 Returns `204 No Content` on success. Validation returns `400`, including
 `document_link_self` and `document_link_same_family`; unrelated documents may
@@ -1631,12 +1651,14 @@ filesystem view.
 | GET    | `/api/rendered_layouts/`            | Paged authenticated list |
 | POST   | `/api/rendered_layouts/`            | Admin create; body `{"name":"Bills by year","path":"Bills/{{ created_year }}/{{ title }}"}` |
 | PATCH  | `/api/rendered_layouts/{id}`        | Sparse name/template update |
-| DELETE | `/api/rendered_layouts/{id}`        | Delete; assigned documents return to the default filing-tree projection |
+| DELETE | `/api/rendered_layouts/{id}`        | Delete; assigned documents return to the default filing-tree projection. `409 rendered_layout_in_use` names the automations that still assign it |
 | POST   | `/api/rendered_layouts/preview`     | Admin validation/sample rendering; body `{"template":"..."}` |
 
-Preview returns `{"path":"Bills/2026/March electricity bill","uses_asn":false}`.
-Create/update reject absolute, empty, unknown-expression, traversal, and reserved
-filing-index paths. Supported variables:
+Preview returns `{"path":"Bills/2026/March electricity bill.pdf","uses_asn":false}`.
+The sample is a PDF; real documents get their linked file's extension. Preview,
+create, and update therefore reject templates whose final component has a file
+extension. They also reject absolute, empty, unknown-expression, traversal, and
+reserved filing-index paths. Supported variables:
 
 - document: `title`, `doc_pk`, `created`, `created_year`, `created_month`,
   `created_day`, `added`, `added_year`, `added_month`, `added_day`;
@@ -1644,12 +1666,14 @@ filing-index paths. Supported variables:
   `jd.category.code`, `jd.category.name`, `jd.system.code`, `jd.system.name`,
   `jd.address`;
 - metadata: `correspondent`, `tag_list`, `owner`;
-- compatibility: `storage_path` (the selected layout name) and `asn`.
+- metadata: `asn` (the archive serial number);
+- compatibility: `storage_path` (the selected layout name).
 
 Changing a path template queues fresh rendered moves for every live assigned
 document. Deleting a layout clears assignments and queues default-layout moves
 in the same transaction. A document, bulk action, or automation cannot assign an
-`asn` layout to a row without a previous archive number.
+`asn` layout to a row without an archive serial number. Replacement uploads move
+an ASN and an ASN-dependent layout together to the new head.
 
 ### `GET /api/presets/` and `GET /api/filing-sets/`
 
@@ -2595,6 +2619,18 @@ See [LLM classifier](/llm-classifier).
 OCR language list. `POST` to the same path with
 `{backup_interval_hours, ocr_languages}` resets the backup scheduler and
 replaces the language snapshot used by future OCR jobs immediately.
+
+`GET /api/admin/settings/scan` returns the effective
+`{scan_asn_mode,scan_asn_prefix,scan_split_dpi}`. When deployment configuration
+pins any field, the response also includes `managed` with a boolean for each
+field. `POST` accepts all three fields, validates mode `off|assign|split`,
+prefix `[A-Za-z][A-Za-z0-9._:-]*`, and integer DPI `72–600`, then replaces the
+unpinned marker settings used by future PDF processing jobs immediately. A
+request that changes a pinned value returns **409** `scan_setting_managed`
+without writing any field; submitting its effective value allows unpinned
+fields to change without overwriting the stored value beneath the deployment
+override. A prefix that collides with an enabled legacy separator token returns
+**422** `apply_failed` and restores the prior stored values.
 
 `GET /api/admin/settings/ingest` returns the watched directory, owner, target
 system, and effective `fs_watch_recursive` boot flag. `POST` with

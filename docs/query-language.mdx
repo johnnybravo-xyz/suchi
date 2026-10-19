@@ -106,7 +106,7 @@ Negation applies only to the following clause. There is no grouped negation.
 | `from:`        | Exact correspondent name. Matches the primary or any linked correspondent.                                                                                                           |
 | `has-field:`   | Exact custom-field name. Matches a stored value; negate it to require that value to be absent.                                                                                       |
 | `field:`       | Typed custom-field value as `field:<name><operator><value>`. Text, URL, select, and multi fields support `=`; number, monetary, and date fields also support comparisons; monetary values may use local formats such as `1.234,56` or `€50`; bool uses yes/no. |
-| `asn:`         | Read-only previous archive number. Accepts an integer with `=`, `>`, `>=`, `<`, or `<=`; `asn:none` finds documents without one.                                                     |
+| `asn:`         | Archive serial number. Accepts an integer with `=`, `>`, `>=`, `<`, or `<=`; `asn:none` finds documents without one.                                                                    |
 | `sensitivity:` | `public`, `internal`, `confidential`, or `restricted`.                                                                                                                               |
 | `lang:`        | Assigned or detected two- or three-letter language code, such as `en`, `de`, or `hin`.                                                                                               |
 | `title:`       | Prefix or quoted phrase restricted to title.                                                                                                                                         |
@@ -125,7 +125,7 @@ Examples:
 ```text
 added:>=2026-01-01 added:<2027-01-01
 date:2026-09-14 date-role:renewal
-type:invoice -has-field:"Payment receipt"
+tag:"type:invoice" -has-field:"Payment receipt"
 field:"Invoice amount">=100 field:Status="Needs review"
 asn:>400 asn:<500
 version:all
@@ -155,11 +155,11 @@ relationships and `has-field:` to test whether a visible live target exists.
 Field-value predicates retain the same source-document ACL and caller-relative
 version rules as every other discovery filter.
 
-`archive_serial_number` is compatibility metadata retained on imported rows.
-The API and web app expose it as **Previous archive number**, never as editable
-filing metadata. `asn:none` tests for a null value; source saved views with exact,
-missing, greater-than, or less-than archive-number rules import into these
-selectors.
+`archive_serial_number` is system-scoped physical-filing metadata. The API and
+web app expose it as **ASN _n_** and allow authorized edits; `asn:none` tests
+for a null value. Source saved views with exact, missing, greater-than, or
+less-than archive-number rules import into these selectors. Query matching
+still applies ordinary system, ACL, Trash, and version-currentness rules.
 
 Version currentness is caller-relative. Discovery surfaces use the greatest
 live document ID the caller can see in each version family; a hidden or trashed

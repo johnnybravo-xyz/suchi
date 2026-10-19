@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/johnnybravo-xyz/suchi/core/api"
+	"github.com/johnnybravo-xyz/suchi/core/asn"
 )
 
 // Manifest is the schema written to corpus/manifest.json in the sibling
@@ -85,6 +86,9 @@ type ManifestFixture struct {
 	PreviousVersion string `json:"previous_version,omitempty"`
 	// Links maps a document-link field name to the fixture it points at.
 	Links map[string]string `json:"links,omitempty"`
+	// ArchiveSerialNumber is the number on the retained original's label.
+	// Zero means none.
+	ArchiveSerialNumber int64 `json:"archive_serial_number,omitempty"`
 }
 
 // ManifestDate is a curated, source-backed example, not model output.
@@ -95,11 +99,33 @@ type ManifestDate struct {
 }
 
 // validateFixtureReferences keeps version and link references inside the
-// manifest. A version must follow the fixture it replaces.
+// manifest. A version must follow the fixture it replaces. Archive serial
+// numbers are valid, unique, and held only by a version family's newest
+// fixture, matching how a replacement takes over its predecessor's number.
 func validateFixtureReferences(fixtures []ManifestFixture) error {
 	all := map[string]bool{}
+	replaced := map[string]bool{}
 	for _, f := range fixtures {
 		all[f.Filename] = true
+		if f.PreviousVersion != "" {
+			replaced[f.PreviousVersion] = true
+		}
+	}
+	serials := map[int64]string{}
+	for _, f := range fixtures {
+		if f.ArchiveSerialNumber == 0 {
+			continue
+		}
+		if err := asn.ValidateValue(f.ArchiveSerialNumber); err != nil {
+			return fmt.Errorf("fixture %s: archive_serial_number: %w", f.Filename, err)
+		}
+		if other, ok := serials[f.ArchiveSerialNumber]; ok {
+			return fmt.Errorf("fixture %s: archive_serial_number %d is already used by %s", f.Filename, f.ArchiveSerialNumber, other)
+		}
+		if replaced[f.Filename] {
+			return fmt.Errorf("fixture %s: archive_serial_number belongs on the newest version, not a replaced fixture", f.Filename)
+		}
+		serials[f.ArchiveSerialNumber] = f.Filename
 	}
 	earlier := map[string]bool{}
 	for _, f := range fixtures {

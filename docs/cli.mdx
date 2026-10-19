@@ -101,6 +101,12 @@ The blob's on-disk mtime gates a grace window. It is a retention buffer, not
 protection against concurrent writes: an upload can reuse an old blob before
 committing its new database reference.
 
+It also counts empty folders under `$DATA_DIR/rendered/`. When documents move,
+because a title, category or folder layout changed, the server removes only the
+old link and leaves its folders in place. GC removes folders that contain nothing,
+deepest first, and never `rendered/` itself. A file or link added to a folder keeps
+that folder, because removal refuses a non-empty directory.
+
 Dry-run by default. Nothing is deleted until you pass `--apply`.
 Before applying, stop Suchi and every other archive writer, including CLI
 imports. Keep them stopped until GC finishes. Do not apply GC while a backup
@@ -111,7 +117,7 @@ is copying the blob tree.
 | Flag                      | Default          | Purpose                                                  |
 | ------------------------- | ---------------- | -------------------------------------------------------- |
 | `--older-than <duration>` | `720h` (30 days) | Skip blobs newer than this; not a concurrency guarantee. |
-| `--apply`                 | off              | Delete candidate blobs with all archive writers stopped. |
+| `--apply`                 | off              | Delete candidate blobs and empty rendered-view folders with all archive writers stopped. |
 | `--verbose`               | off              | Log every kept and every candidate blob.                 |
 
 Trash and its automatic retention remove document rows and rendered files,
@@ -267,7 +273,7 @@ bad path out of the live CAS for later inspection or restoration.
 ## `suchi mcp [flags]`
 
 Start a Model Context Protocol server that adapts the REST
-surface into MCP tools. See [MCP guide](/mcp) for the client-side
+surface into MCP tools. See [MCP guide](/mcp-server) for the client-side
 setup + tool reference.
 
 ### Flags
@@ -436,10 +442,11 @@ policy and full boundary.
 ## `suchi export --out FILE.zip`
 
 Portable takeout of live originals and selected metadata from one system.
-Manifest version **`"2"`** identifies its code/name. The ZIP contains original
+Manifest version **`"3"`** identifies its code/name. The ZIP contains original
 bytes, `documents/<name>-<id>.json` sidecars and selected-system taxonomy-table
 dumps, not a database restore graph. Sidecar format stays **1**, adding optional
-`title_owner`, `jd_system`, and `jd_address`. Document IDs can change on intake.
+`title_owner`, `jd_system`, `jd_address`, `custom_fields`, and
+`archive_serial_number`. Document IDs can change on intake.
 
 ```sh
 suchi export --out /tmp/my-suchi.zip --owner-id 1
@@ -458,18 +465,22 @@ explicit recovery override, and the manifest records its skipped originals.
 
 After extracting the zip, placing each original beside its sidecar in an
 fs-watch staging directory restores title ownership, title, source date,
-correspondents, tags, and JD category within the configured target. Follow the
-[takeout reingestion guide](/guides/export-import) for target preparation, safe
-copy order and verification steps. This is not a full metadata
-round trip: per-document custom
-field values and notes are omitted, while exported `sensitivity`, `mime_type`,
-and `sha256` sidecar fields are currently informational and ignored on ingest.
+correspondents, tags, JD category, custom-field values, and available ASNs within
+the configured target. An ASN already retained by a live, trashed, or historical
+row rejects that document without a partial import. Follow the [takeout
+reingestion guide](/guides/export-import) for target preparation, safe copy order
+and verification steps. This is not a full metadata round trip: notes,
+document-link field values, and extraction-managed `invoice_*` fields are omitted
+(the last are read again from the original on intake), while exported
+`sensitivity`, `mime_type`, and `sha256` sidecar fields are currently
+informational and ignored on ingest.
 MIME and SHA-256 are recomputed from the bytes, and sensitivity uses the target
 instance default.
 An input `jd_system` must match the watcher's configured target; it cannot route
-or create a system. `jd_address` is informational source metadata, not a requested
-new identity. To retain IDs, memberships, ACLs and relationships exactly, use a
-[whole-instance backup](/backup-restore), not native takeout or Paperless import.
+or create a system. `jd_address` is informational source metadata, not a
+requested new identity. To retain IDs, memberships, ACLs and relationships
+exactly, use a [whole-instance backup](/backup-restore), not native takeout or
+Paperless import.
 
 **Not included** in this version:
 
@@ -477,7 +488,7 @@ new identity. To retain IDs, memberships, ACLs and relationships exactly, use a
 - Document versions history.
 - Approvals + audit history.
 - Share links + saved views.
-- Per-document custom-field values and notes.
+- Notes, document-link field values, and extraction-managed `invoice_*` values.
 
 Bumps to the export format land a new `version` in `manifest.json`
 so importers can gate on it.

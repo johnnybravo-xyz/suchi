@@ -393,6 +393,35 @@ func Run(ctx context.Context, opts Options) error {
 	})
 	var liveOCRLanguages atomic.Value
 	liveOCRLanguages.Store(append([]string(nil), runtimePrefs.OCRLanguages...))
+	resolveScanSplit := func(rctx context.Context) (postingest.ScanSplit, error) {
+		fresh := settings.ResolveScanConfig(rctx, d, settings.ScanConfig{
+			ASNMode: cfg.ScanASNMode, ASNPrefix: cfg.ScanASNPrefix, SplitDPI: cfg.ScanSplitDPI,
+		})
+		effectiveToken := strings.TrimSpace(cfg.ScanSplitToken)
+		if effectiveToken == "" {
+			effectiveToken = "SUCHI-SPLIT"
+		}
+		if fresh.ASNMode != "off" && cfg.ScanSplitEnabled &&
+			strings.HasPrefix(effectiveToken, fresh.ASNPrefix) {
+			return postingest.ScanSplit{}, fmt.Errorf(
+				"legacy separator token %q starts with ASN prefix %q",
+				effectiveToken, fresh.ASNPrefix,
+			)
+		}
+		return postingest.ScanSplit{
+			Enabled:   cfg.ScanSplitEnabled,
+			Token:     effectiveToken,
+			DPI:       fresh.SplitDPI,
+			ASNMode:   fresh.ASNMode,
+			ASNPrefix: fresh.ASNPrefix,
+		}, nil
+	}
+	runtimeScanSplit, err := resolveScanSplit(ctx)
+	if err != nil {
+		return fmt.Errorf("main.scan.settings: %w", err)
+	}
+	var liveScanSplit atomic.Value
+	liveScanSplit.Store(runtimeScanSplit)
 
 	llmEgressEndpoint := ""
 	if policy.LLMConnections {
@@ -408,6 +437,13 @@ func Run(ctx context.Context, opts Options) error {
 
 	// The chain is empty until a detector plugin registers.
 	langChain := lang.NewChain(log)
+
+	if runtimeScanSplit.ASNMode != "off" {
+		log.Info("main.scan_asn.enabled",
+			"mode", runtimeScanSplit.ASNMode,
+			"prefix", runtimeScanSplit.ASNPrefix,
+			"dpi", runtimeScanSplit.DPI)
+	}
 
 	disp.Register(postingest.New(
 		d, cas, actions, log,
@@ -428,10 +464,9 @@ func Run(ctx context.Context, opts Options) error {
 			Enabled:            cfg.ScanBlankRemoval,
 			WhitenessThreshold: cfg.ScanBlankWhitenessThreshold,
 		}),
-		postingest.WithScanSplit(postingest.ScanSplit{
-			Enabled: cfg.ScanSplitEnabled,
-			Token:   cfg.ScanSplitToken,
-			DPI:     cfg.ScanSplitDPI,
+		postingest.WithScanSplit(runtimeScanSplit),
+		postingest.WithScanSplitState(func() postingest.ScanSplit {
+			return liveScanSplit.Load().(postingest.ScanSplit)
 		}),
 		postingest.WithDecrypt(postingest.Decrypt{
 			Key:           decryptKey,
@@ -627,6 +662,22 @@ func Run(ctx context.Context, opts Options) error {
 			DataDir: cfg.DataDir, Interval: fresh.BackupInterval,
 			Keep: cfg.BackupKeep, AuditRetentionDays: cfg.AuditRetentionDays,
 		})
+		return nil
+	}
+	apiSrv.ScanSettingsReader = func(context.Context) (api.ScanSettingsStatus, error) {
+		fresh := liveScanSplit.Load().(postingest.ScanSplit)
+		return api.ScanSettingsStatus{
+			ASNMode: fresh.ASNMode, ASNPrefix: fresh.ASNPrefix, SplitDPI: fresh.DPI,
+		}, nil
+	}
+	apiSrv.ScanSettingsReloader = func(rctx context.Context) error {
+		fresh, err := resolveScanSplit(rctx)
+		if err != nil {
+			return err
+		}
+		liveScanSplit.Store(fresh)
+		log.Info("main.scan_asn.reloaded",
+			"mode", fresh.ASNMode, "prefix", fresh.ASNPrefix, "dpi", fresh.DPI)
 		return nil
 	}
 	apiSrv.FSWatchSettingsReader = func(rctx context.Context) (api.FSWatchSettingsStatus, error) {

@@ -238,6 +238,17 @@ selected primary sender or clears sender roles with ID `0`, preserves other role
 relations in local state, and rejects late responses through the same generation
 guard.
 
+Archive serial number editing is detail-owned state with the same route
+generation guard. The browser accepts only decimal safe positive integers or an
+empty value, then sends `archive_serial_number` in one PATCH. Server validation
+and retained-value conflicts stay inline without discarding the draft. List,
+ranked Search, Trash, detail, and version rows consume the server projection and
+render one canonical **ASN _n_** chip; the browser does not reconstruct values
+from QR payloads or folder paths.
+
+Verify the ASN editor, projection chips, and split-upload receipt with
+`cd ui && bun run e2e --grep 'archive serial numbers|split scan'`.
+
 `DocumentDetail.svelte` owns similar-document results, version history,
 replacement upload, attributed exact-revision notes, typed custom fields,
 outgoing references, and backlinks for one route generation. Those reads load
@@ -449,6 +460,13 @@ and custom fields. `FilingTreeSettings.svelte` owns presets, tree construction,
 and taxonomy files. `ArchiveSettings.svelte` places
 `FolderLayoutsSettings.svelte` first under Advanced; its editor calls the server
 preview rather than duplicating template semantics in JavaScript.
+`ConfigurationSection.svelte` reuses the archive-settings load/save shell and
+existing radio-card controls for **Scan processing**. It reads and writes the
+effective mode, QR prefix, and DPI through `/api/admin/settings/scan`, hides
+inactive label details, and disables fields named in the response's `managed`
+object. `ArchiveSettings.svelte` projects the same endpoint into the Advanced
+overview status. Marker grammar, deployment precedence, and legacy-token
+collision checks remain server-owned.
 `Automations.svelte` retains action parameter schemas, reuses the existing
 metadata, user-directory, and filing-system-membership APIs, and presents a
 list-first workspace with a mutually exclusive local editor state. Compact rows
@@ -580,7 +598,10 @@ second modal owns upload state. A batch records every file synchronously in
 selection order and sends them sequentially to its captured system. Each entry
 keeps one idempotency key for retry and drops its `File` after acceptance.
 A single bounded scheduler checks processing tasks before fetching terminal
-document details, so active jobs do not cause repeated document reads. Navigation
+document details, so active jobs do not cause repeated document reads. When the
+accepted row is retired by splitting, the queue requests its immutable
+`split_origin_id`, orders children by `split_index`, and replaces the parent
+success link with links to every child, including their ASN chips. Navigation
 stops receipt polling and releases paste URLs while already accepted transfers
 continue for the same account.
 

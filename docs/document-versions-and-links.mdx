@@ -76,8 +76,10 @@ filed and accessible:
 
 - filing system, owner, category, sensitivity, and title;
 - explicit document ACL grants;
-- tags assigned by a person or deterministic rule; and
-- correspondent relationships.
+- tags assigned by a person or deterministic rule;
+- correspondent relationships; and
+- the archive serial number. It moves to the new head and is cleared from the
+  predecessor. A selected folder layout follows only when it uses `{{ asn }}`.
 
 Version-specific or generated state starts fresh:
 
@@ -85,10 +87,12 @@ Version-specific or generated state starts fresh:
 - extracted content, detected languages, thumbnails, and processing results;
 - model-added tags and accepted or pending document dates;
 - every custom-field value, including document links;
-- notes and the previous archive number.
+- notes; and
+- folder layouts that do not depend on the ASN.
 
 This prevents a new file from silently claiming metadata that described only
-the older version. Edit the new version after upload when an exact value still
+the older version while preserving the physical label shared by the paper and
+its current digital revision. Edit exact-version metadata again when it still
 applies.
 
 ## Exact document links
@@ -175,7 +179,7 @@ It works in Documents, ranked Search, saved Views, Calendar, and Ask your docume
 
 ```text
 has-field:"Payment receipt"
-type:invoice -has-field:"Payment receipt"
+tag:"type:invoice" -has-field:"Payment receipt"
 ```
 
 Use `field:` when the value matters:
@@ -218,7 +222,7 @@ version at a time.
 ## API entry points
 
 - [`GET /api/documents/{id}`](/api#get-apidocumentsid) — typed fields, notes,
-  the `rendered_layout` API projection, and read-only previous archive number
+  the `rendered_layout` projection, and writable archive serial number
 - [`POST /api/documents/{id}/notes/`](/api#post-apidocumentsidnotes) — attributed note creation
 - [`PATCH|DELETE /api/documents/{id}/notes/{note}`](/api#patchdelete-apidocumentsidnotesnote) — author/admin note mutation
 - [`GET /api/documents/{id}/versions/`](/api#get-apidocumentsidversions) — paged visible family history

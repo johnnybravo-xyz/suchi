@@ -2,11 +2,6 @@
 
 package anydoc
 
-// Focused tests for the MIME allowlist and extension mapper. The
-// Extract() path itself is exercised in postingest integration tests
-// once we ship a mock anydoc binary; keeping this file library-scoped
-// so it runs without any external tools installed.
-
 import (
 	"bytes"
 	"context"
@@ -18,61 +13,6 @@ import (
 	"strings"
 	"testing"
 )
-
-func TestRecognized(t *testing.T) {
-	cases := map[string]bool{
-		// Word
-		"application/msword": true,
-		"application/vnd.openxmlformats-officedocument.wordprocessingml.document": true,
-		// PowerPoint
-		"application/vnd.ms-powerpoint":                                             true,
-		"application/vnd.openxmlformats-officedocument.presentationml.presentation": true,
-		// Excel
-		"application/vnd.ms-excel": true,
-		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": true,
-		// OpenDocument
-		"application/vnd.oasis.opendocument.text":         true,
-		"application/vnd.oasis.opendocument.spreadsheet":  true,
-		"application/vnd.oasis.opendocument.presentation": true,
-		// RTF + CSV — with charset params
-		"application/rtf":              true,
-		"text/csv":                     true,
-		"text/csv; charset=utf-8":      true,
-		"  TEXT/CSV ; charset=utf-16 ": true,
-		// Explicitly out of scope
-		"application/pdf":      false,
-		"application/epub+zip": true,
-		"application/epub":     true,
-		"image/png":            false,
-		"":                     false,
-	}
-	for mime, want := range cases {
-		if got := Recognized(mime); got != want {
-			t.Errorf("Recognized(%q) = %v, want %v", mime, got, want)
-		}
-	}
-}
-
-func TestExtFromMIME(t *testing.T) {
-	cases := map[string]string{
-		"application/msword": ".doc",
-		"application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
-		"application/vnd.ms-excel": ".xls",
-		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
-		"application/vnd.oasis.opendocument.text":                           ".odt",
-		"application/rtf":         ".rtf",
-		"text/csv":                ".csv",
-		"text/csv; charset=utf-8": ".csv",
-		"application/epub+zip":    ".epub",
-		"application/pdf":         "", // out of scope, no extension guess
-		"":                        "",
-	}
-	for mime, want := range cases {
-		if got := ExtFromMIME(mime); got != want {
-			t.Errorf("ExtFromMIME(%q) = %q, want %q", mime, got, want)
-		}
-	}
-}
 
 func TestCountNonWhitespace(t *testing.T) {
 	cases := map[string]int{

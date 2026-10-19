@@ -4,7 +4,7 @@
   import { compareLocalized, customFieldLabel } from '../lib/format.js'
   import { scopedHash as filingHref } from '../lib/systems.svelte.js'
   import { captureScope, scopeCurrent } from '../lib/systems.svelte.js'
-  import { onDestroy, untrack } from 'svelte'
+  import { onDestroy, tick, untrack } from 'svelte'
   import { getDocument, getDocumentIntrinsic, patchDocument, deleteDocument, restoreDocument, permanentlyDeleteDocument, documentVersions, documentBacklinks, uploadDocumentVersion, setDocumentCustomField, clearDocumentCustomField, createDocumentNote, updateDocumentNote, deleteDocumentNote, createShareLink, listShareLinks, deleteShareLink, previewPath, downloadPath, similarDocs, listGrants, putGrant, deleteGrant, listAllTags, listCorrespondents, listCustomFields, listDocuments, bulkEdit } from '../lib/api.js'
   import { go } from '../lib/router.svelte.js'
   import { SENSITIVITY_OPTIONS, fmtDate, fmtBytes, isHighSensitivity, sensDot, sensitivityLabel } from '../lib/format.js'
@@ -46,6 +46,9 @@
   let referenceEditors = $state({})
   let customFieldEditors = $state({})
   let editingCustomFields = $state(false)
+  let showMoreFields = $state(false)
+  let moreFieldsElement = $state(null)
+  let moreToggleElement = $state(null)
   let addingReference = $state(false)
   let newReferenceFieldID = $state('')
   let loading = $state(true)
@@ -59,6 +62,10 @@
   let titleOwnerBusy = $state(false)
   let editingLanguages = $state(false)
   let languagesDraft = $state('')
+  let editingArchiveSerialNumber = $state(false)
+  let archiveSerialNumberDraft = $state('')
+  let archiveSerialNumberBusy = $state(false)
+  let archiveSerialNumberError = $state('')
   let editingTags = $state(false)
   let tagOptions = $state([])
   let tagsBusy = $state(false)
@@ -175,6 +182,12 @@
   const availableOrdinaryCustomFields = $derived(ordinaryCustomFields.filter(field =>
     !field.managed_by && !field.is_set && !customFieldEditors[field.field_id]?.open
   ))
+  // The card keeps core metadata visible. An unset archive serial number and
+  // all ordinary custom fields sit behind the More toggle.
+  const archiveSerialNumberInMore = $derived(doc?.archive_serial_number == null)
+  const setCustomFieldCount = $derived(displayedOrdinaryCustomFields.filter(field => field.is_set).length)
+  const hasMoreFields = $derived(archiveSerialNumberInMore || displayedOrdinaryCustomFields.length > 0 ||
+    (!trashed && availableOrdinaryCustomFields.length > 0))
   const documentLinkFields = $derived.by(() => {
     const fields = new Map()
     for (const field of customFieldDefinitions) {
@@ -249,6 +262,7 @@
     referenceEditors = {}
     customFieldEditors = {}
     editingCustomFields = false
+    showMoreFields = false
     similar = null
     addingReference = false
     newReferenceFieldID = ''
@@ -260,6 +274,10 @@
     editingTitle = false
     titleOwnerBusy = false
     editingLanguages = false
+    editingArchiveSerialNumber = false
+    archiveSerialNumberDraft = ''
+    archiveSerialNumberBusy = false
+    archiveSerialNumberError = ''
     editingTags = false
     tagOptions = []
     tagsBusy = false
@@ -299,6 +317,7 @@
       if (version !== loadVersion || !scopeCurrent(scope)) return
       doc = loaded
       titleDraft = loaded.title
+      archiveSerialNumberDraft = loaded.archive_serial_number == null ? '' : String(loaded.archive_serial_number)
       if (loaded.trashed_at != null) {
         relatedTab = 'notes'
         return
@@ -803,6 +822,57 @@
       notify?.(label || translate("documentDetail.saved"))
     } catch (ex) {
       if (!disposed && version === loadVersion) notify?.(ex.message || translate("documentDetail.couldNotSave"))
+    }
+  }
+
+  async function toggleMoreFields() {
+    showMoreFields = !showMoreFields
+    if (!showMoreFields) return
+    await tick()
+    const first = moreFieldsElement?.querySelector('dt')
+    if (!first || !moreToggleElement) return
+    const behavior = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
+    const revealedHeight = moreToggleElement.getBoundingClientRect().bottom - first.getBoundingClientRect().top
+    if (revealedHeight > window.innerHeight) first.scrollIntoView({ block: 'start', behavior })
+    else moreToggleElement.scrollIntoView({ block: 'nearest', behavior })
+    moreFieldsElement.querySelector('button, input, select, textarea, a[href]')?.focus({ preventScroll: true })
+  }
+
+  function startEditArchiveSerialNumber() {
+    archiveSerialNumberDraft = doc?.archive_serial_number == null ? '' : String(doc.archive_serial_number)
+    archiveSerialNumberError = ''
+    editingArchiveSerialNumber = true
+  }
+
+  function cancelEditArchiveSerialNumber() {
+    editingArchiveSerialNumber = false
+    archiveSerialNumberError = ''
+  }
+
+  async function saveArchiveSerialNumber(event) {
+    event.preventDefault()
+    if (archiveSerialNumberBusy) return
+    const raw = archiveSerialNumberDraft.trim()
+    const value = raw === '' ? null : Number(raw)
+    if (value !== null && (!/^\d+$/.test(raw) || !Number.isSafeInteger(value) || value <= 0)) {
+      archiveSerialNumberError = translate("documentDetail.invalidArchiveSerialNumber")
+      return
+    }
+    const version = loadVersion
+    archiveSerialNumberBusy = true
+    archiveSerialNumberError = ''
+    try {
+      await patchDocument(id, { archive_serial_number: value })
+      if (disposed || version !== loadVersion) return
+      doc = { ...doc, archive_serial_number: value }
+      editingArchiveSerialNumber = false
+      notify?.(translate("documentDetail.archiveSerialNumberSaved"))
+    } catch (ex) {
+      if (!disposed && version === loadVersion) {
+        archiveSerialNumberError = ex.message || translate("documentDetail.couldNotSave")
+      }
+    } finally {
+      if (!disposed && version === loadVersion) archiveSerialNumberBusy = false
     }
   }
 
@@ -1502,10 +1572,7 @@
             <dt title={translate("documentDetail.dateCarriedFromTheOriginalFileWhen")}>{translate("documentDetail.originalFileDate")}</dt>
             <dd>{fmtDate(doc.source_mtime || doc.created_at)}</dd>
           {/if}
-          {#if doc.archive_serial_number != null}
-            <dt title={translate("documentDetail.readOnlyCompatibilityMetadataRetainedFromThe")}>{translate("documentDetail.previousArchiveNumber")}</dt>
-            <dd><span class="mono">#{doc.archive_serial_number}</span> <span class="sub" title={translate("documentDetail.keptForOldReferencesAndImportedLayouts")}>{translate("documentDetail.readOnly")}</span></dd>
-          {/if}
+          {#if !archiveSerialNumberInMore}{@render archiveSerialNumberRow()}{/if}
           <dt>{translate("documentDetail.original")}</dt><dd>{doc.mime_type} · {fmtBytes(doc.original_size)}</dd>
           {#if doc.archive_blob}
             <dt>{translate("documentDetail.archive")}</dt>
@@ -1590,70 +1657,6 @@
               </div>
             {/if}
           </dd>
-          {#each displayedOrdinaryCustomFields as field (field.field_id)}
-            {@const editor = customFieldEditors[field.field_id]}
-            {@const label = customFieldLabel(field)}
-            <dt>{label}</dt>
-            <dd class="custom-field-value">
-              {#if editor?.open}
-                <form class="custom-field-editor" onsubmit={(event) => saveCustomField(event, field)}>
-                  {#if field.data_type === 'bool'}
-                    <select class="input" aria-label={label} value={editor.value}
-                            onchange={(event) => updateCustomFieldEditor(field.field_id, { value: event.currentTarget.value })}>
-                      <option value="true">{translate("documentDetail.yes")}</option>
-                      <option value="false">{translate("documentDetail.no")}</option>
-                    </select>
-                  {:else if field.data_type === 'select'}
-                    <select class="input" aria-label={label} value={editor.value}
-                            onchange={(event) => updateCustomFieldEditor(field.field_id, { value: event.currentTarget.value })}>
-                      <option value="">{translate("documentDetail.selectAChoice")}</option>
-                      {#each field.extra_data?.choices || [] as choice}<option value={choice}>{choice}</option>{/each}
-                    </select>
-                  {:else if field.data_type === 'multi'}
-                    <div class="custom-field-choices" aria-label={label}>
-                      {#each field.extra_data?.choices || [] as choice}
-                        <label>
-                          <input type="checkbox" value={choice} checked={editor.value?.includes(choice)}
-                                 onchange={(event) => updateCustomFieldEditor(field.field_id, {
-                                   value: event.currentTarget.checked
-                                     ? [...new Set([...(editor.value || []), choice])]
-                                     : (editor.value || []).filter(value => value !== choice),
-                                 })} />
-                          {choice}
-                        </label>
-                      {/each}
-                    </div>
-                  {:else}
-                    <input class="input" aria-label={label}
-                           type={field.data_type === 'date' ? 'date' : field.data_type === 'url' ? 'url' : field.data_type === 'number' || field.data_type === 'monetary' ? 'number' : 'text'}
-                           step={field.data_type === 'monetary' ? '0.01' : field.data_type === 'number' ? 'any' : undefined}
-                           value={editor.value}
-                           oninput={(event) => updateCustomFieldEditor(field.field_id, { value: event.currentTarget.value })} />
-                  {/if}
-                  <div class="custom-field-actions">
-                    <button class="btn primary sm" disabled={editor.busy || !customFieldValueReady(field, editor)}>{editor.busy ? translate("common.saving") : translate("common.save")}</button>
-                    <button class="btn sm" type="button" disabled={editor.busy}
-                            onclick={() => { const next = { ...customFieldEditors }; delete next[field.field_id]; customFieldEditors = next }}>{translate("common.cancel")}</button>
-                    {#if field.is_set}
-                      <button class="btn danger sm" type="button" disabled={editor.busy} onclick={() => clearOrdinaryCustomField(field)}>{translate("documentDetail.clear")}</button>
-                    {/if}
-                  </div>
-                  {#if editor.error}<p class="err" role="alert">{editor.error}</p>{/if}
-                </form>
-              {:else}
-                <div class="metadata-display">
-                  <span class="metadata-value" class:sub={!field.is_set}>
-                    {#if field.data_type === 'url' && field.value}
-                      <a href={field.value} target="_blank" rel="noreferrer">{customFieldDisplay(field)}</a>
-                    {:else}
-                      {field.is_set ? customFieldDisplay(field) : translate("documentDetail.notSet")}
-                    {/if}
-                  </span>
-                  {#if !trashed}<div class="metadata-actions"><button class="btn sm" type="button" onclick={() => startCustomFieldEdit(field)}>{field.is_set ? translate("documentDetail.edit") : translate("documentDetail.add")}</button></div>{/if}
-                </div>
-              {/if}
-            </dd>
-          {/each}
           <dt>{translate("documentDetail.languages")}</dt>
           <dd>
             {#if editingLanguages}
@@ -1680,32 +1683,109 @@
               </div>
             {/if}
           </dd>
-          {#if !trashed && availableOrdinaryCustomFields.length}
-            <dt>{translate("documentDetail.customFields")}</dt>
-            <dd class="custom-field-add">
-              {#if editingCustomFields}
-                <div class="metadata-display">
-                  <select class="input" aria-label={translate("documentDetail.addCustomField")} value="" onchange={addCustomField}>
-                    <option value="">{translate("documentDetail.addCustomField2")}</option>
-                    {#each availableOrdinaryCustomFields as field (field.field_id)}
-                      <option value={field.field_id}>{customFieldLabel(field)}</option>
-                    {/each}
-                  </select>
-                  <div class="metadata-actions">
-                    <button class="btn sm" type="button" onclick={() => (editingCustomFields = false)}>{translate("documentDetail.done")}</button>
-                  </div>
-                </div>
-              {:else}
-                <div class="metadata-display">
-                  <span class="metadata-value"></span>
-                  <div class="metadata-actions">
-                    <button class="btn sm" type="button" aria-label={translate("documentDetail.editCustomFields")} onclick={() => (editingCustomFields = true)}>{translate("documentDetail.edit")}</button>
-                  </div>
-                </div>
+          {#if showMoreFields}
+            <div class="more-fields" bind:this={moreFieldsElement}>
+              {#if archiveSerialNumberInMore}{@render archiveSerialNumberRow()}{/if}
+              {#each displayedOrdinaryCustomFields as field (field.field_id)}
+                {@const editor = customFieldEditors[field.field_id]}
+                {@const label = customFieldLabel(field)}
+                <dt>{label}</dt>
+                <dd class="custom-field-value">
+                  {#if editor?.open}
+                    <form class="custom-field-editor" onsubmit={(event) => saveCustomField(event, field)}>
+                      {#if field.data_type === 'bool'}
+                        <select class="input" aria-label={label} value={editor.value}
+                                onchange={(event) => updateCustomFieldEditor(field.field_id, { value: event.currentTarget.value })}>
+                          <option value="true">{translate("documentDetail.yes")}</option>
+                          <option value="false">{translate("documentDetail.no")}</option>
+                        </select>
+                      {:else if field.data_type === 'select'}
+                        <select class="input" aria-label={label} value={editor.value}
+                                onchange={(event) => updateCustomFieldEditor(field.field_id, { value: event.currentTarget.value })}>
+                          <option value="">{translate("documentDetail.selectAChoice")}</option>
+                          {#each field.extra_data?.choices || [] as choice}<option value={choice}>{choice}</option>{/each}
+                        </select>
+                      {:else if field.data_type === 'multi'}
+                        <div class="custom-field-choices" aria-label={label}>
+                          {#each field.extra_data?.choices || [] as choice}
+                            <label>
+                              <input type="checkbox" value={choice} checked={editor.value?.includes(choice)}
+                                     onchange={(event) => updateCustomFieldEditor(field.field_id, {
+                                       value: event.currentTarget.checked
+                                         ? [...new Set([...(editor.value || []), choice])]
+                                         : (editor.value || []).filter(value => value !== choice),
+                                     })} />
+                              {choice}
+                            </label>
+                          {/each}
+                        </div>
+                      {:else}
+                        <input class="input" aria-label={label}
+                               type={field.data_type === 'date' ? 'date' : field.data_type === 'url' ? 'url' : field.data_type === 'number' || field.data_type === 'monetary' ? 'number' : 'text'}
+                               step={field.data_type === 'monetary' ? '0.01' : field.data_type === 'number' ? 'any' : undefined}
+                               value={editor.value}
+                               oninput={(event) => updateCustomFieldEditor(field.field_id, { value: event.currentTarget.value })} />
+                      {/if}
+                      <div class="custom-field-actions">
+                        <button class="btn primary sm" disabled={editor.busy || !customFieldValueReady(field, editor)}>{editor.busy ? translate("common.saving") : translate("common.save")}</button>
+                        <button class="btn sm" type="button" disabled={editor.busy}
+                                onclick={() => { const next = { ...customFieldEditors }; delete next[field.field_id]; customFieldEditors = next }}>{translate("common.cancel")}</button>
+                        {#if field.is_set}
+                          <button class="btn danger sm" type="button" disabled={editor.busy} onclick={() => clearOrdinaryCustomField(field)}>{translate("documentDetail.clear")}</button>
+                        {/if}
+                      </div>
+                      {#if editor.error}<p class="err" role="alert">{editor.error}</p>{/if}
+                    </form>
+                  {:else}
+                    <div class="metadata-display">
+                      <span class="metadata-value" class:sub={!field.is_set}>
+                        {#if field.data_type === 'url' && field.value}
+                          <a href={field.value} target="_blank" rel="noreferrer">{customFieldDisplay(field)}</a>
+                        {:else}
+                          {field.is_set ? customFieldDisplay(field) : translate("documentDetail.notSet")}
+                        {/if}
+                      </span>
+                      {#if !trashed}<div class="metadata-actions"><button class="btn sm" type="button" onclick={() => startCustomFieldEdit(field)}>{field.is_set ? translate("documentDetail.edit") : translate("documentDetail.add")}</button></div>{/if}
+                    </div>
+                  {/if}
+                </dd>
+              {/each}
+              {#if !trashed && availableOrdinaryCustomFields.length}
+                <dt>{translate("documentDetail.customFields")}</dt>
+                <dd class="custom-field-add">
+                  {#if editingCustomFields}
+                    <div class="metadata-display">
+                      <select class="input" aria-label={translate("documentDetail.addCustomField")} value="" onchange={addCustomField}>
+                        <option value="">{translate("documentDetail.addCustomField2")}</option>
+                        {#each availableOrdinaryCustomFields as field (field.field_id)}
+                          <option value={field.field_id}>{customFieldLabel(field)}</option>
+                        {/each}
+                      </select>
+                      <div class="metadata-actions">
+                        <button class="btn sm" type="button" onclick={() => (editingCustomFields = false)}>{translate("documentDetail.done")}</button>
+                      </div>
+                    </div>
+                  {:else}
+                    <div class="metadata-display">
+                      <span class="metadata-value"></span>
+                      <div class="metadata-actions">
+                        <button class="btn sm" type="button" aria-label={translate("documentDetail.editCustomFields")} onclick={() => (editingCustomFields = true)}>{translate("documentDetail.edit")}</button>
+                      </div>
+                    </div>
+                  {/if}
+                </dd>
               {/if}
-            </dd>
+            </div>
           {/if}
         </dl>
+        {#if hasMoreFields}
+          <button class="more-fields-toggle" type="button" bind:this={moreToggleElement}
+                  aria-expanded={showMoreFields} onclick={toggleMoreFields}>
+            {showMoreFields ? translate("documentDetail.lessFields") : translate("documentDetail.moreFields")}
+            {#if !showMoreFields && setCustomFieldCount}<span class="sub">· {setCustomFieldCount === 1 ? translate("documentDetail.moreFieldsOne") : translate("documentDetail.moreFieldsMany", { count: String(setCustomFieldCount) })}</span>{/if}
+            <span class="more-fields-chevron" class:open={showMoreFields} aria-hidden="true">▾</span>
+          </button>
+        {/if}
         {#if shareURL}
           <div class="field" style="margin-top:12px;margin-bottom:0">
             <label for="share">{translate("documentDetail.shareLink")}</label>
@@ -1932,6 +2012,7 @@
                     <a class="irow" href={filingHref(`#/doc/${v.id}`)} style="padding:8px 4px">
                       <span class="dot" class:accent={String(v.id) === String(id)}></span>
                       <span class="title grow">#{v.id} {v.title || ''}</span>
+                      {#if v.archive_serial_number != null}<span class="chip">{translate("common.asnValue", { value: String(v.archive_serial_number) })}</span>{/if}
                       {#if v.is_head}<span class="pill accent">{translate("documentDetail.latest")}</span>{/if}
                       {#if String(v.id) === String(id)}<span class="pill">{translate("documentDetail.viewing")}</span>{/if}
                       {#if !v.is_head}<span class="pill warn">{translate("documentDetail.earlier")}</span>{/if}
@@ -1952,18 +2033,10 @@
             <div id="related-panel-notes" class="related-panel" role="tabpanel"
                  aria-labelledby="related-tab-notes" tabindex="0">
               <section class="notes-panel" aria-label={translate("documentDetail.documentNotes")}>
-                <div class="notes-heading">
-                  <div>
-                    <h3>{translate("documentDetail.notes")}</h3>
-                    <p class="sub">{translate("documentDetail.contextKeptWithThisExactDocumentVersion")}</p>
-                  </div>
-                </div>
-
                 {#if !trashed}
                   <form class="note-composer" onsubmit={addNote}>
-                    <label for="new-document-note">{translate("documentDetail.addANote")}</label>
-                    <textarea id="new-document-note" class="input" rows="3" maxlength="16384"
-                              placeholder={translate("documentDetail.addContextADecisionOrAFollow")}
+                    <textarea class="input" rows="3" maxlength="16384" aria-label={translate("documentDetail.addANote")}
+                              placeholder={translate("documentDetail.addANotePlaceholder")}
                               bind:value={noteDraft} disabled={noteBusy}></textarea>
                     <div class="note-composer-actions">
                       <span class="sub">{translate("documentDetail.visibleToPeopleWhoCanOpenThis")}</span>
@@ -2008,7 +2081,7 @@
                       {/if}
                     </article>
                   {:else}
-                    <p class="sub note-empty">{trashed ? translate("documentDetail.noNotesOnThisVersion") : translate("documentDetail.noNotesYetAddContextWithoutChangingThe")}</p>
+                    <p class="sub note-empty">{trashed ? translate("documentDetail.noNotesOnThisVersion") : translate("documentDetail.noNotesYet")}</p>
                   {/each}
                 </div>
               </section>
@@ -2242,6 +2315,47 @@
     onCancel={() => (sharePendingRevoke = null)} />
 {/if}
 
+{#snippet archiveSerialNumberRow()}
+<dt>{translate("documentDetail.archiveSerialNumber")}</dt>
+<dd>
+  {#if trashed}
+    {#if doc.archive_serial_number != null}
+      <span class="chip">{translate("common.asnValue", { value: String(doc.archive_serial_number) })}</span>
+    {:else}
+      <span class="sub">{translate("documentDetail.notSet")}</span>
+    {/if}
+  {:else if editingArchiveSerialNumber}
+    <form class="archive-serial-form" onsubmit={saveArchiveSerialNumber}>
+      <input class="input mono" inputmode="numeric" maxlength="16"
+             aria-label={translate("documentDetail.archiveSerialNumber")}
+             bind:value={archiveSerialNumberDraft} />
+      <button class="btn primary sm" type="submit" disabled={archiveSerialNumberBusy}>
+        {archiveSerialNumberBusy ? translate("common.saving") : translate("common.save")}
+      </button>
+      <button class="btn sm" type="button" disabled={archiveSerialNumberBusy}
+              onclick={cancelEditArchiveSerialNumber}>{translate("common.cancel")}</button>
+      <span class="sub archive-serial-help">{translate("documentDetail.archiveSerialNumberHelp")}</span>
+      {#if archiveSerialNumberError}<span class="row-error" role="alert">{archiveSerialNumberError}</span>{/if}
+    </form>
+  {:else}
+    <div class="metadata-display">
+      <span class="metadata-value">
+        {#if doc.archive_serial_number != null}
+          <span class="chip">{translate("common.asnValue", { value: String(doc.archive_serial_number) })}</span>
+        {:else}
+          <span class="sub">{translate("documentDetail.notSet")}</span>
+        {/if}
+      </span>
+      <div class="metadata-actions">
+        <button class="btn sm" type="button" onclick={startEditArchiveSerialNumber}>
+          {translate("documentDetail.edit")}
+        </button>
+      </div>
+    </div>
+  {/if}
+</dd>
+{/snippet}
+
 <style>
   .document-view { min-height:100%; }
   .detail-sidebar { display:flex; flex-direction:column; gap:14px; }
@@ -2264,10 +2378,21 @@
   .title-release:hover { color:var(--accent); text-decoration:underline; }
   .title-release:disabled { cursor:default; opacity:.6; text-decoration:none; }
   .document-tags { min-width:0 }
+  .more-fields { display:contents; }
+  .more-fields-toggle { display:inline-flex; align-items:center; gap:6px; margin-top:10px; padding:4px 0; border:0; background:none; color:var(--accent); font:inherit; font-size:.82rem; cursor:pointer; }
+  .more-fields-toggle:hover { text-decoration:underline; }
+  .more-fields-toggle .sub { color:var(--muted); }
+  .more-fields-chevron { display:inline-block; transition:transform 150ms ease; }
+  .more-fields-chevron.open { transform:rotate(180deg); }
+  @media (prefers-reduced-motion: reduce) { .more-fields-chevron { transition:none; } }
   .metadata-display { display:flex; align-items:flex-start; flex-wrap:wrap; gap:7px; width:100%; min-width:0; }
   .metadata-value { display:flex; flex:1 1 90px; align-items:center; flex-wrap:wrap; gap:6px; min-width:0; }
   .metadata-actions { display:flex; flex:0 1 auto; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:6px; margin-left:auto; }
   .metadata-actions .btn { flex:none; }
+  .archive-serial-form { display:flex; align-items:center; flex-wrap:wrap; gap:7px; width:100%; }
+  .archive-serial-form .input { flex:1 1 120px; width:auto; max-width:180px; padding:4px 8px; font-size:.8rem; }
+  .archive-serial-help, .archive-serial-form .row-error { flex-basis:100%; white-space:normal; }
+  .archive-serial-form .row-error { color:var(--danger); font-size:.72rem; }
   .tag-pills, .tag-actions { display:flex; flex-wrap:wrap; align-items:center; gap:6px }
   .tag-pills .pill { max-width:100%; white-space:normal }
   .tag-remove { display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; padding:0; border:0; background:transparent; color:inherit; cursor:pointer }
@@ -2283,15 +2408,11 @@
   .custom-field-editor .err { margin:0; font-size:.72rem; }
   .custom-field-choices { display:flex; flex-wrap:wrap; gap:6px 12px; padding:7px 9px; border:1px solid var(--line); border-radius:7px; background:var(--bg); }
   .custom-field-choices label { display:flex; align-items:center; gap:5px; font-size:.75rem; }
-  .notes-heading, .note-meta, .note-composer-actions, .note-actions { display:flex; align-items:center; gap:8px; }
-  .notes-heading { align-items:flex-start; justify-content:space-between; }
-  .notes-heading h3 { margin:0; font-size:.92rem; }
-  .notes-heading p { margin:3px 0 0; font-size:.74rem; }
-  .note-composer { display:grid; gap:7px; margin-top:13px; padding:11px; border:1px solid var(--line); border-radius:9px; background:var(--bg); }
-  .note-composer label { font-size:.76rem; font-weight:650; }
+  .note-meta, .note-composer-actions, .note-actions { display:flex; align-items:center; gap:8px; }
+  .note-composer { display:grid; gap:7px; padding:11px; border:1px solid var(--line); border-radius:9px; background:var(--bg); }
   .note-composer textarea, .note-edit textarea { width:100%; max-width:none; min-height:72px; resize:vertical; line-height:1.45; }
-  .note-composer-actions { align-items:flex-start; justify-content:space-between; }
-  .note-composer-actions .sub { max-width:34ch; font-size:.68rem; }
+  .note-composer-actions { flex-wrap:wrap; justify-content:space-between; }
+  .note-composer-actions .sub { font-size:.68rem; }
   .note-list { display:grid; gap:0; margin-top:12px; }
   .note-item { display:grid; gap:7px; padding:12px 1px; border-top:1px solid var(--line); }
   .note-meta { justify-content:space-between; }

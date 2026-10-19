@@ -275,10 +275,14 @@ rendered/S01/
 ```
 
 Default JD and runtime-flat filenames use created date, then added date, otherwise
-`undated`, title, and the full address suffix after introduction. Explicit templates
-retain relative behavior with `jd.system.code`, `jd.system.name` and `jd.address`
-available, but cannot escape the enforced system root or occupy a managed index.
-Renaming a system does not move its root.
+`undated`, title, and the full address suffix after introduction. Explicit
+templates retain relative behavior; `jd.system.code`, `jd.system.name`, and
+`jd.address` are available.
+Renaming a system does not move its root. New and edited templates cannot carry a
+file extension: preview, create, and update reject one because Suchi appends the
+linked file's own, `.pdf` for the searchable copy and otherwise the original's
+type (`.jpg`, `.eml`, `.docx`, ...). An unknown type gets none. Templates also
+cannot escape the enforced system root or occupy a managed index.
 
 First introduction queues render-only moves for existing live documents. Durable
 move journals recover interrupted publication at the current target; cleanup removes

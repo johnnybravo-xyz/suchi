@@ -57,12 +57,14 @@ func TestIntakeSystemIsolationAndWriterMembership(t *testing.T) {
 	}
 	watchers := make([]*Watcher, 2)
 	ids := make([]int64, 2)
+	sharedASN := int64(4021)
 	for i, code := range []string{"S01", "S02"} {
 		watchers[i], err = New(ctx, Config{Dir: dir, OwnerID: 1, System: code}, d, cas, nil, log)
 		if err != nil {
 			t.Fatal(err)
 		}
 		side := &sidecar.V1{Version: 1, JDSystem: code, Correspondent: "Shared name", Tags: []string{"Shared tag"}}
+		side.ArchiveSerialNumber = &sharedASN
 		side.Title = "Curated title"
 		if i == 1 {
 			side.Title, side.TitleOwner = "Rule title", "rule"
@@ -78,14 +80,17 @@ func TestIntakeSystemIsolationAndWriterMembership(t *testing.T) {
 	}
 	var sharedBlob, metadataIsolated bool
 	var firstTitle, firstOwner, secondTitle, secondOwner string
+	var firstASN, secondASN int64
 	if err := d.Read.QueryRowContext(ctx, `
 		SELECT a.original_blob = b.original_blob,
 		       (SELECT correspondent_id FROM document_correspondents WHERE document_id=a.id AND role='sender' ORDER BY position,correspondent_id LIMIT 1) !=
 		       (SELECT correspondent_id FROM document_correspondents WHERE document_id=b.id AND role='sender' ORDER BY position,correspondent_id LIMIT 1),
-		       a.title, a.title_owner, b.title, b.title_owner
+		       a.title, a.title_owner, b.title, b.title_owner,
+		       a.archive_serial_number, b.archive_serial_number
 		FROM documents a, documents b
 		WHERE a.id = ? AND b.id = ?`, ids[0], ids[1]).Scan(
 		&sharedBlob, &metadataIsolated, &firstTitle, &firstOwner, &secondTitle, &secondOwner,
+		&firstASN, &secondASN,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -94,6 +99,9 @@ func TestIntakeSystemIsolationAndWriterMembership(t *testing.T) {
 	}
 	if firstTitle != "Curated title" || firstOwner != "human" || secondTitle != "Rule title" || secondOwner != "rule" {
 		t.Fatalf("sidecar titles=%q/%q and %q/%q", firstTitle, firstOwner, secondTitle, secondOwner)
+	}
+	if firstASN != sharedASN || secondASN != sharedASN {
+		t.Fatalf("system-scoped sidecar ASN values=%d/%d", firstASN, secondASN)
 	}
 	id, duplicate, err := watchers[1].ingest(ctx, path, nil)
 	if err != nil || !duplicate || id != ids[1] {
@@ -165,9 +173,10 @@ func TestIntakeSystemIsolationAndWriterMembership(t *testing.T) {
 	`); err != nil {
 		t.Fatal(err)
 	}
+	newASN := int64(4022)
 	side := &sidecar.V1{
 		Version: 1, JDSystem: "S01", Correspondent: "Atomic sender", Tags: []string{"Atomic tag"},
-		CustomFields: map[string]any{"Review score": 7.5},
+		CustomFields: map[string]any{"Review score": 7.5}, ArchiveSerialNumber: &newASN,
 	}
 	if _, _, err := watchers[0].ingest(ctx, path, side); err == nil || !strings.Contains(err.Error(), "test outbox unavailable") {
 		t.Fatalf("expected final outbox failure, got %v", err)
@@ -205,6 +214,7 @@ func TestIntakeSystemIsolationAndWriterMembership(t *testing.T) {
 			JOIN tags t ON t.id = dt.tag_id AND t.system_id = d.system_id
 			WHERE d.id = ? AND d.system_id = 1 AND c.name = 'Atomic sender' AND t.name = 'Atomic tag'
 			  AND cf.name = 'Review score' AND cfv.value_number = 7.5
+			  AND d.archive_serial_number = 4022
 		)
 	`, newID).Scan(&committed); err != nil {
 		t.Fatal(err)

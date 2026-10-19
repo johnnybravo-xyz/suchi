@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/asn"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
@@ -38,6 +39,8 @@ func (s *Server) registerArchiveConfiguration(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/admin/settings/archive-matching", s.PatchArchiveMatchingSettings)
 	mux.HandleFunc("GET /api/admin/settings/preferences", s.GetPreferences)
 	mux.HandleFunc("POST /api/admin/settings/preferences", s.SavePreferences)
+	mux.HandleFunc("GET /api/admin/settings/scan", s.GetScanSettings)
+	mux.HandleFunc("POST /api/admin/settings/scan", s.SaveScanSettings)
 	mux.HandleFunc("GET /api/admin/settings/ingest", s.GetIngestSettings)
 	mux.HandleFunc("POST /api/admin/settings/ingest", s.SaveIngestSettings)
 }
@@ -49,6 +52,7 @@ func (s *Server) registerModelConfiguration(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/admin/settings/llm/test", s.TestLLMSettings)
 	mux.HandleFunc("POST /api/admin/settings/llm/subscriptions/{provider}/{action}", s.SubscriptionLoginAction)
 	mux.HandleFunc("GET /api/admin/settings/llm/subscriptions/{provider}/models", s.SubscriptionModels)
+
 }
 
 // ---------- state ----------
@@ -798,6 +802,160 @@ func (s *Server) SavePreferences(w http.ResponseWriter, r *http.Request) {
 		if err := s.RuntimePreferencesReloader(r.Context()); err != nil {
 			s.writeError(w, http.StatusInternalServerError, "apply_failed",
 				"preferences were saved but could not be applied; try again")
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ---------- scan processing ----------
+
+func (s *Server) GetScanSettings(w http.ResponseWriter, r *http.Request) {
+	if s.requireAdmin(w, r) == nil {
+		return
+	}
+	status, err := s.effectiveScanSettings(r.Context())
+	if err != nil {
+		s.serverErr(w, "settings.scan.status", err)
+		return
+	}
+	status.Managed = managedScanKeys()
+	s.writeJSON(w, http.StatusOK, status)
+}
+
+func (s *Server) effectiveScanSettings(ctx context.Context) (ScanSettingsStatus, error) {
+	if s.ScanSettingsReader != nil {
+		return s.ScanSettingsReader(ctx)
+	}
+	cfg := settings.ResolveScanConfig(ctx, s.DB, settings.ScanConfig{
+		ASNMode: "off", ASNPrefix: "ASN", SplitDPI: 150,
+	})
+	return ScanSettingsStatus{
+		ASNMode: cfg.ASNMode, ASNPrefix: cfg.ASNPrefix, SplitDPI: cfg.SplitDPI,
+	}, nil
+}
+
+func managedScanKeys() *ScanSettingsManaged {
+	pins := settings.PinnedScanKeys()
+	if !pins.Any() {
+		return nil
+	}
+	return &ScanSettingsManaged{Mode: pins.Mode, Prefix: pins.Prefix, DPI: pins.DPI}
+}
+
+func (s *Server) SaveScanSettings(w http.ResponseWriter, r *http.Request) {
+	actor := s.requireAdmin(w, r)
+	if actor == nil {
+		return
+	}
+	var body struct {
+		ASNMode   string `json:"scan_asn_mode"`
+		ASNPrefix string `json:"scan_asn_prefix"`
+		SplitDPI  int    `json:"scan_split_dpi"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	body.ASNMode = strings.ToLower(strings.TrimSpace(body.ASNMode))
+	switch body.ASNMode {
+	case "off", "assign", "split":
+	default:
+		s.writeError(w, http.StatusBadRequest, "bad_scan_asn_mode",
+			"scan_asn_mode must be off, assign, or split")
+		return
+	}
+	if err := asn.ValidatePrefix(body.ASNPrefix); err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_scan_asn_prefix",
+			"scan_asn_prefix must match [A-Za-z][A-Za-z0-9._:-]*")
+		return
+	}
+	if body.SplitDPI < 72 || body.SplitDPI > 600 {
+		s.writeError(w, http.StatusBadRequest, "bad_scan_split_dpi",
+			"scan_split_dpi must be an integer from 72 through 600")
+		return
+	}
+
+	pins := settings.PinnedScanKeys()
+	if pins.Any() {
+		effective, err := s.effectiveScanSettings(r.Context())
+		if err != nil {
+			s.serverErr(w, "settings.scan.effective", err)
+			return
+		}
+		var pinnedKey string
+		switch {
+		case pins.Mode && body.ASNMode != effective.ASNMode:
+			pinnedKey = "scan_asn_mode"
+		case pins.Prefix && body.ASNPrefix != effective.ASNPrefix:
+			pinnedKey = "scan_asn_prefix"
+		case pins.DPI && body.SplitDPI != effective.SplitDPI:
+			pinnedKey = "scan_split_dpi"
+		}
+		if pinnedKey != "" {
+			s.writeError(w, http.StatusConflict, "scan_setting_managed",
+				pinnedKey+" is pinned by the server deployment and cannot be changed here")
+			return
+		}
+	}
+
+	keys := make([]string, 0, 3)
+	updates := make(map[string]any, 3)
+	if !pins.Mode {
+		keys = append(keys, settings.KeyScanASNMode)
+		updates[settings.KeyScanASNMode] = body.ASNMode
+	}
+	if !pins.Prefix {
+		keys = append(keys, settings.KeyScanASNPrefix)
+		updates[settings.KeyScanASNPrefix] = body.ASNPrefix
+	}
+	if !pins.DPI {
+		keys = append(keys, settings.KeyScanSplitDPI)
+		updates[settings.KeyScanSplitDPI] = body.SplitDPI
+	}
+	if len(keys) == 0 {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	var (
+		previous map[string]settings.RawValue
+		written  map[string]settings.RawValue
+	)
+	err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		if err := requireActiveAdminInTx(r.Context(), tx, actor.UserID); err != nil {
+			return err
+		}
+		var err error
+		previous, err = settings.SnapshotInTx(r.Context(), tx, keys)
+		if err != nil {
+			return err
+		}
+		written, err = settings.SetManyInTx(r.Context(), tx, updates, time.Now().Unix())
+		return err
+	})
+	if errors.Is(err, errSystemUnavailable) {
+		s.writeError(w, http.StatusConflict, "admin_changed", "administrator is no longer active")
+		return
+	}
+	if err != nil {
+		s.serverErr(w, "settings.scan", err)
+		return
+	}
+
+	if s.ScanSettingsReloader != nil {
+		if err := s.ScanSettingsReloader(r.Context()); err != nil {
+			restored, rollbackErr := settings.RestoreManyIfCurrent(
+				r.Context(), s.DB, written, previous,
+			)
+			if rollbackErr != nil {
+				s.Log.Error("api.settings.scan.rollback", "err", rollbackErr.Error())
+			}
+			message := "scan settings conflict with server-managed scan configuration"
+			if !restored {
+				message = "scan settings could not be applied; newer settings were preserved"
+			}
+			s.writeError(w, http.StatusUnprocessableEntity, "apply_failed", message)
 			return
 		}
 	}

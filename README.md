@@ -70,7 +70,8 @@ access.
 
 - OCR, thumbnails, barcodes, encrypted PDFs, ZUGFeRD invoices, and common image,
   ebook, Office, OpenDocument, mail, archive, and text formats.
-- Full-text search, numbered filing, version notes, typed custom fields, named
+- Full-text search, numbered filing, physical archive serial numbers, retained
+  QR-label scan splitting, version notes, typed custom fields, named
   exact-document links, saved Views, and folder layouts.
 - Filing systems with permanent codes, direct membership plus document ACLs,
   and `SYS.AC.documentID` addresses using installation-wide document IDs.

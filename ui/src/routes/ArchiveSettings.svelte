@@ -4,7 +4,7 @@
   import { formatNumber, plural } from '../lib/format.js'
   import { scopedHash as filingHref, systems } from '../lib/systems.svelte.js'
   import { setupState, adminListUsers, getIngestSettings, getArchiveMatchingSettings, getLLMSettings,
-           getPreferences, listEmailAccounts, listAutomations, listRenderedLayouts } from '../lib/api.js'
+           getPreferences, getScanSettings, listEmailAccounts, listAutomations, listRenderedLayouts } from '../lib/api.js'
   import { archiveSettingsGroups, archiveSettingsItems, FILING_TREE_SETTINGS_ITEM } from '../lib/configuration.js'
   import { hasFeature } from '../lib/capabilities.js'
   import { session } from '../lib/session.svelte.js'
@@ -18,6 +18,7 @@
   const CONFIGURATION_LOADERS = {
     sources: () => import('./GeneralConfigurationSection.svelte'),
     preferences: () => import('./GeneralConfigurationSection.svelte'),
+    'scan-processing': () => import('./GeneralConfigurationSection.svelte'),
     matching: () => import('./ArchiveMatchingSettings.svelte'),
     mail: () => import('./MailConfigurationSection.svelte'),
     llm: () => import('./ConfigurationSection.svelte'),
@@ -51,6 +52,7 @@
       ingest: getIngestSettings(),
       matching: getArchiveMatchingSettings(),
       preferences: getPreferences(),
+      scan: getScanSettings(),
       automations: listAutomations(),
       layouts: listRenderedLayouts(),
     }
@@ -96,6 +98,23 @@
     if (settled.automations.status === 'fulfilled') {
       const active = rows(settled.automations.value).filter((automation) => automation.enabled).length
       next.automations = status(translate("archiveSettings.valueActive2", { active: formatNumber(active) }), translate("archiveSettings.filingAndMetadataRules"))
+    }
+    if (settled.scan.status === 'fulfilled') {
+      const value = settled.scan.value
+      const mode = value?.scan_asn_mode || 'off'
+      const modeLabel = mode === 'split'
+        ? translate("archiveSettings.splitByAsn")
+        : mode === 'assign'
+          ? translate("archiveSettings.assignAsn")
+          : translate("archiveSettings.asnOff")
+      next['scan-processing'] = status(
+        modeLabel,
+        translate("archiveSettings.scanProcessingStatus", {
+          prefix: value?.scan_asn_prefix || 'ASN',
+          dpi: formatNumber(value?.scan_split_dpi ?? 150),
+        }),
+        mode === 'off' ? '' : 'ok',
+      )
     }
     if (settled.preferences.status === 'fulfilled') {
       const languages = settled.preferences.value?.ocr_languages || []

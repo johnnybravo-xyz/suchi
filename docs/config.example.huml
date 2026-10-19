@@ -55,6 +55,8 @@ scan_blank_whiteness_threshold: 0.995
 scan_split_enabled: "off"
 scan_split_token: "SUCHI-SPLIT"
 scan_split_dpi: 150
+scan_asn_mode: "off"
+scan_asn_prefix: "ASN"
 
 # --------------------------------------------------------------------
 # OIDC (uncomment the whole block to enable)

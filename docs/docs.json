@@ -46,7 +46,7 @@
               "automations",
               "approvals",
               "plugins",
-              "mcp"
+              "mcp-server"
             ]
           },
           {

@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/johnnybravo-xyz/suchi/core/mimeutil"
 )
 
 const maxDeviceContentBytes = 1 << 20
@@ -149,7 +151,7 @@ func badDeviceContent() *uploadMetadataError {
 }
 
 func rejectDeviceContentForMIME(metadata uploadMetadata, mimeType string) *uploadMetadataError {
-	if metadata.Device != nil && strings.TrimSpace(strings.SplitN(mimeType, ";", 2)[0]) != "application/pdf" {
+	if metadata.Device != nil && !mimeutil.Lookup(mimeType).IsPDF() {
 		return badDeviceContent()
 	}
 	return nil

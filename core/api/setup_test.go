@@ -607,11 +607,15 @@ func TestLegacyReviewCeilingDoesNotBlockUnrelatedModelSave(t *testing.T) {
 func TestSetupRuntimeSettingsApplyLiveAndReadBack(t *testing.T) {
 	d := openTestDB(t)
 	seedUser(t, d, 1)
-	preferenceReloads, fsReloads := 0, 0
+	preferenceReloads, scanReloads, fsReloads := 0, 0, 0
 	s := &Server{Actions: testActions(t),
 		DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		RuntimePreferencesReloader: func(context.Context) error {
 			preferenceReloads++
+			return nil
+		},
+		ScanSettingsReloader: func(context.Context) error {
+			scanReloads++
 			return nil
 		},
 		FSWatchReloader: func(context.Context) error {
@@ -638,6 +642,25 @@ func TestSetupRuntimeSettingsApplyLiveAndReadBack(t *testing.T) {
 		t.Fatalf("preferences readback status=%d body=%s", prefGetRec.Code, prefGetRec.Body.String())
 	}
 
+	scanReq := httptest.NewRequest(http.MethodPost, "/api/admin/settings/scan",
+		strings.NewReader(`{"scan_asn_mode":"split","scan_asn_prefix":"BOX-","scan_split_dpi":300}`))
+	scanReq = scanReq.WithContext(auth.WithPrincipal(scanReq.Context(), admin))
+	scanRec := httptest.NewRecorder()
+	s.SaveScanSettings(scanRec, scanReq)
+	if scanRec.Code != http.StatusNoContent || scanReloads != 1 {
+		t.Fatalf("scan status=%d reloads=%d body=%s", scanRec.Code, scanReloads, scanRec.Body.String())
+	}
+	scanGet := httptest.NewRequest(http.MethodGet, "/api/admin/settings/scan", nil)
+	scanGet = scanGet.WithContext(auth.WithPrincipal(scanGet.Context(), admin))
+	scanGetRec := httptest.NewRecorder()
+	s.GetScanSettings(scanGetRec, scanGet)
+	if scanGetRec.Code != http.StatusOK ||
+		!strings.Contains(scanGetRec.Body.String(), `"scan_asn_mode":"split"`) ||
+		!strings.Contains(scanGetRec.Body.String(), `"scan_asn_prefix":"BOX-"`) ||
+		!strings.Contains(scanGetRec.Body.String(), `"scan_split_dpi":300`) {
+		t.Fatalf("scan readback status=%d body=%s", scanGetRec.Code, scanGetRec.Body.String())
+	}
+
 	fsReq := httptest.NewRequest(http.MethodPost, "/api/admin/settings/ingest",
 		strings.NewReader(`{"fs_watch_dir":"/tmp/suchi-inbox","fs_watch_owner_email":"u1@t.local"}`))
 	fsReq = fsReq.WithContext(auth.WithPrincipal(fsReq.Context(), admin))
@@ -655,6 +678,22 @@ func TestSetupRuntimeSettingsApplyLiveAndReadBack(t *testing.T) {
 		t.Fatalf("fs-watch readback status=%d body=%s", fsGetRec.Code, fsGetRec.Body.String())
 	}
 
+	s.ScanSettingsReloader = func(context.Context) error {
+		return errors.New("marker prefix conflicts with legacy separator token")
+	}
+	badScanReq := httptest.NewRequest(http.MethodPost, "/api/admin/settings/scan",
+		strings.NewReader(`{"scan_asn_mode":"assign","scan_asn_prefix":"SEP","scan_split_dpi":450}`))
+	badScanReq = badScanReq.WithContext(auth.WithPrincipal(badScanReq.Context(), admin))
+	badScanRec := httptest.NewRecorder()
+	s.SaveScanSettings(badScanRec, badScanReq)
+	if badScanRec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("failed scan reload status=%d body=%s", badScanRec.Code, badScanRec.Body.String())
+	}
+	rolledBackScan := settings.ResolveScanConfig(context.Background(), s.DB, settings.ScanConfig{})
+	if rolledBackScan.ASNMode != "split" || rolledBackScan.ASNPrefix != "BOX-" || rolledBackScan.SplitDPI != 300 {
+		t.Fatalf("failed reload persisted invalid scan settings: %+v", rolledBackScan)
+	}
+
 	s.FSWatchReloader = func(context.Context) error { return errors.New("invalid watch directory") }
 	badReq := httptest.NewRequest(http.MethodPost, "/api/admin/settings/ingest",
 		strings.NewReader(`{"fs_watch_dir":"/tmp/unusable","fs_watch_owner_email":"u1@t.local"}`))
@@ -667,6 +706,92 @@ func TestSetupRuntimeSettingsApplyLiveAndReadBack(t *testing.T) {
 	rolledBack := settings.ResolveFSWatchConfig(context.Background(), s.DB, settings.FSWatchConfig{})
 	if rolledBack.Dir != "/tmp/suchi-inbox" || rolledBack.OwnerID != 1 {
 		t.Fatalf("failed reload persisted invalid settings: %+v", rolledBack)
+	}
+}
+
+func TestSaveScanSettingsRejectsInvalidValues(t *testing.T) {
+	d := openTestDB(t)
+	seedUser(t, d, 1)
+	s := &Server{Actions: testActions(t), DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	admin := &pluginapi.Principal{Kind: "user", UserID: 1, Role: "admin"}
+	tests := []struct {
+		name string
+		body string
+		code string
+	}{
+		{"mode", `{"scan_asn_mode":"sometimes","scan_asn_prefix":"ASN","scan_split_dpi":150}`, "bad_scan_asn_mode"},
+		{"prefix", `{"scan_asn_mode":"split","scan_asn_prefix":"1 ASN","scan_split_dpi":150}`, "bad_scan_asn_prefix"},
+		{"dpi", `{"scan_asn_mode":"split","scan_asn_prefix":"ASN","scan_split_dpi":601}`, "bad_scan_split_dpi"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/admin/settings/scan", strings.NewReader(tt.body))
+			req = req.WithContext(auth.WithPrincipal(req.Context(), admin))
+			rec := httptest.NewRecorder()
+			s.SaveScanSettings(rec, req)
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), tt.code) {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestScanSettingsExposeAndPreservePinnedKeys(t *testing.T) {
+	d := openTestDB(t)
+	seedUser(t, d, 1)
+	ctx := context.Background()
+	if err := settings.Set(ctx, d, settings.KeyScanASNMode, "off"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SCAN_ASN_MODE", "split")
+	s := &Server{Actions: testActions(t), DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	admin := &pluginapi.Principal{Kind: "user", UserID: 1, Role: "admin"}
+
+	get := httptest.NewRequest(http.MethodGet, "/api/admin/settings/scan", nil)
+	get = get.WithContext(auth.WithPrincipal(get.Context(), admin))
+	getRec := httptest.NewRecorder()
+	s.GetScanSettings(getRec, get)
+	var status ScanSettingsStatus
+	if err := json.NewDecoder(getRec.Body).Decode(&status); err != nil {
+		t.Fatal(err)
+	}
+	if getRec.Code != http.StatusOK || status.ASNMode != "split" ||
+		status.Managed == nil || !status.Managed.Mode || status.Managed.Prefix || status.Managed.DPI {
+		t.Fatalf("managed scan status=%d body=%+v", getRec.Code, status)
+	}
+
+	blocked := httptest.NewRequest(http.MethodPost, "/api/admin/settings/scan",
+		strings.NewReader(`{"scan_asn_mode":"assign","scan_asn_prefix":"ASN","scan_split_dpi":150}`))
+	blocked = blocked.WithContext(auth.WithPrincipal(blocked.Context(), admin))
+	blockedRec := httptest.NewRecorder()
+	s.SaveScanSettings(blockedRec, blocked)
+	if blockedRec.Code != http.StatusConflict ||
+		!strings.Contains(blockedRec.Body.String(), "scan_setting_managed") {
+		t.Fatalf("pinned mode change status=%d body=%s", blockedRec.Code, blockedRec.Body.String())
+	}
+
+	allowed := httptest.NewRequest(http.MethodPost, "/api/admin/settings/scan",
+		strings.NewReader(`{"scan_asn_mode":"split","scan_asn_prefix":"BOX-","scan_split_dpi":300}`))
+	allowed = allowed.WithContext(auth.WithPrincipal(allowed.Context(), admin))
+	allowedRec := httptest.NewRecorder()
+	s.SaveScanSettings(allowedRec, allowed)
+	if allowedRec.Code != http.StatusNoContent {
+		t.Fatalf("unpinned save status=%d body=%s", allowedRec.Code, allowedRec.Body.String())
+	}
+
+	var storedMode, storedPrefix string
+	var storedDPI int
+	if err := settings.Get(ctx, d, settings.KeyScanASNMode, &storedMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := settings.Get(ctx, d, settings.KeyScanASNPrefix, &storedPrefix); err != nil {
+		t.Fatal(err)
+	}
+	if err := settings.Get(ctx, d, settings.KeyScanSplitDPI, &storedDPI); err != nil {
+		t.Fatal(err)
+	}
+	if storedMode != "off" || storedPrefix != "BOX-" || storedDPI != 300 {
+		t.Fatalf("stored scan settings = mode %q prefix %q DPI %d", storedMode, storedPrefix, storedDPI)
 	}
 }
 

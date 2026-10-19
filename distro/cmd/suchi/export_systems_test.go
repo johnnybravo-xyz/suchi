@@ -5,6 +5,7 @@ package main
 import (
 	"archive/zip"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/johnnybravo-xyz/suchi/core/blob"
+	"github.com/johnnybravo-xyz/suchi/core/customfield"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	"github.com/johnnybravo-xyz/suchi/core/db/migrations"
 )
@@ -52,7 +54,8 @@ func TestNativeTakeoutAllOwnersStaysInSelectedSystem(t *testing.T) {
  INSERT INTO jd_areas(system_id,code_start,code_end,name,position) VALUES(1,10,19,'Records',0),(2,10,19,'Records',0);
  INSERT INTO jd_categories(system_id,id,area_start,code,name,system) VALUES(1,1,10,13,'Tax',0),(2,2,10,13,'Tax',0);
  INSERT INTO tags(system_id,id,name,slug,created_at,updated_at) VALUES(1,1,'Private audit label','same-name',0,0),(2,2,'Advisory label','same-name',0,0);
- INSERT INTO documents(system_id,id,owner_id,original_blob,original_size,title,title_owner,mime_type,jd_category_id,created_at,updated_at) VALUES(1,147,1,?,22,'Excluded audit file','human','text/plain',1,0,0),(2,148,1,?,22,'First owner','rule','text/plain',2,0,0),(2,149,2,?,22,'Second owner','human','text/plain',2,0,0);`, ref.SHA256, ref.SHA256, ref.SHA256)
+ INSERT INTO documents(system_id,id,owner_id,original_blob,original_size,title,title_owner,mime_type,jd_category_id,created_at,updated_at) VALUES(1,147,1,?,22,'Excluded audit file','human','text/plain',1,0,0),(2,148,1,?,22,'First owner','rule','text/plain',2,0,0),(2,149,2,?,22,'Second owner','human','text/plain',2,0,0);
+ UPDATE documents SET archive_serial_number=4021 WHERE id=148;`, ref.SHA256, ref.SHA256, ref.SHA256)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +114,7 @@ func TestNativeTakeoutAllOwnersStaysInSelectedSystem(t *testing.T) {
 			}
 		}
 	}
-	if manifest.Version != "2" || manifest.SystemCode != "S02" || manifest.SystemName != "Advisory firm" || manifest.Documents != 2 {
+	if manifest.Version != "3" || manifest.SystemCode != "S02" || manifest.SystemName != "Advisory firm" || manifest.Documents != 2 {
 		t.Fatalf("manifest: %+v", manifest)
 	}
 	if len(sidecars) != 2 {
@@ -127,6 +130,13 @@ func TestNativeTakeoutAllOwnersStaysInSelectedSystem(t *testing.T) {
 		side, ok := sidecars[address]
 		if !ok || side.Title != want.title || side.TitleOwner != want.owner || side.Version != 1 || side.JDSystem != "S02" || side.JDCategory != 13 || side.SHA256 != ref.SHA256 {
 			t.Fatalf("wrong source provenance: %+v", side)
+		}
+		if address == "S02.13.148" {
+			if side.ArchiveSerialNumber == nil || *side.ArchiveSerialNumber != 4021 {
+				t.Fatalf("archive serial number missing from sidecar: %+v", side)
+			}
+		} else if side.ArchiveSerialNumber != nil {
+			t.Fatalf("unexpected archive serial number in sidecar: %+v", side)
 		}
 	}
 	invalid := filepath.Join(root, "invalid.zip")
@@ -278,5 +288,124 @@ areas = []
 	}
 	if _, err := os.Stat(dataDir); !os.IsNotExist(err) {
 		t.Fatal("invalid target touched database", err)
+	}
+}
+
+func TestExportSidecarsCarryCustomFieldValues(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DATA_DIR", root)
+	t.Setenv("SUCHI_CONFIG", "")
+	t.Setenv("PUBLIC_URL", "http://127.0.0.1:8000")
+	d, err := db.Open(t.Context(), filepath.Join(root, "suchi.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	migs, err := db.LoadMigrations(migrations.FS, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrate(t.Context(), d, migs, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
+		t.Fatal(err)
+	}
+	cas, err := blob.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := cas.Put(strings.NewReader("invoice bytes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := cas.Put(strings.NewReader("receipt bytes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.ExecWrite(t.Context(), `
+		INSERT INTO users(id,email,display_name,role,created_at,updated_at) VALUES(1,'admin@test','Admin','admin',0,0);
+		INSERT INTO jd_areas(system_id,code_start,code_end,name,position) VALUES(1,10,19,'Records',0);
+		INSERT INTO jd_categories(system_id,id,area_start,code,name,system) VALUES(1,1,10,13,'Tax',0);
+		INSERT INTO documents(system_id,id,owner_id,original_blob,original_size,title,mime_type,jd_category_id,created_at,updated_at)
+			VALUES(1,10,1,?,13,'Invoice','text/plain',1,0,0),(1,11,1,?,13,'Receipt','text/plain',1,0,0);
+		INSERT INTO custom_fields(system_id,id,name,data_type,extra_data,managed_by,created_at,updated_at) VALUES
+			(1,1,'Note','text','{}','',0,0),
+			(1,2,'Portal','url','{}','',0,0),
+			(1,3,'Pages','number','{}','',0,0),
+			(1,4,'Amount','monetary','{}','',0,0),
+			(1,5,'Due','date','{}','',0,0),
+			(1,6,'Paid','bool','{}','',0,0),
+			(1,7,'Status','select','{"choices":["Open","Closed"]}','',0,0),
+			(1,8,'Labels','multi','{"choices":["Home","Tax"]}','',0,0),
+			(1,9,'Receipt','documentlink','{}','',0,0),
+			(1,10,'invoice_total_gross','monetary','{}','zugferd',0,0);
+		INSERT INTO document_custom_field_values(document_id,field_id,value_text,value_number,value_int,value_bool,value_date) VALUES
+			(10,1,'Kitchen',NULL,NULL,NULL,NULL),
+			(10,2,'https://example.com/bill',NULL,NULL,NULL,NULL),
+			(10,3,NULL,3,NULL,NULL,NULL),
+			(10,4,NULL,1234.56,NULL,NULL,NULL),
+			(10,5,NULL,NULL,NULL,NULL,1788307200),
+			(10,6,NULL,NULL,NULL,1,NULL),
+			(10,7,'Open',NULL,NULL,NULL,NULL),
+			(10,8,'["Home","Tax"]',NULL,NULL,NULL,NULL),
+			(10,9,NULL,NULL,11,NULL,NULL),
+			(10,10,NULL,1840,NULL,NULL,NULL);`, ref.SHA256, receipt.SHA256); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "takeout.zip")
+	if code := runExport([]string{"--all", "--out", out}); code != 0 {
+		t.Fatalf("export exit=%d", code)
+	}
+	archive, err := zip.OpenReader(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+	sidecars := map[string]map[string]any{}
+	for _, entry := range archive.File {
+		if !strings.HasPrefix(entry.Name, "documents/") || !strings.HasSuffix(entry.Name, ".json") {
+			continue
+		}
+		rc, err := entry.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var side struct {
+			Title        string         `json:"title"`
+			CustomFields map[string]any `json:"custom_fields"`
+		}
+		err = json.NewDecoder(rc).Decode(&side)
+		rc.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		sidecars[side.Title] = side.CustomFields
+	}
+	want := map[string]any{
+		"Note":   "Kitchen",
+		"Portal": "https://example.com/bill",
+		"Pages":  3.0,
+		"Amount": 1234.56,
+		"Due":    "2026-09-02",
+		"Paid":   true,
+		"Status": "Open",
+		"Labels": []any{"Home", "Tax"},
+	}
+	got := sidecars["Invoice"]
+	if len(got) != len(want) {
+		t.Fatalf("custom_fields = %v, want %v (no managed or document-link values)", got, want)
+	}
+	extras := map[string]string{"Status": `{"choices":["Open","Closed"]}`, "Labels": `{"choices":["Home","Tax"]}`}
+	types := map[string]string{"Note": "text", "Portal": "url", "Pages": "number", "Amount": "monetary", "Due": "date", "Paid": "bool", "Status": "select", "Labels": "multi"}
+	for name, value := range want {
+		if fmt.Sprint(got[name]) != fmt.Sprint(value) {
+			t.Fatalf("%s = %#v, want %#v", name, got[name], value)
+		}
+		if _, err := customfield.Lookup(types[name]).Validate(json.RawMessage(extras[name]), got[name]); err != nil {
+			t.Fatalf("%s does not validate for sidecar intake: %v", name, err)
+		}
+	}
+	if fields, ok := sidecars["Receipt"]; !ok || fields != nil {
+		t.Fatalf("document without values exported custom_fields=%v present=%v", fields, ok)
 	}
 }

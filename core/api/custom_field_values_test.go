@@ -3,11 +3,16 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/johnnybravo-xyz/suchi/core/auth"
 )
 
 func TestCustomFieldValuesPreserveTrashedDocuments(t *testing.T) {
@@ -83,5 +88,53 @@ func TestDocumentLinkTopologyRejectsSelfAndVersionFamilyButAllowsPeerCycles(t *t
 		if stored != target {
 			t.Fatalf("source %d target=%d, want %d", source, stored, target)
 		}
+	}
+}
+
+func TestDocumentLinkWriteRejectsAmbiguousTargetsWithoutChangingLink(t *testing.T) {
+	s, mux := newSystemsBoundaryServer(t)
+	seedSystemsBoundary(t, s)
+	seedDocumentReferences(t, s)
+	stored := func() (int64, bool) {
+		t.Helper()
+		var target int64
+		err := s.DB.Read.QueryRow(`SELECT value_int FROM document_custom_field_values WHERE document_id=101 AND field_id=105`).Scan(&target)
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, false
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return target, true
+	}
+
+	for _, body := range []string{`{"value":0}`, `{"value":"0"}`, `{"value":103.5}`, `{"value":-103}`, `{"value":"#103"}`} {
+		response := systemsBoundaryRequest(mux, http.MethodPut, "/api/documents/101/custom_fields/105", body, memberPrincipal(5))
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"bad_value"`) {
+			t.Fatalf("%s: status=%d body=%s", body, response.Code, response.Body.String())
+		}
+		if target, ok := stored(); !ok || target != 202 {
+			t.Fatalf("%s changed link to %d (present=%v)", body, target, ok)
+		}
+	}
+
+	token := memberPrincipal(5)
+	token.Kind = "token"
+	token.TokenSystemID = 1
+	token.Scopes = []string{auth.ScopeDocumentsWrite}
+	response := systemsBoundaryRequest(mux, http.MethodPut, "/api/documents/101/custom_fields/Related", `{"value":103}`, token)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("token write by field name: %d %s", response.Code, response.Body.String())
+	}
+	if target, ok := stored(); !ok || target != 103 {
+		t.Fatalf("token write stored %d (present=%v), want 103", target, ok)
+	}
+
+	response = systemsBoundaryRequest(mux, http.MethodPut, "/api/documents/101/custom_fields/Related", `{"value":null}`, token)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("empty value: %d %s", response.Code, response.Body.String())
+	}
+	if target, ok := stored(); ok {
+		t.Fatalf("empty value kept link to %d", target)
 	}
 }

@@ -15,6 +15,9 @@ async function mockUpload(page, options = {}) {
       uploads.push(request)
       if (options.upload) return options.upload(route, uploads.length)
       body = { id: 41 }
+    } else if (url.pathname === '/api/documents/' && request.method() === 'GET' && url.searchParams.has('split_origin_id')) {
+      expect(url.searchParams.get('split_origin_id')).toBe('41')
+      if (options.children) return options.children(route)
     } else if (url.pathname === '/api/tasks/') {
       expect(url.searchParams.get('include')).toBe('jobs')
       expect(url.searchParams.get('doc_id')).toBe('41')
@@ -190,6 +193,28 @@ test('waits for processing to finish before reading the document', async ({ page
   expect(documentReads).toBe(1)
 })
 
+test('shows documents created from a split scan instead of linking the retired batch', async ({ page }) => {
+  await mockUpload(page, {
+    document: route => route.fulfill({ json: { id: 41, title: 'Feeder batch', trashed_at: 1, tags: [] } }),
+    children: route => route.fulfill({ json: {
+      count: 2,
+      results: [
+        { id: 43, title: 'Second document', split_index: 2, archive_serial_number: 4022 },
+        { id: 42, title: 'First document', split_index: 1, archive_serial_number: 4021 },
+      ],
+    } }),
+  })
+  await page.goto('/#/upload')
+  await page.locator('input[type=file]').setInputFiles(file('batch.png'))
+  await expect(page.getByText('Split into 2 documents', { exact: true })).toBeVisible()
+  const results = page.getByRole('group', { name: 'Documents created from this scan' })
+  await expect(results.getByRole('link')).toHaveCount(2)
+  await expect(results.getByRole('link').nth(0)).toContainText('ASN 4021')
+  await expect(results.getByRole('link').nth(0)).toContainText('First document')
+  await expect(results.getByRole('link').nth(1)).toContainText('ASN 4022')
+  await expect(page.getByRole('link', { name: 'Open document', exact: true })).toHaveCount(0)
+})
+
 test('keeps processing honest after automatic checks pause and allows checking again', async ({ page }) => {
   let jobs = [{ kind: 'post-ingest', state: 'running' }]
   let reads = 0
@@ -225,6 +250,26 @@ test('shows unavailable and failed processing without claiming completion', asyn
   await expect(page.getByText('Ready', { exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Check again', exact: true })).toBeVisible()
 })
+
+for (const [holder, message] of [
+  [{ status: 200, json: { id: 7, title: 'Loan closure certificate' } },
+    'ASN 4021 (page 2) is already used by #7 “Loan closure certificate”. Change the label and scan it again.'],
+  [{ status: 404, json: { error: 'not found' } },
+    'ASN 4021 (page 2) is already in use. Change the label and scan it again.'],
+]) {
+  test(`explains a rejected ASN scan on the upload row (holder ${holder.status})`, async ({ page }) => {
+    await mockUpload(page, { tasks: route => route.fulfill({ json: { results: [{
+      kind: 'post-ingest',
+      state: 'dead',
+      last_error: 'jobs: terminal error; do not retry: archive_serial_number_conflict page=2 asn=4021 doc=7',
+    }] } }) })
+    await page.route('**/api/documents/7', route => route.fulfill(holder))
+    await page.goto('/#/upload')
+    await page.locator('input[type=file]').setInputFiles(file('batch.png'))
+    await expect(page.getByText('Processing needs attention', { exact: true })).toBeVisible()
+    await expect(page.getByRole('alert')).toHaveText(message)
+  })
+}
 
 test('stops polling and ignores late document details after leaving upload', async ({ page }) => {
   await mockUpload(page)

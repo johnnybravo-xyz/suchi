@@ -195,6 +195,64 @@ test('shows explicit revision state and retries an uncertain replacement with on
   expect(keys[1]).toBe(keys[0])
 })
 
+test('edits archive serial numbers and shows them on the current version', async ({ page }) => {
+  const patches = []
+  await installDetailAPI(page, async ({ route, request, path }) => {
+    if (path === '/api/documents/42' && request.method() === 'GET') {
+      await route.fulfill({ json: detail(42, { archive_serial_number: 4021 }) })
+      return true
+    }
+    if (path === '/api/documents/42' && request.method() === 'PATCH') {
+      const patch = request.postDataJSON()
+      patches.push(patch)
+      if (patch.archive_serial_number === 4022) {
+        await route.fulfill({
+          status: 409,
+          json: {
+            code: 'archive_serial_number_conflict',
+            error: 'archive serial number is already retained; search ASN 4022 including Trash and versions',
+          },
+        })
+      } else {
+        await route.fulfill({ json: { id: 42 } })
+      }
+      return true
+    }
+    if (path === '/api/documents/42/versions/' && request.method() === 'GET') {
+      await route.fulfill({ json: {
+        count: 1,
+        head_id: 42,
+        can_upload: true,
+        results: [{ id: 42, title: 'Document 42', created_at: 1780000042, is_head: true, archive_serial_number: 4021 }],
+      } })
+      return true
+    }
+    return false
+  })
+
+  await page.goto('/#/doc/42')
+  const label = page.getByText('Archive serial number', { exact: true })
+  const field = label.locator('xpath=following-sibling::dd[1]')
+  await expect(field.getByText('ASN 4021', { exact: true })).toBeVisible()
+  await field.getByRole('button', { name: 'Edit', exact: true }).click()
+  const input = field.getByRole('textbox', { name: 'Archive serial number' })
+  await input.fill('0')
+  await field.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(field.getByText('Enter a positive whole number no greater than 9007199254740991.', { exact: true })).toBeVisible()
+  expect(patches).toHaveLength(0)
+
+  await input.fill('4022')
+  await field.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(field.getByText('archive serial number is already retained; search ASN 4022 including Trash and versions', { exact: true })).toBeVisible()
+  await input.fill('4023')
+  await field.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(field.getByText('ASN 4023', { exact: true })).toBeVisible()
+  expect(patches).toEqual([{ archive_serial_number: 4022 }, { archive_serial_number: 4023 }])
+
+  const versions = await openVersions(page)
+  await expect(versions.getByText('ASN 4021', { exact: true })).toBeVisible()
+})
+
 for (const failure of [
   {
     name: 'duplicate conflict',
@@ -340,6 +398,7 @@ test('keeps outgoing and incoming document links in one compact tab', async ({ p
   const similarDocuments = page.getByRole('tabpanel', { name: 'Similar documents' })
   await expect(similarDocuments.getByText('Related receipt', { exact: true })).toBeVisible()
   await expect(similarDocuments.getByText('fts', { exact: true })).toHaveCount(0)
+  await page.getByRole('button', { name: 'More · 1 field' }).click()
   await expect(page.getByText('Amount', { exact: true })).toBeVisible()
   await expect(page.getByText('12.5', { exact: true })).toBeVisible()
   await expect(page.getByRole('region', { name: 'Document references' })).toHaveCount(0)
@@ -442,11 +501,21 @@ test('shows only populated typed metadata and keeps compact add and edit control
   })
 
   await page.goto('/#/doc/42')
+  await expect(page.getByText('Not set', { exact: true })).toHaveCount(0)
+  await expect(page.locator('dl.kv > dt').last()).toHaveText('Languages')
+  await expect(page.locator('dt').filter({ hasText: /^Invoice amount$/ })).toHaveCount(0)
+  await expect(page.locator('dt').filter({ hasText: /^Archive serial number$/ })).toHaveCount(0)
+  const more = page.getByRole('button', { name: 'More · 2 fields' })
+  await expect(more).toHaveAttribute('aria-expanded', 'false')
+  await more.click()
+  await expect(page.getByRole('button', { name: 'Less' })).toHaveAttribute('aria-expanded', 'true')
+  const serialRow = page.locator('dt').filter({ hasText: /^Archive serial number$/ }).locator('xpath=following-sibling::dd[1]')
+  await expect(serialRow.getByRole('button', { name: 'Edit' })).toBeFocused()
+  await expect(page.locator('dt').filter({ hasText: /^Invoice amount$/ })).toHaveCount(1)
   await expect(page.locator('dt').filter({ hasText: /^invoice_currency$/ })).toHaveCount(0)
   await expect(page.locator('dt').filter({ hasText: /^invoice_seller$/ })).toHaveCount(0)
   await expect(page.locator('dt').filter({ hasText: /^Invoice seller$/ })).toHaveCount(1)
-  await expect(page.getByText('Not set', { exact: true })).toHaveCount(0)
-  await expect(page.locator('dl.kv > dt').last()).toHaveText('Custom fields')
+  await expect(page.locator('dl.kv dt').last()).toHaveText('Custom fields')
   const customFieldsRow = page.locator('dt').filter({ hasText: /^Custom fields$/ }).locator('xpath=following-sibling::dd[1]')
   await expect(customFieldsRow.getByRole('combobox', { name: 'Add custom field' })).toHaveCount(0)
   await customFieldsRow.getByRole('button', { name: 'Edit custom fields' }).click()
@@ -482,7 +551,6 @@ test('shows only populated typed metadata and keeps compact add and edit control
     { kind: 'field', body: { value: 250.5 } },
     { kind: 'note', body: { note: 'Call the utility' } },
   ])
-  await expect(page.getByText('Previous archive number', { exact: true })).toHaveCount(0)
 })
 
 test('ignores late history and backlink responses after exact-route navigation', async ({ page }) => {

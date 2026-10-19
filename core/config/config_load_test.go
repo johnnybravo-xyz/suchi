@@ -433,3 +433,58 @@ func TestDesktopLocalDeploymentPolicy(t *testing.T) {
 		}
 	})
 }
+
+func TestScanASNConfig(t *testing.T) {
+	isolateConfigEnv(t)
+	t.Setenv("PUBLIC_URL", "http://localhost")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ScanASNMode != "off" || cfg.ScanASNPrefix != "ASN" {
+		t.Fatalf("ASN defaults = mode %q prefix %q", cfg.ScanASNMode, cfg.ScanASNPrefix)
+	}
+
+	t.Setenv("SCAN_ASN_MODE", "split")
+	t.Setenv("SCAN_ASN_PREFIX", "House-2:")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ScanASNMode != "split" || cfg.ScanASNPrefix != "House-2:" {
+		t.Fatalf("ASN config = mode %q prefix %q", cfg.ScanASNMode, cfg.ScanASNPrefix)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		mode   string
+		prefix string
+	}{
+		{name: "unknown mode", mode: "required", prefix: "ASN"},
+		{name: "quoted prefix", mode: "assign", prefix: `"ASN"`},
+		{name: "whitespace prefix", mode: "split", prefix: "ASN "},
+		{name: "digit-leading prefix", mode: "split", prefix: "1ASN"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("SCAN_ASN_MODE", tc.mode)
+			t.Setenv("SCAN_ASN_PREFIX", tc.prefix)
+			if _, err := Load(); err == nil {
+				t.Fatalf("mode %q prefix %q was accepted", tc.mode, tc.prefix)
+			}
+		})
+	}
+}
+
+func TestScanASNRejectsSeparatorPrefixCollision(t *testing.T) {
+	isolateConfigEnv(t)
+	t.Setenv("PUBLIC_URL", "http://localhost")
+	t.Setenv("SCAN_ASN_MODE", "split")
+	t.Setenv("SCAN_ASN_PREFIX", "ASN")
+	t.Setenv("SCAN_SPLIT_ENABLED", "on")
+	t.Setenv("SCAN_SPLIT_TOKEN", "ASN-SEPARATOR")
+
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "SCAN_SPLIT_TOKEN") {
+		t.Fatalf("collision error = %v", err)
+	}
+}

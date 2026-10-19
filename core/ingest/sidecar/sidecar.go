@@ -28,6 +28,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/johnnybravo-xyz/suchi/core/asn"
 )
 
 // Version is the current sidecar-format version. Producers must set
@@ -52,13 +54,14 @@ type V1 struct {
 	// Applied via document_correspondents.
 	Correspondents []Correspondent `json:"correspondents,omitempty"`
 
-	Tags         []string       `json:"tags,omitempty"`
-	Created      string         `json:"created,omitempty"` // ISO8601
-	Notes        string         `json:"notes,omitempty"`
-	JDCategory   int            `json:"jd_category,omitempty"`
-	JDSystem     string         `json:"jd_system,omitempty"`
-	JDAddress    string         `json:"jd_address,omitempty"`
-	CustomFields map[string]any `json:"custom_fields,omitempty"`
+	Tags                []string       `json:"tags,omitempty"`
+	Created             string         `json:"created,omitempty"` // ISO8601
+	Notes               string         `json:"notes,omitempty"`
+	JDCategory          int            `json:"jd_category,omitempty"`
+	JDSystem            string         `json:"jd_system,omitempty"`
+	JDAddress           string         `json:"jd_address,omitempty"`
+	CustomFields        map[string]any `json:"custom_fields,omitempty"`
+	ArchiveSerialNumber *int64         `json:"archive_serial_number,omitempty"`
 }
 
 // Correspondent is one entry in the sidecar's Correspondents array.
@@ -84,6 +87,11 @@ func Parse(b []byte) (*V1, error) {
 	}
 	if s.TitleOwner != "" && s.TitleOwner != "auto" && s.TitleOwner != "rule" && s.TitleOwner != "human" {
 		return nil, fmt.Errorf("sidecar: invalid title_owner %q", s.TitleOwner)
+	}
+	if s.ArchiveSerialNumber != nil {
+		if err := asn.ValidateValue(*s.ArchiveSerialNumber); err != nil {
+			return nil, fmt.Errorf("sidecar: invalid archive_serial_number: %w", err)
+		}
 	}
 	// Compat: no version key → assume flat-JSON compat shape.
 	// Every field the compat producer sets lives at the same key

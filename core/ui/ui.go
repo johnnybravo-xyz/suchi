@@ -40,6 +40,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	"github.com/johnnybravo-xyz/suchi/core/i18n"
 	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
+	"github.com/johnnybravo-xyz/suchi/core/mimeutil"
 )
 
 //go:embed templates/*.html
@@ -285,7 +286,7 @@ func (s *Server) Preview(w http.ResponseWriter, r *http.Request) {
 				`"gated":true,"reveal_url":"?reveal=1"}`))
 		return
 	}
-	if mimeType.Valid && normalizedMIME(mimeType.String) == "message/rfc822" {
+	if mimeType.Valid && mimeutil.Lookup(mimeType.String).IsEmail() {
 		serveEmailPreview(w, r, content.String)
 		return
 	}
@@ -607,7 +608,7 @@ func (s *Server) serveBlob(w http.ResponseWriter, r *http.Request, preferArchive
 	// inline where it can.
 	ext := ".pdf"
 	if !servingArchive && mime.Valid {
-		ext = extFromMIME(mime.String)
+		ext = mimeutil.Extension(mime.String)
 	}
 	fname := safeFilename(title.String, ext)
 	w.Header().Set("Content-Disposition", stdmime.FormatMediaType(disposition, map[string]string{
@@ -684,91 +685,4 @@ func safeFilename(title, ext string) string {
 		s += ext
 	}
 	return s
-}
-
-// extFromMIME picks the filename extension to advertise in
-// Content-Disposition for a blob of the given MIME. Covers the MIMEs
-// suchi's ingest pipeline recognises; unknown MIMEs return "" so the
-// browser decides purely from Content-Type (safer than a wrong ext).
-// Kept as an exact-match table — content-type params are stripped.
-func extFromMIME(mime string) string {
-	mime = normalizedMIME(mime)
-	switch mime {
-	case "application/pdf":
-		return ".pdf"
-	case "image/png":
-		return ".png"
-	case "image/jpeg":
-		return ".jpg"
-	case "image/gif":
-		return ".gif"
-	case "image/webp":
-		return ".webp"
-	case "image/tiff":
-		return ".tiff"
-	case "image/heic":
-		return ".heic"
-	case "image/heif":
-		return ".heif"
-	case "image/avif":
-		return ".avif"
-	case "image/svg+xml":
-		return ".svg"
-	case "text/plain":
-		return ".txt"
-	case "text/csv":
-		return ".csv"
-	case "text/markdown":
-		return ".md"
-	case "text/html":
-		return ".html"
-	case "application/rtf", "text/rtf":
-		return ".rtf"
-	case "application/epub+zip":
-		return ".epub"
-	case "message/rfc822":
-		return ".eml"
-	case "application/vnd.ms-outlook", "application/x-outlook-msg", "application/ms-outlook":
-		return ".msg"
-	case "image/vnd.djvu", "image/x-djvu":
-		return ".djvu"
-	case "application/msword":
-		return ".doc"
-	case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-		return ".docx"
-	case "application/vnd.ms-word.document.macroenabled.12":
-		return ".docm"
-	case "application/vnd.ms-powerpoint":
-		return ".ppt"
-	case "application/vnd.openxmlformats-officedocument.presentationml.presentation":
-		return ".pptx"
-	case "application/vnd.ms-powerpoint.presentation.macroenabled.12":
-		return ".pptm"
-	case "application/vnd.openxmlformats-officedocument.presentationml.slideshow":
-		return ".ppsx"
-	case "application/vnd.ms-powerpoint.slideshow.macroenabled.12":
-		return ".ppsm"
-	case "application/vnd.ms-excel":
-		return ".xls"
-	case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
-		return ".xlsx"
-	case "application/vnd.ms-excel.sheet.macroenabled.12":
-		return ".xlsm"
-	case "application/vnd.ms-excel.sheet.binary.macroenabled.12":
-		return ".xlsb"
-	case "application/vnd.oasis.opendocument.text":
-		return ".odt"
-	case "application/vnd.oasis.opendocument.spreadsheet":
-		return ".ods"
-	case "application/vnd.oasis.opendocument.presentation":
-		return ".odp"
-	}
-	return ""
-}
-
-func normalizedMIME(value string) string {
-	if i := strings.IndexByte(value, ';'); i >= 0 {
-		value = value[:i]
-	}
-	return strings.ToLower(strings.TrimSpace(value))
 }

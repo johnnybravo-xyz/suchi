@@ -65,6 +65,7 @@ import (
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
 	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
+	"github.com/johnnybravo-xyz/suchi/core/mimeutil"
 )
 
 // exportManifest is the archive-level provenance record.
@@ -82,20 +83,22 @@ type exportManifest struct {
 // exportSidecar mirrors sidecar.V1 shape but adds the extra fields
 // we want to round-trip on re-import (jd category code + tags + etc).
 type exportSidecar struct {
-	Version        int              `json:"suchi_sidecar"`
-	Title          string           `json:"title,omitempty"`
-	TitleOwner     string           `json:"title_owner,omitempty"`
-	Created        string           `json:"created,omitempty"` // ISO 8601 from documents.created_at
-	Correspondent  string           `json:"correspondent,omitempty"`
-	Correspondents []exportCorrRole `json:"correspondents,omitempty"`
-	Tags           []string         `json:"tags,omitempty"`
-	Notes          string           `json:"notes,omitempty"`
-	JDCategory     int              `json:"jd_category,omitempty"`
-	JDSystem       string           `json:"jd_system,omitempty"`
-	JDAddress      string           `json:"jd_address,omitempty"`
-	Sensitivity    string           `json:"sensitivity,omitempty"`
-	MIME           string           `json:"mime_type,omitempty"`
-	SHA256         string           `json:"sha256,omitempty"`
+	Version             int              `json:"suchi_sidecar"`
+	Title               string           `json:"title,omitempty"`
+	TitleOwner          string           `json:"title_owner,omitempty"`
+	Created             string           `json:"created,omitempty"` // ISO 8601 from documents.created_at
+	Correspondent       string           `json:"correspondent,omitempty"`
+	Correspondents      []exportCorrRole `json:"correspondents,omitempty"`
+	Tags                []string         `json:"tags,omitempty"`
+	CustomFields        map[string]any   `json:"custom_fields,omitempty"`
+	Notes               string           `json:"notes,omitempty"`
+	JDCategory          int              `json:"jd_category,omitempty"`
+	JDSystem            string           `json:"jd_system,omitempty"`
+	JDAddress           string           `json:"jd_address,omitempty"`
+	Sensitivity         string           `json:"sensitivity,omitempty"`
+	MIME                string           `json:"mime_type,omitempty"`
+	SHA256              string           `json:"sha256,omitempty"`
+	ArchiveSerialNumber *int64           `json:"archive_serial_number,omitempty"`
 }
 
 type exportCorrRole struct {
@@ -205,7 +208,7 @@ func runExport(args []string) int {
 	zw = zip.NewWriter(f)
 
 	man := exportManifest{
-		Version:     "2",
+		Version:     "3",
 		SystemCode:  system.Code,
 		SystemName:  system.Name,
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
@@ -423,7 +426,8 @@ func dumpDocuments(ctx context.Context, zw *zip.Writer, d *db.DB, cas *blob.CAS,
 	}
 	rows, err := d.Read.QueryContext(ctx, `
 		SELECT id, title, title_owner, original_blob, mime_type, created_at,
-		       COALESCE(sensitivity, ''), COALESCE(jd_category_id, 0)
+		       COALESCE(sensitivity, ''), COALESCE(jd_category_id, 0),
+		       archive_serial_number
 		  FROM documents `+where+`
 		 ORDER BY id`, args...)
 	if err != nil {
@@ -434,16 +438,20 @@ func dumpDocuments(ctx context.Context, zw *zip.Writer, d *db.DB, cas *blob.CAS,
 	written, skipped := 0, 0
 	for rows.Next() {
 		var (
-			id          int64
-			title       string
-			titleOwner  string
-			blobSHA     string
-			mime        sql.NullString
-			created     int64
-			sensitivity string
-			jdCatID     int64
+			id            int64
+			title         string
+			titleOwner    string
+			blobSHA       string
+			mime          sql.NullString
+			created       int64
+			sensitivity   string
+			jdCatID       int64
+			archiveNumber sql.NullInt64
 		)
-		if err := rows.Scan(&id, &title, &titleOwner, &blobSHA, &mime, &created, &sensitivity, &jdCatID); err != nil {
+		if err := rows.Scan(
+			&id, &title, &titleOwner, &blobSHA, &mime, &created, &sensitivity, &jdCatID,
+			&archiveNumber,
+		); err != nil {
 			return written, skipped, err
 		}
 
@@ -458,6 +466,10 @@ func dumpDocuments(ctx context.Context, zw *zip.Writer, d *db.DB, cas *blob.CAS,
 			MIME:        mime.String,
 			JDSystem:    system.Code,
 		}
+		if archiveNumber.Valid {
+			value := archiveNumber.Int64
+			side.ArchiveSerialNumber = &value
+		}
 		// Tags + correspondents + jd_category — each best-effort;
 		tags, err := loadDocTags(ctx, d, id)
 		if err != nil {
@@ -469,6 +481,11 @@ func dumpDocuments(ctx context.Context, zw *zip.Writer, d *db.DB, cas *blob.CAS,
 			return written, skipped, fmt.Errorf("load correspondents for document %d: %w", id, err)
 		}
 		side.Correspondents = corrs
+		fields, err := loadDocCustomFields(ctx, d, id)
+		if err != nil {
+			return written, skipped, fmt.Errorf("load custom fields for document %d: %w", id, err)
+		}
+		side.CustomFields = fields
 		for _, c := range corrs {
 			if c.Role == "sender" || c.Role == "" {
 				side.Correspondent = c.Name
@@ -503,7 +520,7 @@ func dumpDocuments(ctx context.Context, zw *zip.Writer, d *db.DB, cas *blob.CAS,
 		if err != nil {
 			return written, skipped, fmt.Errorf("cas get doc %d: %w", id, err)
 		}
-		bw, err := zw.Create("documents/" + safeName + extForMIME(mime.String))
+		bw, err := zw.Create("documents/" + safeName + mimeutil.Extension(mime.String))
 		if err != nil {
 			rc.Close()
 			return written, skipped, err
@@ -534,6 +551,55 @@ func loadDocTags(ctx context.Context, d *db.DB, docID int64) ([]string, error) {
 			return nil, err
 		}
 		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// loadDocCustomFields returns values in the shapes sidecar intake validates:
+// strings, numbers, booleans, "YYYY-MM-DD" dates, and choice lists.
+// Extraction-managed fields are re-read from the original on reingest, and
+// document links name IDs that a reingest does not preserve, so both are left out.
+func loadDocCustomFields(ctx context.Context, d *db.DB, docID int64) (map[string]any, error) {
+	rows, err := d.Read.QueryContext(ctx, `
+		SELECT f.name, f.data_type, v.value_text, v.value_number, v.value_bool, v.value_date
+		  FROM document_custom_field_values v
+		  JOIN custom_fields f ON f.id = v.field_id
+		 WHERE v.document_id = ? AND f.managed_by = '' AND f.data_type <> 'documentlink'
+		 ORDER BY f.name`, docID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]any{}
+	for rows.Next() {
+		var (
+			name, dataType string
+			text           sql.NullString
+			number         sql.NullFloat64
+			boolean, date  sql.NullInt64
+		)
+		if err := rows.Scan(&name, &dataType, &text, &number, &boolean, &date); err != nil {
+			return nil, err
+		}
+		switch {
+		case dataType == "multi" && text.Valid:
+			var choices []string
+			if err := json.Unmarshal([]byte(text.String), &choices); err != nil {
+				return nil, fmt.Errorf("custom field %q: %w", name, err)
+			}
+			out[name] = choices
+		case dataType == "date" && date.Valid:
+			out[name] = time.Unix(date.Int64, 0).UTC().Format("2006-01-02")
+		case dataType == "bool" && boolean.Valid:
+			out[name] = boolean.Int64 == 1
+		case (dataType == "number" || dataType == "monetary") && number.Valid:
+			out[name] = number.Float64
+		case text.Valid:
+			out[name] = text.String
+		}
+	}
+	if len(out) == 0 {
+		return nil, rows.Err()
 	}
 	return out, rows.Err()
 }
@@ -586,29 +652,6 @@ func safeExportName(title string, id int64, _ string) string {
 		base = string(baseRunes[:60])
 	}
 	return filepath.Clean(base + "-" + strconv.FormatInt(id, 10))
-}
-
-// extForMIME picks a filename extension per MIME. Not exhaustive —
-// we only care about common ingest types; unknown falls back to no
-// extension so downstream tooling can sniff.
-func extForMIME(mime string) string {
-	switch mime {
-	case "application/pdf":
-		return ".pdf"
-	case "image/png":
-		return ".png"
-	case "image/jpeg":
-		return ".jpg"
-	case "image/heic", "image/heif":
-		return ".heic"
-	case "message/rfc822":
-		return ".eml"
-	case "application/vnd.ms-outlook":
-		return ".msg"
-	case "text/plain":
-		return ".txt"
-	}
-	return ""
 }
 
 // writeReadme drops a small README into the archive so a recipient

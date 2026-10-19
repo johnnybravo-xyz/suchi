@@ -37,6 +37,7 @@ import (
 	"github.com/makiuchi-d/gozxing"
 	"github.com/makiuchi-d/gozxing/aztec"
 	"github.com/makiuchi-d/gozxing/datamatrix"
+	multiqrcode "github.com/makiuchi-d/gozxing/multi/qrcode"
 	"github.com/makiuchi-d/gozxing/qrcode"
 )
 
@@ -73,51 +74,104 @@ func TokensFor(bs []Barcode) string {
 // error. An optional decoder failure returns any valid Go results alongside
 // the error, so callers can retain useful content while reporting the failure.
 func Decode(ctx context.Context, r io.Reader) ([]Barcode, error) {
-	if err := ctx.Err(); err != nil {
+	img, bmp, err := loadImage(ctx, r)
+	if err != nil {
 		return nil, err
-	}
-	// Replay the header bytes consumed by DecodeConfig without copying the
-	// entire upload. Reject decompression-sized dimensions before allocation.
-	var header bytes.Buffer
-	config, _, err := image.DecodeConfig(io.TeeReader(r, &header))
-	if err != nil {
-		return nil, fmt.Errorf("barcode: image config: %w", err)
-	}
-	const maxPixels = 64 * 1024 * 1024
-	if config.Width <= 0 || config.Height <= 0 || config.Width > maxPixels/config.Height {
-		return nil, errors.New("barcode: image exceeds 64 megapixel decode limit")
-	}
-	img, _, err := image.Decode(io.MultiReader(&header, r))
-	if err != nil {
-		return nil, fmt.Errorf("barcode: image decode: %w", err)
-	}
-	bmp, err := gozxing.NewBinaryBitmapFromImage(img)
-	if err != nil {
-		return nil, fmt.Errorf("barcode: bitmap: %w", err)
 	}
 
 	var out []Barcode
 	qrFound := false
-
 	// QR is the by-far common case — try it first.
 	if res, err := qrcode.NewQRCodeReader().Decode(bmp, nil); err == nil {
 		out = append(out, Barcode{Text: res.GetText(), Format: "QR"})
 		qrFound = true
 	}
-	// DataMatrix (small industrial codes).
-	if res, err := datamatrix.NewDataMatrixReader().Decode(bmp, nil); err == nil {
-		out = append(out, Barcode{Text: res.GetText(), Format: "DATA_MATRIX"})
-	}
-	// Aztec (occasionally used on transit tickets).
-	if res, err := aztec.NewAztecReader().Decode(bmp, nil); err == nil {
-		out = append(out, Barcode{Text: res.GetText(), Format: "AZTEC"})
-	}
+	out = appendOtherNative(out, bmp)
 	if !qrFound {
 		qr, err := decodeZBarQR(ctx, img)
 		out = append(out, qr...)
 		return out, err
 	}
 	return out, nil
+}
+
+// DecodeAll reads every native QR in an image, plus at most one Data Matrix and
+// one Aztec symbol. The optional zbar fallback runs only when no native QR was
+// found. Exact duplicate format/text pairs are returned once.
+func DecodeAll(ctx context.Context, r io.Reader) ([]Barcode, error) {
+	img, bmp, err := loadImage(ctx, r)
+	if err != nil {
+		return nil, err
+	}
+
+	var out []Barcode
+	if results, err := multiqrcode.NewQRCodeMultiReader().DecodeMultipleWithoutHint(bmp); err == nil {
+		for _, res := range results {
+			out = append(out, Barcode{Text: res.GetText(), Format: "QR"})
+		}
+	}
+	qrFound := len(out) != 0
+	out = appendOtherNative(out, bmp)
+	if !qrFound {
+		qr, fallbackErr := decodeZBarQR(ctx, img)
+		out = append(out, qr...)
+		out = deduplicate(out)
+		return out, fallbackErr
+	}
+	return deduplicate(out), nil
+}
+
+func loadImage(ctx context.Context, r io.Reader) (image.Image, *gozxing.BinaryBitmap, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	// Replay the header bytes consumed by DecodeConfig without copying the
+	// entire upload. Reject decompression-sized dimensions before allocation.
+	var header bytes.Buffer
+	config, _, err := image.DecodeConfig(io.TeeReader(r, &header))
+	if err != nil {
+		return nil, nil, fmt.Errorf("barcode: image config: %w", err)
+	}
+	const maxPixels = 64 * 1024 * 1024
+	if config.Width <= 0 || config.Height <= 0 || config.Width > maxPixels/config.Height {
+		return nil, nil, errors.New("barcode: image exceeds 64 megapixel decode limit")
+	}
+	img, _, err := image.Decode(io.MultiReader(&header, r))
+	if err != nil {
+		return nil, nil, fmt.Errorf("barcode: image decode: %w", err)
+	}
+	bmp, err := gozxing.NewBinaryBitmapFromImage(img)
+	if err != nil {
+		return nil, nil, fmt.Errorf("barcode: bitmap: %w", err)
+	}
+	return img, bmp, nil
+}
+
+func appendOtherNative(out []Barcode, bmp *gozxing.BinaryBitmap) []Barcode {
+	// Data Matrix and Aztec readers return at most one result.
+	if res, err := datamatrix.NewDataMatrixReader().Decode(bmp, nil); err == nil {
+		out = append(out, Barcode{Text: res.GetText(), Format: "DATA_MATRIX"})
+	}
+	if res, err := aztec.NewAztecReader().Decode(bmp, nil); err == nil {
+		out = append(out, Barcode{Text: res.GetText(), Format: "AZTEC"})
+	}
+	return out
+}
+
+func deduplicate(in []Barcode) []Barcode {
+	if len(in) < 2 {
+		return in
+	}
+	seen := make(map[Barcode]struct{}, len(in))
+	out := in[:0]
+	for _, code := range in {
+		if _, exists := seen[code]; exists {
+			continue
+		}
+		seen[code] = struct{}{}
+		out = append(out, code)
+	}
+	return out
 }
 
 // DecodeBytes is a convenience wrapper for callers that already hold
@@ -129,14 +183,13 @@ func DecodeBytes(ctx context.Context, b []byte) ([]Barcode, error) {
 	return Decode(ctx, bytes.NewReader(b))
 }
 
-// Recognized returns true when we can attempt barcode decoding on a
-// mime type. Cheap MIME check the post-ingest handler uses to skip
-// non-image files without a slow decode attempt.
-func Recognized(mime string) bool {
-	mime = strings.ToLower(mime)
-	return strings.HasPrefix(mime, "image/")
+// DecodeAllBytes is the complete-symbol counterpart to DecodeBytes.
+func DecodeAllBytes(ctx context.Context, b []byte) ([]Barcode, error) {
+	if len(b) == 0 {
+		return nil, errors.New("barcode: empty bytes")
+	}
+	return DecodeAll(ctx, bytes.NewReader(b))
 }
-
 func decodeZBarQR(ctx context.Context, img image.Image) ([]Barcode, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

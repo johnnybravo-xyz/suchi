@@ -82,6 +82,11 @@ export const ARCHIVE_SETTINGS_GROUPS = [
         href: '#/settings?tab=archive&section=folder-layouts',
       },
       {
+        name: 'scan-processing', get label() { return t('configuration.scanProcessing.label') }, icon: 'upload',
+        get description() { return t('configuration.scanProcessing.description') },
+        href: '#/settings?tab=archive&section=scan-processing',
+      },
+      {
         name: 'preferences', get label() { return t('configuration.preferences.label') }, icon: 'settings',
         get description() { return t('configuration.preferences.description') },
         href: '#/settings?tab=archive&section=preferences',

@@ -571,6 +571,12 @@ async function mockAPI(page, options = {}) {
     archive_review_threshold: 0.5,
     archive_auto_threshold: 0.9,
   }
+  let scanSettings = {
+    scan_asn_mode: options.scanASNMode || 'off',
+    scan_asn_prefix: options.scanASNPrefix || 'ASN',
+    scan_split_dpi: options.scanSplitDPI ?? 150,
+    ...(options.scanManaged ? { managed: options.scanManaged } : {}),
+  }
   let trashDocuments = [...(options.trashDocuments || [])]
   let renderedLayouts = (options.renderedLayouts || []).map(layout => ({ ...layout }))
   const restoredDocuments = new Set()
@@ -690,9 +696,21 @@ async function mockAPI(page, options = {}) {
     else if (path === '/api/correspondents/') body = { results: options.correspondents || [] }
     else if (path === '/api/rendered_layouts/preview' && request.method() === 'POST') {
       const template = request.postDataJSON().template
+      const lastVariable = template.lastIndexOf('}}')
+      const trailingLiteral = template.slice(lastVariable < 0 ? template.lastIndexOf('/') + 1 : lastVariable + 2).trim()
+      if (/\.[^./\s]+$/.test(trailingLiteral)) {
+        await route.fulfill({
+          status: 400,
+          json: {
+            code: 'bad_template',
+            error: 'folder layout must not include file extension ".pdf"; Suchi appends the linked file\'s extension',
+          },
+        })
+        return
+      }
       const usesASN = template.includes('{{ asn }}')
       body = {
-        path: usesASN ? 'Legacy/4021/March electricity bill' : '10-19 Home/13 Utilities',
+        path: usesASN ? 'Legacy/4021/March electricity bill.pdf' : '10-19 Home/13 Utilities.pdf',
         uses_asn: usesASN,
       }
     }
@@ -711,6 +729,16 @@ async function mockAPI(page, options = {}) {
       body = { id: Number(renderedLayout[1]) }
     }
     else if (renderedLayout && request.method() === 'DELETE') {
+      if (options.renderedLayoutDeleteConflict) {
+        await route.fulfill({
+          status: 409,
+          json: {
+            code: 'rendered_layout_in_use',
+            error: options.renderedLayoutDeleteConflict,
+          },
+        })
+        return
+      }
       renderedLayouts = renderedLayouts.filter(layout => Number(layout.id) !== Number(renderedLayout[1]))
       await route.fulfill({ status: 204, body: '' })
       return
@@ -874,6 +902,16 @@ async function mockAPI(page, options = {}) {
     else if (path === '/api/admin/settings/preferences') body = {
       backup_interval_hours: 24,
       ocr_languages: ['eng'],
+    }
+    else if (path === '/api/admin/settings/scan') {
+      if (request.method() === 'POST') {
+        const payload = request.postDataJSON()
+        options.scanSettingsRequests?.push(payload)
+        scanSettings = { ...payload }
+        body = {}
+      } else {
+        body = scanSettings
+      }
     }
     else if (path === '/api/admin/settings/ingest') body = {
       fs_watch_dir: '',
@@ -1278,10 +1316,70 @@ test('opens Archive configuration after choosing a filing tree', async ({ page }
   await expect(configuration.getByRole('link', { name: /Email intake/ }).last()).toBeVisible()
   await expect(configuration.getByRole('link', { name: /Classification/ }).last()).toBeVisible()
   await expect(configuration.getByRole('link', { name: /Folder layouts/ }).last()).toBeVisible()
+  await expect(configuration.getByRole('link', { name: /Scan processing/ }).last()).toBeVisible()
   await expect(configuration.getByRole('link', { name: /OCR and backups/ }).last()).toBeVisible()
   const advanced = configuration.locator('.archive-rail .rail-group').filter({ hasText: 'Advanced' })
   await expect(advanced.getByRole('link').nth(0)).toHaveText('Folder layouts')
-  await expect(advanced.getByRole('link').nth(1)).toHaveText('OCR and backups')
+  await expect(advanced.getByRole('link').nth(1)).toHaveText('Scan processing')
+  await expect(advanced.getByRole('link').nth(2)).toHaveText('OCR and backups')
+})
+
+test('updates scan processing from Advanced configuration', async ({ page }) => {
+  const requests = []
+  await mockAPI(page, {
+    filingTreeChosen: true,
+    scanASNMode: 'assign',
+    scanASNPrefix: 'FILE-',
+    scanSplitDPI: 200,
+    scanSettingsRequests: requests,
+  })
+  await page.goto('/#/settings?tab=archive&section=scan-processing')
+
+  const prefix = page.getByRole('textbox', { name: 'QR label prefix' })
+  const dpi = page.getByRole('spinbutton', { name: 'Detection DPI' })
+  await expect(page.getByRole('radio', { name: 'Assign', exact: true })).toBeChecked()
+  await expect(prefix).toHaveValue('FILE-')
+  await expect(dpi).toHaveValue('200')
+  await expect(page.getByText('FILE-4021', { exact: true })).toBeVisible()
+
+  await page.getByRole('radio', { name: 'Off', exact: true }).check()
+  await expect(prefix).toBeHidden()
+  await expect(dpi).toBeHidden()
+
+  await page.getByRole('radio', { name: 'Split', exact: true }).check()
+  await prefix.fill('BOX:')
+  await dpi.fill('300')
+  await expect(page.getByText('BOX:4021', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Save scan processing' }).click()
+
+  await expect.poll(() => requests).toEqual([{
+    scan_asn_mode: 'split',
+    scan_asn_prefix: 'BOX:',
+    scan_split_dpi: 300,
+  }])
+  await expect(page.getByText('Scan processing saved', { exact: true })).toBeVisible()
+  await expect(page.getByRole('radio', { name: 'Split', exact: true })).toBeChecked()
+  await expect(prefix).toHaveValue('BOX:')
+  await expect(dpi).toHaveValue('300')
+})
+
+test('disables scan processing fields pinned by server configuration', async ({ page }) => {
+  await mockAPI(page, {
+    filingTreeChosen: true,
+    scanASNMode: 'split',
+    scanASNPrefix: 'ZRD',
+    scanSplitDPI: 300,
+    scanManaged: { scan_asn_mode: true, scan_asn_prefix: true, scan_split_dpi: false },
+  })
+  await page.goto('/#/settings?tab=archive&section=scan-processing')
+
+  await expect(page.getByText('Mode is set by server configuration.')).toBeVisible()
+  await expect(page.getByRole('radio', { name: 'Split', exact: true })).toBeChecked()
+  await expect(page.getByRole('radio', { name: 'Split', exact: true })).toBeDisabled()
+  await expect(page.getByRole('radio', { name: 'Assign', exact: true })).toBeDisabled()
+  await expect(page.getByRole('textbox', { name: 'QR label prefix' })).toBeDisabled()
+  await expect(page.getByRole('spinbutton', { name: 'Detection DPI' })).toBeEnabled()
+  await expect(page.getByText('ZRD4021', { exact: true })).toBeVisible()
 })
 
 test('disabled deployment features hide integrations and normalize hidden settings links without requests', async ({ page }) => {
@@ -1855,12 +1953,15 @@ test('creates, previews, and deletes Advanced folder layouts', async ({ page }) 
 
   await expect(page.getByRole('heading', { name: 'Folder layouts' })).toBeVisible()
   await expect(page.getByText('Bills by year', { exact: true })).toBeVisible()
-  await expect(page.getByText('10-19 Home/13 Utilities', { exact: true })).toBeVisible()
+  await expect(page.getByText('10-19 Home/13 Utilities.pdf', { exact: true })).toBeVisible()
 
   await page.getByLabel('Layout name').fill('Imported folders')
+  await page.getByLabel('Path template').fill('Legacy/{{ asn }}/{{ title }}.pdf')
+  await expect(page.getByRole('alert').getByText(/must not include file extension/)).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Create layout' })).toBeDisabled()
   await page.getByLabel('Path template').fill('Legacy/{{ asn }}/{{ title }}')
-  await expect(page.getByText('Legacy/4021/March electricity bill', { exact: true })).toBeVisible()
-  await expect(page.getByText('Uses previous archive number', { exact: true })).toBeVisible()
+  await expect(page.getByText('Legacy/4021/March electricity bill.pdf', { exact: true })).toBeVisible()
+  await expect(page.getByText('Uses archive serial number', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Create layout' }).click()
 
   const saved = page.getByRole('region', { name: 'Saved layouts' })
@@ -1871,6 +1972,26 @@ test('creates, previews, and deletes Advanced folder layouts', async ({ page }) 
   await expect(confirmation).toBeVisible()
   await confirmation.getByRole('button', { name: 'Delete layout' }).click()
   await expect(saved.getByText('Imported folders', { exact: true })).toHaveCount(0)
+})
+
+test('keeps a folder layout when an automation blocks deletion', async ({ page }) => {
+  await mockAPI(page, {
+    renderedLayouts: [{
+      id: 4, name: 'Bills by year',
+      path: 'Bills/{{ created_year }}/{{ title }}', uses_asn: false,
+    }],
+    renderedLayoutDeleteConflict: 'folder layout is used by automations: File utility bills; remove those assignments first',
+  })
+  await page.goto('/#/settings?tab=archive&section=folder-layouts')
+
+  const saved = page.getByRole('region', { name: 'Saved layouts' })
+  const bills = saved.locator('.layout-row').filter({ hasText: 'Bills by year' })
+  await bills.getByRole('button', { name: 'Delete' }).click()
+  await page.getByRole('alertdialog', { name: 'Delete folder layout?' })
+    .getByRole('button', { name: 'Delete layout' }).click()
+
+  await expect(saved.getByRole('alert')).toContainText('File utility bills')
+  await expect(saved.getByText('Bills by year', { exact: true })).toBeVisible()
 })
 
 test('lists every automation in run order', async ({ page }) => {
@@ -4499,7 +4620,7 @@ for (const demoSession of ['anon', 'scratch']) {
   })
 }
 
-test('names scoped tokens and account vault records', async ({ page }) => {
+test('names scoped tokens and edits account vault labels', async ({ page }) => {
   await mockAPI(page)
   await page.goto('/#/settings')
 
@@ -4510,6 +4631,23 @@ test('names scoped tokens and account vault records', async ({ page }) => {
   await expect(page.getByText('Authorization: Token <token>', { exact: true })).toBeVisible()
   await page.getByRole('heading', { name: 'Saved decryption passwords' }).scrollIntoViewIfNeeded()
   await expect(page.getByText('Axis Bank Atlas Credit Card Statement ending 0194.pdf')).toBeVisible()
+  const vault = page.getByRole('region', { name: 'Saved decryption passwords', exact: true })
+  const renameLabel = vault.getByRole('button', { name: 'Rename saved password label Hathway broadband invoice password', exact: true })
+  await expect(vault.getByRole('textbox', { name: 'Saved password label', exact: true })).toHaveCount(0)
+  await renameLabel.click()
+  const labelEditor = vault.getByRole('textbox', { name: 'Saved password label', exact: true })
+  await expect(labelEditor).toHaveValue('Hathway broadband invoice password')
+  await labelEditor.fill('Discarded change')
+  await labelEditor.press('Escape')
+  await expect(vault.getByText('Hathway broadband invoice password', { exact: true })).toBeVisible()
+
+  await renameLabel.click()
+  await labelEditor.fill('Broadband statements')
+  const renamed = page.waitForRequest(request =>
+    request.method() === 'PATCH' && new URL(request.url()).pathname === '/api/decryption-passwords/1')
+  await labelEditor.press('Enter')
+  expect((await renamed).postDataJSON()).toEqual({ label: 'Broadband statements' })
+  await expect(vault.getByText('Broadband statements', { exact: true })).toBeVisible()
   await page.getByLabel('Token name').fill('Readonly tablet')
   await page.getByRole('button', { name: 'Read & write' }).click()
   const created = page.waitForRequest(request =>

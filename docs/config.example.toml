@@ -105,8 +105,13 @@ djvu_max_content_bytes = "32M"
 scan_blank_removal = "auto"
 scan_blank_whiteness_threshold = 0.995
 
-# Multi-doc split via a QR/barcode separator page. Token matches the
-# barcode's payload; DPI is the raster resolution.
+# Barcode-assisted physical filing. assign keeps one PDF and reads exactly one
+# ASN label; split requires one ASN label on each segment's first retained page.
+scan_asn_mode = "off"
+scan_asn_prefix = "ASN"
+
+# Legacy disposable separator sheets. The token is the barcode payload; DPI is
+# shared by separator and ASN detection.
 scan_split_enabled = "off"
 scan_split_token = "SUCHI-SPLIT"
 scan_split_dpi = 150

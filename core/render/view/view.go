@@ -38,16 +38,17 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
+	"github.com/johnnybravo-xyz/suchi/core/mimeutil"
 	"github.com/johnnybravo-xyz/suchi/core/render/paths"
 )
 
 // DefaultTemplateJD is what suchi renders against when the doc's
 // storage_paths row is unset AND taxonomy = jd (the default mode).
-const DefaultTemplateJD = `{{ jd.area.code_start }}-{{ jd.area.code_end }} {{ jd.area.name }}/{{ jd.category.code }} {{ jd.category.name }}/{{ created_year }}/{{ created }} {{ title }}__{{ doc_pk }}.pdf`
+const DefaultTemplateJD = `{{ jd.area.code_start }}-{{ jd.area.code_end }} {{ jd.area.name }}/{{ jd.category.code }} {{ jd.category.name }}/{{ created_year }}/{{ created }} {{ title }}__{{ doc_pk }}`
 
 // DefaultTemplateFlat is the fallback for flat-mode installs — the
 // correspondent/year shape, with the same stable date and document-ID suffix.
-const DefaultTemplateFlat = `{{ correspondent }}/{{ created_year }}/{{ created }} {{ title }}__{{ doc_pk }}.pdf`
+const DefaultTemplateFlat = `{{ correspondent }}/{{ created_year }}/{{ created }} {{ title }}__{{ doc_pk }}`
 
 // Renderer is the projection engine. Constructed once at boot;
 // Render(ctx, docID) is safe for concurrent calls.
@@ -233,7 +234,7 @@ func (r *Renderer) finishPending(ctx context.Context, docID int64, moves []pendi
 // Shared between Render (initial) and Move (subsequent) so the target
 // computation lives in one place.
 func (r *Renderer) resolveTarget(ctx context.Context, docID int64) (string, string, error) {
-	tpl, cctx, blobHash, err := r.buildContext(ctx, docID)
+	tpl, cctx, blobHash, ext, err := r.buildContext(ctx, docID)
 	if err != nil {
 		return "", "", fmt.Errorf("view.build: %w", err)
 	}
@@ -251,6 +252,7 @@ func (r *Renderer) resolveTarget(ctx context.Context, docID int64) (string, stri
 	if rendered == "" {
 		return "", "", errors.New("view: rendered path empty after sanitize")
 	}
+	rendered += ext
 	if cctx.JDSystemCode != "" {
 		if paths.IsIndexPath(rendered) {
 			return "", "", errors.New("view: reserved system index path")
@@ -376,8 +378,9 @@ func (r *Renderer) checkDocumentPath(relative string) error {
 }
 
 // buildContext loads the doc + related rows and returns the template
-// to use + the render context + the blob hash to symlink at.
-func (r *Renderer) buildContext(ctx context.Context, docID int64) (string, paths.Context, string, error) {
+// to use + the render context + the blob hash to symlink at + the filename
+// extension of that blob. Templates never carry the extension.
+func (r *Renderer) buildContext(ctx context.Context, docID int64) (string, paths.Context, string, string, error) {
 	var (
 		title                        string
 		correspondent                sql.NullString
@@ -385,6 +388,7 @@ func (r *Renderer) buildContext(ctx context.Context, docID int64) (string, paths
 		storagePathName              sql.NullString
 		archiveBlob                  sql.NullString
 		originalBlob                 string
+		originalMIME                 string
 		created                      int64
 		added                        sql.NullInt64
 		asn                          sql.NullInt64
@@ -403,7 +407,7 @@ func (r *Renderer) buildContext(ctx context.Context, docID int64) (string, paths
 			 WHERE dc.document_id=d.id AND dc.role='sender'
 			 ORDER BY dc.position,dc.correspondent_id LIMIT 1),
 			sp.path, sp.name,
-			d.archive_blob, d.original_blob,
+			d.archive_blob, d.original_blob, COALESCE(d.mime_type, ''),
 			d.created_at, d.added_at, d.archive_serial_number,
 			u.email,
 			jc.code, jc.name,
@@ -417,10 +421,10 @@ func (r *Renderer) buildContext(ctx context.Context, docID int64) (string, paths
 		WHERE d.id = ? AND d.trashed_at IS NULL
 	`, docID).Scan(&title, &correspondent,
 		&storagePathTpl, &storagePathName,
-		&archiveBlob, &originalBlob, &created, &added, &asn,
+		&archiveBlob, &originalBlob, &originalMIME, &created, &added, &asn,
 		&ownerEmail, &jdCode, &jdName, &areaStart, &areaEnd, &areaName, &systemCode, &systemName, &mode)
 	if err != nil {
-		return "", paths.Context{}, "", err
+		return "", paths.Context{}, "", "", err
 	}
 
 	tpl := ""
@@ -438,14 +442,14 @@ func (r *Renderer) buildContext(ctx context.Context, docID int64) (string, paths
 	// Read tags for the template context.
 	tags, err := r.docTags(ctx, docID)
 	if err != nil {
-		return "", paths.Context{}, "", err
+		return "", paths.Context{}, "", "", err
 	}
 
-	// Blob to link at: archive if present (searchable OCR'd form),
-	// original otherwise.
-	blobHash := originalBlob
+	// Blob to link at: archive if present (searchable OCR'd form, always a
+	// PDF), original otherwise. The extension names the linked bytes.
+	blobHash, ext := originalBlob, mimeutil.Extension(originalMIME)
 	if archiveBlob.Valid && archiveBlob.String != "" {
-		blobHash = archiveBlob.String
+		blobHash, ext = archiveBlob.String, ".pdf"
 	}
 
 	cctx := paths.Context{
@@ -485,7 +489,7 @@ func (r *Renderer) buildContext(ctx context.Context, docID int64) (string, paths
 			}
 		}
 	}
-	return tpl, cctx, blobHash, nil
+	return tpl, cctx, blobHash, ext, nil
 }
 
 func (r *Renderer) docTags(ctx context.Context, docID int64) ([]string, error) {

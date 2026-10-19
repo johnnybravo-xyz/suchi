@@ -304,6 +304,8 @@ export const saveClassificationAutoApply = (auto_apply) =>
 export const testLLMSettings = (b) => api.post('/api/admin/settings/llm/test', b)
 export const getPreferences = () => api.get('/api/admin/settings/preferences')
 export const savePreferences = (b) => api.post('/api/admin/settings/preferences', b)
+export const getScanSettings = () => api.get('/api/admin/settings/scan')
+export const saveScanSettings = (b) => api.post('/api/admin/settings/scan', b)
 export const getIngestSettings = () => api.get('/api/admin/settings/ingest')
 export const saveIngestSettings = (b) => api.post('/api/admin/settings/ingest', b)
 
