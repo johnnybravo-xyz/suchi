@@ -57,6 +57,7 @@ type V1 struct {
 	Tags                []string       `json:"tags,omitempty"`
 	Created             string         `json:"created,omitempty"` // ISO8601
 	Notes               string         `json:"notes,omitempty"`
+	Sensitivity         string         `json:"sensitivity,omitempty"`
 	JDCategory          int            `json:"jd_category,omitempty"`
 	JDSystem            string         `json:"jd_system,omitempty"`
 	JDAddress           string         `json:"jd_address,omitempty"`
@@ -107,10 +108,17 @@ func Parse(b []byte) (*V1, error) {
 		// string. Peel to just the display name so tag lookups
 		// aren't confused by the angle-bracket suffix.
 		s.Correspondent = normalizeCorrespondent(s.Correspondent)
+		// The flat compatibility contract does not include sensitivity.
+		s.Sensitivity = ""
 		return &s, nil
 	}
 	if s.Version != Version {
 		return nil, fmt.Errorf("sidecar: unsupported version %d (this build understands v%d)", s.Version, Version)
+	}
+	switch s.Sensitivity {
+	case "", "public", "internal", "confidential", "restricted":
+	default:
+		return nil, fmt.Errorf("sidecar: invalid sensitivity %q", s.Sensitivity)
 	}
 	return &s, nil
 }

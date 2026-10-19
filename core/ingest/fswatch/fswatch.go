@@ -382,6 +382,15 @@ func (w *Watcher) ingestOpen(ctx context.Context, path, relativePath string, f *
 // for a freshly-created document. Any invalid metadata aborts the ingest
 // transaction, so producers never get a partially annotated document.
 func applySidecar(ctx context.Context, tx *sql.Tx, docID int64, s *sidecar.V1, ownerID, systemID int64) error {
+	if s.Sensitivity != "" {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE documents SET sensitivity = ? WHERE id = ?`,
+			s.Sensitivity, docID,
+		); err != nil {
+			return err
+		}
+	}
+
 	now := time.Now().Unix()
 	if s.ArchiveSerialNumber != nil {
 		if err := asn.ValidateValue(*s.ArchiveSerialNumber); err != nil {

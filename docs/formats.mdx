@@ -675,6 +675,7 @@ Version, split and attachment documents inherit their source system.
     { "name": "Ritesh S.", "role": "recipient" }
   ],
   "tags": ["utilities", "source:fs-watch"],
+  "sensitivity": "restricted",
   "jd_category": 31,
   "archive_serial_number": 4021,
   "notes": "auto-picked-up",
@@ -691,6 +692,7 @@ Version, split and attachment documents inherit their source system.
 | `correspondent`    | string            | Singular sender name (legacy shape). When `correspondents[]` is also set, the array wins.                                                                    |
 | `correspondents[]` | array             | Multi-party form. Each entry is `{name, role}`; role is `sender \| recipient \| cc \| other` (`sender` when omitted). Applied via `document_correspondents`. |
 | `tags[]`           | array             | Tag slugs. Auto-created on ingest.                                                                                                                           |
+| `sensitivity`       | string, optional  | `public`, `internal`, `confidential`, or `restricted`. Any other non-empty value rejects versioned intake; the flat compatibility path ignores this field. |
 | `jd_category`      | int               | JD code (e.g. `31` = "Utilities" under area 30–39). Falls through to inbox when unresolved.                                                                  |
 | `jd_system`        | string, optional  | Source/expected system code. When supplied, must match the configured intake target; never routes or creates a system.                                       |
 | `archive_serial_number` | int, optional     | Positive integer no greater than `9007199254740991`. Unique within the intake filing system across live, trashed, and historical versions; a conflict rejects the intake atomically. |
@@ -699,21 +701,24 @@ Version, split and attachment documents inherit their source system.
 | `custom_fields`    | object            | Map of exact custom-field name → typed value. The field must already exist (`/api/custom_fields/`); API validation follows its declared type.                |
 
 **Source of truth**: `core/ingest/sidecar/sidecar.go` parses the wire shape;
-`core/ingest/fswatch` applies it. Metadata, ASN, the note, typed custom fields,
-and the ingest outbox commit together. An occupied ASN, unknown custom field,
-invalid typed value, bad JSON, or explicit-but-mismatched `suchi_sidecar`
-version rejects the intake without partial metadata. The read-only watcher
-retains the source file and records the bounded failure in Suchi-owned state.
-Producers that omit `suchi_sidecar` get the flat-JSON compatibility shape
-(`title`/`title_owner`/`created`/`correspondent`/`tags` only).
+`core/ingest/fswatch` applies it. Sensitivity, metadata, ASN, the note, typed
+custom fields, and the ingest outbox commit together. An invalid sensitivity,
+occupied ASN, unknown custom field, invalid typed value, bad JSON, or
+explicit-but-mismatched `suchi_sidecar` version rejects the intake without
+partial metadata. The read-only watcher retains the source file and records the
+bounded failure in Suchi-owned state. Producers that omit `suchi_sidecar` get
+the flat-JSON compatibility shape
+(`title`/`title_owner`/`created`/`correspondent`/`tags` only); fields outside
+that shape, including `sensitivity`, are ignored.
 
 The native `suchi export` sidecar is a partial takeout, not a complete restore
 contract. It carries title ownership with the title, source date,
-correspondents, tags, JD category, and ASN, which fs-watch applies.
-Per-document custom-field values and notes are not exported. `sensitivity`,
-`mime_type`, and `sha256` may appear for provenance, but the current sidecar
-parser ignores them; MIME and SHA-256 are recomputed from the file and
-sensitivity is not restored.
+correspondents, tags, JD category, ASN, sensitivity, and restorable custom-field
+values, which fs-watch applies. Notes are not exported. Document-link and
+extraction-managed custom fields are omitted because document IDs are not
+portable and extraction reads managed values again from the original.
+`mime_type` and `sha256` may appear for provenance, but the parser ignores them;
+MIME and SHA-256 are recomputed from the file.
 Native takeout manifest version `"3"` identifies one selected system and
 includes these optional source fields while sidecar format remains 1.
 Reingestion preserves available ASNs but can allocate new installation-global

@@ -63,7 +63,10 @@ func TestIntakeSystemIsolationAndWriterMembership(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		side := &sidecar.V1{Version: 1, JDSystem: code, Correspondent: "Shared name", Tags: []string{"Shared tag"}}
+		side := &sidecar.V1{
+			Version: 1, JDSystem: code, Correspondent: "Shared name",
+			Tags: []string{"Shared tag"}, Sensitivity: "restricted",
+		}
 		side.ArchiveSerialNumber = &sharedASN
 		side.Title = "Curated title"
 		if i == 1 {
@@ -79,17 +82,21 @@ func TestIntakeSystemIsolationAndWriterMembership(t *testing.T) {
 		t.Fatal("cross-system upload reused document identity")
 	}
 	var sharedBlob, metadataIsolated bool
-	var firstTitle, firstOwner, secondTitle, secondOwner string
+	var firstTitle, firstOwner, firstSensitivity string
+	var secondTitle, secondOwner, secondSensitivity string
 	var firstASN, secondASN int64
 	if err := d.Read.QueryRowContext(ctx, `
 		SELECT a.original_blob = b.original_blob,
 		       (SELECT correspondent_id FROM document_correspondents WHERE document_id=a.id AND role='sender' ORDER BY position,correspondent_id LIMIT 1) !=
 		       (SELECT correspondent_id FROM document_correspondents WHERE document_id=b.id AND role='sender' ORDER BY position,correspondent_id LIMIT 1),
-		       a.title, a.title_owner, b.title, b.title_owner,
+		       a.title, a.title_owner, a.sensitivity,
+		       b.title, b.title_owner, b.sensitivity,
 		       a.archive_serial_number, b.archive_serial_number
 		FROM documents a, documents b
 		WHERE a.id = ? AND b.id = ?`, ids[0], ids[1]).Scan(
-		&sharedBlob, &metadataIsolated, &firstTitle, &firstOwner, &secondTitle, &secondOwner,
+		&sharedBlob, &metadataIsolated,
+		&firstTitle, &firstOwner, &firstSensitivity,
+		&secondTitle, &secondOwner, &secondSensitivity,
 		&firstASN, &secondASN,
 	); err != nil {
 		t.Fatal(err)
@@ -99,6 +106,9 @@ func TestIntakeSystemIsolationAndWriterMembership(t *testing.T) {
 	}
 	if firstTitle != "Curated title" || firstOwner != "human" || secondTitle != "Rule title" || secondOwner != "rule" {
 		t.Fatalf("sidecar titles=%q/%q and %q/%q", firstTitle, firstOwner, secondTitle, secondOwner)
+	}
+	if firstSensitivity != "restricted" || secondSensitivity != "restricted" {
+		t.Fatalf("sidecar sensitivities=%q/%q", firstSensitivity, secondSensitivity)
 	}
 	if firstASN != sharedASN || secondASN != sharedASN {
 		t.Fatalf("system-scoped sidecar ASN values=%d/%d", firstASN, secondASN)
@@ -153,15 +163,20 @@ func TestIntakeSystemIsolationAndWriterMembership(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, _, err := watchers[0].ingest(ctx, path, &sidecar.V1{
-		Version: 1, JDSystem: "S01", CustomFields: map[string]any{"Unknown field": "value"},
+		Version: 1, JDSystem: "S01", Sensitivity: "restricted",
+		CustomFields: map[string]any{"Unknown field": "value"},
 	}); err == nil || !strings.Contains(err.Error(), `custom field "Unknown field" is not defined`) {
 		t.Fatalf("unknown sidecar custom field: %v", err)
 	}
-	if err := d.Read.QueryRowContext(ctx, `SELECT COUNT(*) FROM documents`).Scan(&count); err != nil {
+	var restrictedCount int
+	if err := d.Read.QueryRowContext(ctx, `
+		SELECT COUNT(*), SUM(CASE WHEN sensitivity = 'restricted' THEN 1 ELSE 0 END)
+		FROM documents
+	`).Scan(&count, &restrictedCount); err != nil {
 		t.Fatal(err)
 	}
-	if count != 2 {
-		t.Fatalf("invalid custom field leaked a document: %d", count)
+	if count != 2 || restrictedCount != 2 {
+		t.Fatalf("invalid custom field leaked a document or sensitivity: documents=%d restricted=%d", count, restrictedCount)
 	}
 
 	// Fail at the final outbox insert, after the new row, source and sidecar

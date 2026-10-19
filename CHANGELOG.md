@@ -31,6 +31,10 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Versioned filesystem sidecars now validate and restore document sensitivity,
+  including sensitivity emitted by native exports. Invalid sensitivity or later
+  metadata failures leave no partial intake; unversioned compatibility
+  sidecars continue to ignore fields outside their original flat shape.
 - Starting a second Suchi process against the same archive now fails immediately
   with `archive_in_use` instead of running independent writers and workers
   against one SQLite database.

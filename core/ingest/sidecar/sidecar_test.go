@@ -19,6 +19,7 @@ func TestParseValid(t *testing.T) {
 		"notes": "auto-fetched",
 		"jd_category": 31,
 		"archive_serial_number": 4021,
+		"sensitivity": "restricted",
 		"custom_fields": {"Financial Year": "2025-26"}
 	}`)
 	s, err := sidecar.Parse(b)
@@ -39,6 +40,9 @@ func TestParseValid(t *testing.T) {
 	}
 	if s.JDCategory != 31 {
 		t.Errorf("JDCategory=%d", s.JDCategory)
+	}
+	if s.Sensitivity != "restricted" {
+		t.Errorf("Sensitivity=%q", s.Sensitivity)
 	}
 	if s.CreatedUnix() == 0 {
 		t.Errorf("CreatedUnix=0 (created=%q)", s.Created)
@@ -72,6 +76,7 @@ func TestParseRejects(t *testing.T) {
 		"wrong-version":               `{"suchi_sidecar": 99}`,
 		"malformed-json":              `{`,
 		"invalid-title-owner":         `{"suchi_sidecar": 1, "title": "x", "title_owner": "model"}`,
+		"invalid-sensitivity":         `{"suchi_sidecar": 1, "sensitivity": "secret"}`,
 		"zero-archive-serial-number":  `{"suchi_sidecar": 1, "archive_serial_number": 0}`,
 		"large-archive-serial-number": `{"suchi_sidecar": 1, "archive_serial_number": 9007199254740992}`,
 	}
@@ -93,7 +98,8 @@ func TestParseFlatCompat(t *testing.T) {
 		"title": "Electricity bill March 2026",
 		"created": "2026-03-02T00:00:00Z",
 		"correspondent": "BESCOM Billing <bills@bescom.co.in>",
-		"tags": ["utilities","source:email"]
+		"tags": ["utilities","source:email"],
+		"sensitivity": "restricted"
 	}`)
 	s, err := sidecar.Parse(body)
 	if err != nil {
@@ -114,6 +120,9 @@ func TestParseFlatCompat(t *testing.T) {
 	}
 	if got := s.CreatedUnix(); got == 0 {
 		t.Errorf("CreatedUnix=0 — RFC3339 date should parse")
+	}
+	if s.Sensitivity != "" {
+		t.Errorf("flat compatibility sensitivity=%q, want ignored", s.Sensitivity)
 	}
 }
 
