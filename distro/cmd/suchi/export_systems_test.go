@@ -33,7 +33,6 @@ func TestNativeTakeoutAllOwnersStaysInSelectedSystem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
 	migs, err := db.LoadMigrations(migrations.FS, ".")
 	if err != nil {
 		t.Fatal(err)
@@ -58,6 +57,9 @@ func TestNativeTakeoutAllOwnersStaysInSelectedSystem(t *testing.T) {
  INSERT INTO documents(system_id,id,owner_id,original_blob,original_size,title,title_owner,mime_type,jd_category_id,created_at,updated_at) VALUES(1,147,1,?,22,'Excluded audit file','human','text/plain',1,0,0),(2,148,1,?,22,'First owner','rule','text/plain',2,0,0),(2,149,2,?,22,'Second owner','human','text/plain',2,0,0);
  UPDATE documents SET archive_serial_number=4021 WHERE id=148;`, ref.SHA256, ref.SHA256, ref.SHA256)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
 		t.Fatal(err)
 	}
 	ambiguous := filepath.Join(base, "ambiguous.zip")
@@ -159,7 +161,6 @@ func TestExportProtectsDestinationAndIncompleteArchives(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
 	migs, err := db.LoadMigrations(migrations.FS, ".")
 	if err != nil {
 		t.Fatal(err)
@@ -178,6 +179,9 @@ func TestExportProtectsDestinationAndIncompleteArchives(t *testing.T) {
 		VALUES(1,147,1,?,1,'Missing original','text/plain',1,0,0);`,
 		strings.Repeat("0", 64))
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -296,7 +300,6 @@ func TestExportSidecarsCarryCustomFieldValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
 	migs, err := db.LoadMigrations(migrations.FS, ".")
 	if err != nil {
 		t.Fatal(err)
@@ -344,6 +347,9 @@ func TestExportSidecarsCarryCustomFieldValues(t *testing.T) {
 			(10,8,'["Home","Tax"]',NULL,NULL,NULL,NULL),
 			(10,9,NULL,NULL,11,NULL,NULL),
 			(10,10,NULL,1840,NULL,NULL,NULL);`, ref.SHA256, receipt.SHA256); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
 		t.Fatal(err)
 	}
 	out := filepath.Join(t.TempDir(), "takeout.zip")
