@@ -35,6 +35,10 @@ Notable user-visible changes to Suchi are recorded here.
   including sensitivity emitted by native exports. Invalid sensitivity or later
   metadata failures leave no partial intake; unversioned compatibility
   sidecars continue to ignore fields outside their original flat shape.
+- Watched-folder files with a known document extension keep that format even
+  when their first lines look like email headers. Bank exports saved as `.xls`
+  that begin with `Date : ...` were stored as `message/rfc822` and indexed
+  nothing; extensionless Maildir handoff names are still detected as email.
 - Starting a second Suchi process against the same archive now fails immediately
   with `archive_in_use` instead of running independent writers and workers
   against one SQLite database.

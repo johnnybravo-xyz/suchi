@@ -208,10 +208,14 @@ func (w *Watcher) ingestOpen(ctx context.Context, path, relativePath string, f *
 		w.log.Warn("fswatch.mime_sniff", "err", err.Error())
 		mime = mimeutil.ApplicationOctetStream
 	}
-	if emlLooksLikeEmail(w.cas, ref.SHA256) {
+	// A known document extension wins over the header-shape email sniff: bank
+	// exports saved as .xls often begin with "Date : ..." lines. Extensionless
+	// Maildir names still fall through to the sniff.
+	if refined := mimeutil.RefineByFilename(mime, path); refined != mime {
+		mime = refined
+	} else if emlLooksLikeEmail(w.cas, ref.SHA256) {
 		mime = mimeutil.MessageRFC822
 	}
-	mime = mimeutil.RefineByFilename(mime, path)
 
 	title := deriveTitle(path, side)
 	titleOwner := "auto"
