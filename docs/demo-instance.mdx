@@ -85,6 +85,21 @@ is stored, creating each named document-link field on first use. The seeder
 records each fixture's filename as an import source, which is how these
 references resolve.
 
+A fixture whose original is kept can carry the number on its label:
+
+```json
+"archive_serial_number": 4021
+```
+
+Numbers must be positive and unique, and only the newest fixture in a version
+history may hold one, matching how a replacement takes over its predecessor's
+number. The seed fails before writing otherwise. Visitors can then find the
+document with `asn:4021`.
+
+Factur-X, ZUGFeRD and XRechnung invoices need no manifest field. Post-ingest
+reads the embedded XML like any upload and fills the extraction-managed
+`invoice_*` custom fields.
+
 ## Guided feature tour
 
 The first dashboard visit in a browser redirects to the Demo guide once per

@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -243,5 +244,94 @@ func TestDemoManifestSeedsVersionsAndLinks(t *testing.T) {
 	}
 	if _, err := demo.SeedFromManifest(ctx, opts); err == nil {
 		t.Fatal("a version that precedes its predecessor must be rejected")
+	}
+}
+
+func TestDemoManifestSeedsArchiveSerialNumbers(t *testing.T) {
+	ctx := t.Context()
+	d := newDemoTestDB(t)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if err := applyDemoTree(ctx, d, log); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	cas, err := blob.New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "fixtures"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeManifest := func(fixtures []demo.ManifestFixture) {
+		t.Helper()
+		for _, f := range fixtures {
+			if err := os.WriteFile(filepath.Join(dir, "fixtures", f.Filename), []byte(f.Filename), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		body, err := json.Marshal(demo.Manifest{Version: demo.DemoCorpusVersion, Fixtures: fixtures})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "manifest.json"), body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	opts := demo.SeedOptions{CorpusDir: dir, Log: log, FixtureIngest: makeFixtureIngest(d, cas, 1, 100)}
+
+	writeManifest([]demo.ManifestFixture{
+		{Filename: "certificate.txt", ArchiveSerialNumber: 1001},
+		{Filename: "draft.txt"},
+		{Filename: "signed.txt", PreviousVersion: "draft.txt", ArchiveSerialNumber: 1002},
+		{Filename: "receipt.txt"},
+	})
+	for _, run := range []string{"first", "repeat"} {
+		stats, err := demo.SeedFromManifest(ctx, opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stats.Failed != 0 {
+			t.Fatalf("%s seed stats = %+v", run, stats)
+		}
+	}
+	got := map[string]sql.NullInt64{}
+	rows, err := d.Read.QueryContext(ctx, `SELECT title, archive_serial_number FROM documents`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var title string
+		var serial sql.NullInt64
+		if err := rows.Scan(&title, &serial); err != nil {
+			t.Fatal(err)
+		}
+		got[title] = serial
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]int64{"Certificate": 1001, "Draft": 0, "Signed": 1002, "Receipt": 0}
+	for title, serial := range want {
+		if got[title].Int64 != serial || got[title].Valid != (serial != 0) {
+			t.Fatalf("%s archive serial number = %+v, want %d", title, got[title], serial)
+		}
+	}
+
+	for name, fixtures := range map[string][]demo.ManifestFixture{
+		"duplicate": {{Filename: "a.txt", ArchiveSerialNumber: 7}, {Filename: "b.txt", ArchiveSerialNumber: 7}},
+		"negative":  {{Filename: "a.txt", ArchiveSerialNumber: -7}},
+		"replaced":  {{Filename: "a.txt", ArchiveSerialNumber: 7}, {Filename: "b.txt", PreviousVersion: "a.txt"}},
+	} {
+		writeManifest(fixtures)
+		if _, err := demo.SeedFromManifest(ctx, opts); err == nil {
+			t.Fatalf("%s archive serial number must be rejected", name)
+		}
+	}
+	var unlabelled int
+	if err := d.Read.QueryRowContext(ctx, `SELECT COUNT(*) FROM documents WHERE title IN ('A', 'B')`).Scan(&unlabelled); err != nil {
+		t.Fatal(err)
+	}
+	if unlabelled != 0 {
+		t.Fatalf("rejected manifests wrote %d documents", unlabelled)
 	}
 }
