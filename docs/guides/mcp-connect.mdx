@@ -4,9 +4,10 @@ description: "Wire Claude Desktop, Cursor, or a remote MCP runtime to a running 
 ---
 
 Suchi ships an MCP (Model Context Protocol) adapter that exposes the
-REST surface as tools an LLM agent can call. Five tools total —
+REST surface as tools an LLM agent can call. Eight tools total —
 `search_documents`, `get_document`, `list_inbox`,
-`resolve_approval_task`, `create_share_link`. See [MCP reference](/mcp)
+`resolve_approval_task`, `create_share_link`, `list_custom_fields`,
+`set_custom_field`, `clear_custom_field`. See [MCP reference](/mcp-server)
 for the tool schemas.
 
 This guide wires the adapter into three common runtimes. The pattern
@@ -49,8 +50,8 @@ apply; a scope alone does not grant access, and membership removal revokes crede
 
   Every MCP action is attributed to the token's owner in the audit log.
   A Read-only token supports search, document reads, and inbox inspection.
-  Choose Read & write only when the client must resolve approvals or create
-  share links.
+  Choose Read & write only when the client must resolve approvals, create share
+  links, or set and clear custom-field values.
 
 - The `suchi` binary somewhere on PATH, or the shipped `suchi-mcp`
   symlink (the binary responds to argv[0] rewrite so
@@ -182,6 +183,6 @@ authentication.
 
 Related:
 
-- [MCP reference](/mcp) — full tool schemas.
+- [MCP reference](/mcp-server) — full tool schemas.
 - [External app via API token](/guides/external-app) — same token
   flow, non-MCP consumer.

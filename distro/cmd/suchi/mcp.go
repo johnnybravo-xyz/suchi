@@ -160,6 +160,16 @@ func newSuchiClient(base, token string) *suchiClient {
 // bounded, valid JSON on 2xx and reports failures without response text or
 // query values that may contain document data.
 func (c *suchiClient) do(ctx context.Context, method, path string, body io.Reader) ([]byte, error) {
+	return c.doResponse(ctx, method, path, body, false)
+}
+
+// doNoContent issues a write that must complete with 204 No Content.
+func (c *suchiClient) doNoContent(ctx context.Context, method, path string, body io.Reader) error {
+	_, err := c.doResponse(ctx, method, path, body, true)
+	return err
+}
+
+func (c *suchiClient) doResponse(ctx context.Context, method, path string, body io.Reader, expectNoContent bool) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.base+path, body)
 	if err != nil {
 		return nil, errors.New("suchi request could not be constructed")
@@ -187,6 +197,18 @@ func (c *suchiClient) do(ctx context.Context, method, path string, body io.Reade
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return nil, safeAPIResponseError(method, path, resp.StatusCode, b)
+	}
+	if expectNoContent {
+		if resp.StatusCode != http.StatusNoContent {
+			return nil, errors.New("suchi write did not return 204 No Content")
+		}
+		if len(b) != 0 {
+			return nil, errors.New("suchi returned a body with 204 No Content")
+		}
+		return nil, nil
+	}
+	if resp.StatusCode == http.StatusNoContent {
+		return nil, errors.New("suchi returned unexpected 204 No Content")
 	}
 	mediaType, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if err != nil || mediaType != "application/json" {
@@ -242,6 +264,9 @@ func registerTools(server *mcp.Server, client *suchiClient) {
 	registerListInbox(server, client)
 	registerResolveApprovalTask(server, client)
 	registerCreateShareLink(server, client)
+	registerListCustomFields(server, client)
+	registerSetCustomField(server, client)
+	registerClearCustomField(server, client)
 }
 
 // --- search_documents ---
@@ -361,6 +386,85 @@ func registerCreateShareLink(server *mcp.Server, client *suchiClient) {
 	})
 }
 
+// --- list_custom_fields ---
+
+type listCustomFieldsArgs struct{}
+
+func registerListCustomFields(server *mcp.Server, client *suchiClient) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "list_custom_fields",
+		Description: "List the custom-field definitions in the token's filing system: " +
+			"id, name, data type and type options such as select choices. " +
+			"A documentlink field relates one document to another.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ listCustomFieldsArgs) (*mcp.CallToolResult, any, error) {
+		b, err := client.do(ctx, "GET", "/api/custom_fields/?page_size=500", nil)
+		return textResult(b, err)
+	})
+}
+
+// --- set_custom_field ---
+
+type setCustomFieldArgs struct {
+	DocumentID int64  `json:"document_id" jsonschema:"the document whose field value is set"`
+	Field      string `json:"field" jsonschema:"the custom field's exact name or numeric id"`
+	Value      any    `json:"value" jsonschema:"the typed value; for a documentlink field, the target document id"`
+}
+
+func registerSetCustomField(server *mcp.Server, client *suchiClient) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "set_custom_field",
+		Description: "Set one custom-field value on a document, replacing any existing value. " +
+			"For a documentlink field the value is the id of the document to link to. " +
+			"Values belong to that exact document version: a replacement version starts without them, " +
+			"and a link keeps pointing at the version it names. Link to the current version " +
+			"(search returns current versions by default). Suchi validates the value against " +
+			"the field's type and checks permission on both documents. Use clear_custom_field to remove a value.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args setCustomFieldArgs) (*mcp.CallToolResult, any, error) {
+		path, err := customFieldValuePath(args.DocumentID, args.Field)
+		if err != nil {
+			return nil, nil, err
+		}
+		if text, isText := args.Value.(string); args.Value == nil || (isText && strings.TrimSpace(text) == "") {
+			return nil, nil, errors.New("value is required; use clear_custom_field to remove a value")
+		}
+		body, _ := json.Marshal(map[string]any{"value": args.Value})
+		err = client.doNoContent(ctx, "PUT", path, strings.NewReader(string(body)))
+		return confirmationResult(err, "set", args.DocumentID, args.Field)
+	})
+}
+
+// --- clear_custom_field ---
+
+type clearCustomFieldArgs struct {
+	DocumentID int64  `json:"document_id" jsonschema:"the document whose field value is removed"`
+	Field      string `json:"field" jsonschema:"the custom field's exact name or numeric id"`
+}
+
+func registerClearCustomField(server *mcp.Server, client *suchiClient) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "clear_custom_field",
+		Description: "Remove one custom-field value from a document. For a documentlink field this removes the link.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args clearCustomFieldArgs) (*mcp.CallToolResult, any, error) {
+		path, err := customFieldValuePath(args.DocumentID, args.Field)
+		if err != nil {
+			return nil, nil, err
+		}
+		err = client.doNoContent(ctx, "DELETE", path, nil)
+		return confirmationResult(err, "cleared", args.DocumentID, args.Field)
+	})
+}
+
+// customFieldValuePath escapes the field reference because field names may
+// contain spaces or slashes.
+func customFieldValuePath(documentID int64, field string) (string, error) {
+	field = strings.TrimSpace(field)
+	if documentID <= 0 || field == "" {
+		return "", errors.New("document_id must be > 0 and field non-empty")
+	}
+	return "/api/documents/" + strconv.FormatInt(documentID, 10) +
+		"/custom_fields/" + url.PathEscape(field), nil
+}
+
 // ---------- helpers ----------
 
 // textResult wraps a JSON byte-slice response into a CallToolResult
@@ -375,6 +479,19 @@ func textResult(b []byte, err error) (*mcp.CallToolResult, any, error) {
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: string(b)}},
 	}, nil, nil
+}
+
+// confirmationResult reports a write whose API response has no body.
+func confirmationResult(err error, status string, documentID int64, field string) (*mcp.CallToolResult, any, error) {
+	if err != nil {
+		return nil, nil, err
+	}
+	b, _ := json.Marshal(map[string]any{
+		"document_id": documentID,
+		"field":       strings.TrimSpace(field),
+		"status":      status,
+	})
+	return textResult(b, nil)
 }
 
 func firstNonEmpty(vs ...string) string {
