@@ -148,6 +148,36 @@
       vault = res?.results || res || []
     } catch (ex) { vaultErr = ex.message || translate("accountSettings.couldNotLoadTheVault") }
   }
+  let editingVaultID = $state(0)
+  let vaultDraft = $state('')
+  function startVaultRename(v) {
+    editingVaultID = v.id
+    vaultDraft = v.label || ''
+  }
+  function focusVaultEditor(node) {
+    queueMicrotask(() => {
+      node.focus()
+      node.select()
+    })
+  }
+  async function focusVaultRenameButton(id) {
+    await tick()
+    document.getElementById(`vault-rename-${id}`)?.focus()
+  }
+  function cancelVaultRename(v) {
+    if (editingVaultID !== v.id) return
+    editingVaultID = 0
+    vaultDraft = ''
+    void focusVaultRenameButton(v.id)
+  }
+  function commitVaultRename(v, restoreFocus = false) {
+    if (editingVaultID !== v.id) return
+    const next = vaultDraft
+    editingVaultID = 0
+    vaultDraft = ''
+    void renameVault(v, next)
+    if (restoreFocus) void focusVaultRenameButton(v.id)
+  }
   async function renameVault(v, next) {
     const trimmed = (next || '').trim()
     if (trimmed === (v.label || '')) return
@@ -431,17 +461,49 @@
       {#if vaultErr}<div class="err">{vaultErr}</div>{/if}
       {#if vault.length}
         <div class="settings-list vault-list">
+          <div class="vault-columns">
+            <span class="vault-column-label">{translate("accountSettings.savedPasswordLabel")}</span>
+            <span>{translate("accountSettings.lastUsed")}</span>
+            <span>{translate("accountSettings.lastUnlockedDocument")}</span>
+            <span class="vault-column-actions">{translate("accountSettings.actions")}</span>
+          </div>
           {#each vault as v (v.id)}
             <div class="vault-row">
               <span class="row-ico"><Icon name="lock" size={15} /></span>
-              <input class="inline-edit vault-label" value={v.label || ''}
-                     placeholder={translate("accountSettings.unlabeled")}
-                     title={v.label || translate("accountSettings.unlabeledSavedPassword")}
-                     onblur={(e) => renameVault(v, e.target.value)}
-                     onkeydown={(e) => { if (e.key === 'Enter') e.target.blur() }}
-                     aria-label={translate("accountSettings.savedPasswordLabel")} />
-              <div class="vault-use">
-                <span>{v.last_used_at ? translate("accountSettings.lastUsedValue", { "last_used_at": fmtDate(v.last_used_at) }) : translate("accountSettings.notUsedYet")}</span>
+              <div class="vault-label-cell">
+                {#if editingVaultID === v.id}
+                  <input class="inline-edit vault-label-editor"
+                         bind:value={vaultDraft}
+                         use:focusVaultEditor
+                         placeholder={translate("accountSettings.unlabeled")}
+                         onblur={() => commitVaultRename(v)}
+                         onkeydown={(e) => {
+                           if (e.key === 'Enter') {
+                             e.preventDefault()
+                             commitVaultRename(v, true)
+                           } else if (e.key === 'Escape') {
+                             e.preventDefault()
+                             cancelVaultRename(v)
+                           }
+                         }}
+                         aria-label={translate("accountSettings.savedPasswordLabel")} />
+                {:else}
+                  <span class="vault-label-text" class:unlabeled={!v.label}
+                        title={v.label || translate("accountSettings.unlabeledSavedPassword")}>
+                    {v.label || translate("accountSettings.unlabeled")}
+                  </span>
+                  <button id={`vault-rename-${v.id}`} class="vault-rename"
+                          onclick={() => startVaultRename(v)}
+                          title={translate("accountSettings.renameSavedPasswordLabelValue", { "label": v.label || translate("accountSettings.unlabeled") })}
+                          aria-label={translate("accountSettings.renameSavedPasswordLabelValue", { "label": v.label || translate("accountSettings.unlabeled") })}>
+                    <Icon name="edit" size={14} />
+                  </button>
+                {/if}
+              </div>
+              <span class="vault-date" data-label={translate("accountSettings.lastUsed")}>
+                {v.last_used_at ? fmtDate(v.last_used_at) : translate("accountSettings.notUsedYet")}
+              </span>
+              <div class="vault-document" data-label={translate("accountSettings.lastUnlockedDocument")}>
                 {#if v.last_used_doc_id}
                   {#if v.last_used_doc_title}
                     <a href={filingHref(`#/doc/${v.last_used_doc_id}`)} title={v.last_used_doc_title}>{v.last_used_doc_title}</a>
@@ -450,7 +512,7 @@
                   {/if}
                 {/if}
               </div>
-              <button class="act-quiet" disabled={destructiveBusy || !!destructiveRequest} onclick={() => removeVault(v)} title={translate("accountSettings.deleteSavedPassword")} aria-label={translate("accountSettings.deleteSavedPassword")}>{translate("accountSettings.remove")}</button>
+              <button class="act-quiet vault-remove" disabled={destructiveBusy || !!destructiveRequest} onclick={() => removeVault(v)} title={translate("accountSettings.deleteSavedPassword")} aria-label={translate("accountSettings.deleteSavedPassword")}>{translate("accountSettings.remove")}</button>
             </div>
           {/each}
         </div>
@@ -495,7 +557,7 @@
   .help-row { display:flex; flex-wrap:wrap; align-items:baseline; column-gap:8px; row-gap:2px }
   .help-row .sub { display:inline; margin-top:0 }
   .oidc-sync-form { margin:0; display:flex }
-  .auth-syntax { display:flex; align-items:center; flex-wrap:wrap; gap:4px 8px; min-width:0; flex:0 1 auto }
+  .section-heading > .auth-syntax { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:4px 8px; min-width:0; flex:0 1 auto; margin-left:auto }
   .auth-syntax span { color:var(--muted); font-size:.72rem; font-weight:600 }
   .auth-syntax code { max-width:100%; padding:5px 8px; border:1px solid var(--line); border-radius:var(--r-sm); background:var(--surface-2); font-size:.74rem; overflow-wrap:anywhere }
   .minted-token { margin:14px var(--pad) 0 }
@@ -525,18 +587,37 @@
   .settings-section .err { margin:14px var(--pad) 0 }
   .empty-setting { color:var(--muted); font-size:.84rem; margin:0; padding:14px var(--pad) 16px; border-top:0 }
   .row-ico { width:34px; height:34px; border-radius:10px; background:var(--manila); color:var(--ink); display:flex; align-items:center; justify-content:center; flex:none }
-  .vault-row { display:grid; grid-template-columns:auto minmax(200px,.9fr) minmax(0,1.4fr) auto; gap:14px; align-items:center; padding:12px var(--pad); border-bottom:1px solid var(--line) }
-  .vault-label { width:100%; min-width:0; font-weight:600 }
-  .vault-use { display:flex; align-items:center; gap:6px 14px; min-width:0; color:var(--muted); font-size:.78rem }
-  .vault-use a { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+  .vault-columns, .vault-row { display:grid; grid-template-columns:34px minmax(160px,.9fr) minmax(100px,.45fr) minmax(190px,1.4fr) auto; gap:14px; align-items:center }
+  .vault-columns { min-height:35px; padding:7px var(--pad); border-bottom:1px solid var(--line); background:var(--surface-2); color:var(--muted); font-size:.64rem; font-weight:700; letter-spacing:.07em; text-transform:uppercase }
+  .vault-column-label { grid-column:1 / 3 }
+  .vault-column-actions { text-align:right }
+  .vault-row { min-height:60px; padding:10px var(--pad); border-bottom:1px solid var(--line) }
+  .vault-label-cell { display:flex; align-items:center; gap:5px; min-width:0 }
+  .vault-label-text { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600 }
+  .vault-label-text.unlabeled { color:var(--muted); font-style:italic; font-weight:500 }
+  .vault-label-editor { min-width:0; font-weight:600 }
+  .vault-rename { width:28px; height:28px; flex:none; display:grid; place-items:center; border:0; border-radius:var(--r-sm); background:none; color:var(--muted); cursor:pointer }
+  .vault-rename:hover, .vault-rename:focus-visible { background:var(--surface-2); color:var(--ink) }
+  .vault-rename:focus-visible { outline:2px solid var(--accent); outline-offset:1px }
+  .vault-date { color:var(--muted); font-size:.78rem; white-space:nowrap }
+  .vault-document { min-width:0; color:var(--muted); font-size:.78rem }
+  .vault-document a { display:block; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+  .vault-remove { justify-self:end }
   .linkish { background:none; border:0; padding:0; color:var(--faint); font:inherit; font-style:italic; cursor:pointer }
   @container (max-width: 680px) {
     .settings-section { --pad:16px }
     .profile-fields { grid-template-columns:minmax(0,1fr) }
     .token-form { grid-template-columns: minmax(0, 1fr); }
     .token-create { width:100%; justify-content:center }
-    .vault-row { grid-template-columns:auto minmax(0,1fr) auto; gap:8px 12px }
-    .vault-use { grid-column:2 / -1; grid-row:2 }
+    .vault-columns { display:none }
+    .vault-row { grid-template-columns:auto minmax(0,1fr) auto; grid-template-rows:auto auto auto; gap:5px 10px; align-items:center }
+    .vault-row .row-ico { grid-column:1; grid-row:1 }
+    .vault-label-cell { grid-column:2; grid-row:1 }
+    .vault-remove { grid-column:3; grid-row:1 }
+    .vault-date, .vault-document { grid-column:2 / -1 }
+    .vault-date { grid-row:2 }
+    .vault-document { grid-row:3 }
+    .vault-date::before, .vault-document::before { content:attr(data-label) " "; color:var(--faint); font-weight:600 }
   }
   @container (max-width: 480px) {
     .profile-layout { grid-template-columns:minmax(0,1fr) }

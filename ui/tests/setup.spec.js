@@ -4654,7 +4654,7 @@ for (const demoSession of ['anon', 'scratch']) {
   })
 }
 
-test('names scoped tokens and account vault records', async ({ page }) => {
+test('names scoped tokens and edits account vault labels', async ({ page }) => {
   await mockAPI(page)
   await page.goto('/#/settings')
 
@@ -4665,6 +4665,23 @@ test('names scoped tokens and account vault records', async ({ page }) => {
   await expect(page.getByText('Authorization: Token <token>', { exact: true })).toBeVisible()
   await page.getByRole('heading', { name: 'Saved decryption passwords' }).scrollIntoViewIfNeeded()
   await expect(page.getByText('Axis Bank Atlas Credit Card Statement ending 0194.pdf')).toBeVisible()
+  const vault = page.getByRole('region', { name: 'Saved decryption passwords', exact: true })
+  const renameLabel = vault.getByRole('button', { name: 'Rename saved password label Hathway broadband invoice password', exact: true })
+  await expect(vault.getByRole('textbox', { name: 'Saved password label', exact: true })).toHaveCount(0)
+  await renameLabel.click()
+  const labelEditor = vault.getByRole('textbox', { name: 'Saved password label', exact: true })
+  await expect(labelEditor).toHaveValue('Hathway broadband invoice password')
+  await labelEditor.fill('Discarded change')
+  await labelEditor.press('Escape')
+  await expect(vault.getByText('Hathway broadband invoice password', { exact: true })).toBeVisible()
+
+  await renameLabel.click()
+  await labelEditor.fill('Broadband statements')
+  const renamed = page.waitForRequest(request =>
+    request.method() === 'PATCH' && new URL(request.url()).pathname === '/api/decryption-passwords/1')
+  await labelEditor.press('Enter')
+  expect((await renamed).postDataJSON()).toEqual({ label: 'Broadband statements' })
+  await expect(vault.getByText('Broadband statements', { exact: true })).toBeVisible()
   await page.getByLabel('Token name').fill('Readonly tablet')
   await page.getByRole('button', { name: 'Read & write' }).click()
   const created = page.waitForRequest(request =>
