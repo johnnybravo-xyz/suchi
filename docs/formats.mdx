@@ -590,6 +590,20 @@ just don't get their content indexed. Same posture as missing
 bare-metal installs need to place an `anydoc` executable on PATH
 themselves — see [source caveats](#anydoc-source-caveats) below.
 
+Suchi runs converters with an empty environment. An npm-installed
+`anydoc` whose first line is `#!/usr/bin/env node` is found on PATH and
+reported by `suchi doctor`, but every extraction exits with
+`env: node: No such file or directory` and the document keeps empty
+content. Install a self-contained binary, or put a wrapper earlier on
+the server's PATH that runs Node by absolute path:
+
+```sh
+#!/bin/sh
+exec /opt/homebrew/bin/node /opt/homebrew/lib/node_modules/@firecrawl/anydoc/cli.js "$@"
+```
+
+Then select the affected Office documents and choose **Rescan**.
+
 ### anydoc source caveats
 
 Two things worth knowing about how suchi consumes anydoc:
