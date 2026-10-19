@@ -21,7 +21,7 @@ browser composition; linked feature guides own detailed user and wire behavior.
 | Browser/blob delivery | `core/ui/ui.go`, `core/ui/spa.go`; `core/uiassets` verifies generated browser builds; `distro/app` wires API preview/download mirrors |
 | Localization | `core/i18n` validates server catalogs and negotiates request locales; account preference is stored on `users`, exposed by `core/api/users.go`, and shared with `core/ui` server-rendered pages |
 | Identity/access | `core/auth/`, `core/authz/`, `core/httpx/`; credentials in `plugins/local-auth/`, `plugins/oidc/` |
-| Durable state/work | `core/db/db.go`, `core/db/migrations/`, `core/blob/cas.go`, `core/jobs/jobs.go` |
+| Durable state/work | `core/archivelock` owns process-level archive exclusion; `core/db/db.go`, `core/db/migrations/`, `core/blob/cas.go`, `core/jobs/jobs.go` |
 | Capture/processing | `core/api/documents.go: UploadDocument`, `core/ingest/`, `core/importer/bundle/`, `core/pipeline/postingest/` |
 | Filing/review/retrieval | `core/jd/`, `core/automations/`, `core/approvals/`, `core/searchquery/`, `core/intelligence/`; API projections in `core/api/` |
 | Portable taxonomy | `core/jd/presetfile` validates/normalizes HuML/TOML; `core/jd/importer` previews/applies; `core/taxonomy/exporter` exports |
@@ -47,7 +47,8 @@ cancellation, loads the tagged pipeline-proposal policy, then calls
 neither parses command arguments nor exits the process.
 Follow `distro/app.Run` to diagnose runtime wiring:
 
-1. Create `DATA_DIR`, open SQLite and apply public core migrations.
+1. Create `DATA_DIR`, acquire its process-level archive lock, open SQLite and
+   apply public core migrations.
 2. Apply supplied `MigrationSets` in declaration order, each with its own ledger.
 3. Construct one immutable automation registry from explicit `BuiltinActions()`
    plus supplied `Actions`; duplicate or incomplete definitions stop startup.
@@ -86,8 +87,12 @@ Each assembled instance passes its approvals engine explicitly to
 review validation, audit and retry logic remain with `core/approvals`, while
 independently assembled instances remain isolated.
 
-One server process owns an archive. The writer pool and startup reclamation do
-not coordinate multiple servers sharing SQLite.
+One server process owns an archive. `core/db.Open` holds a nonblocking,
+mode-0600 `.suchi.lock` file in `DATA_DIR` for the database lifetime; a second
+process fails before opening SQLite with stable `archive_in_use`. The lock file
+must be a regular file and is released after both pools close. This process
+boundary protects the single writer pool, startup reclamation, jobs and intake
+loops; it does not turn shared network filesystems into supported storage.
 
 Build version/revision resolve once at boot and enter authenticated `/api/whoami`
 metadata. Docker receives revision explicitly because its context excludes `.git`.

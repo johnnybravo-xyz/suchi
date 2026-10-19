@@ -11,7 +11,9 @@ every document field.
 
 ## Export the source archive
 
-Run the command with the source instance's `DATA_DIR` configuration:
+Stop the source server, then run the command with that instance's `DATA_DIR`
+configuration. A running server owns the archive lock, so a concurrent export
+fails with `archive_in_use` instead of reading changing state:
 
 ```sh
 suchi export --out /tmp/suchi-export.zip

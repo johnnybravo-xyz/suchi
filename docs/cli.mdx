@@ -413,6 +413,8 @@ bytes, `documents/<name>-<id>.json` sidecars and selected-system taxonomy-table
 dumps, not a database restore graph. Sidecar format stays **1**, adding optional
 `title_owner`, `jd_system`, `jd_address`, `custom_fields`, and
 `archive_serial_number`. Document IDs can change on intake.
+Stop the server before running this offline command. The archive lock rejects an
+export while another Suchi process owns `DATA_DIR`.
 
 ```sh
 suchi export --out /tmp/my-suchi.zip --owner-id 1

@@ -31,6 +31,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Starting a second Suchi process against the same archive now fails immediately
+  with `archive_in_use` instead of running independent writers and workers
+  against one SQLite database.
 - A document-link write with a fractional, negative or zero document ID is
   rejected. A fractional ID was previously rounded down to a different
   document, and a zero ID removed the existing link.
