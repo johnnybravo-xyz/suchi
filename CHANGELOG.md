@@ -39,6 +39,9 @@ Notable user-visible changes to Suchi are recorded here.
   when their first lines look like email headers. Bank exports saved as `.xls`
   that begin with `Date : ...` were stored as `message/rfc822` and indexed
   nothing; extensionless Maildir handoff names are still detected as email.
+- Phone HEIC/HEIF photos are wrapped in JPEG-compressed PDF pages before OCR.
+  A 24-megapixel iPhone photo previously expanded past the 32 MiB conversion
+  cap and its processing job died, leaving the document without text.
 - Starting a second Suchi process against the same archive now fails immediately
   with `archive_in_use` instead of running independent writers and workers
   against one SQLite database.

@@ -115,12 +115,18 @@ func Convert(ctx context.Context, src io.Reader, log *slog.Logger, opts Options)
 
 	// HEIC/HEIF uses the still frame, not the rest of a photo sequence.
 	// Other formats retain every page, including multipage TIFF scans.
-	if inExt == "heic" || inExt == "heif" {
+	heif := inExt == "heic" || inExt == "heif"
+	if heif {
 		inputPath += "[0]"
 	}
 	// Normalize camera orientation and page density without resampling pixels.
 	// Otherwise 72-DPI phone photos become enormous pages when OCR renders at 300 DPI.
 	pdfArgs := []string{binary, inputPath, "-auto-orient", "-units", "PixelsPerInch", "-density", "300"}
+	// A HEIC photo is already lossy; ImageMagick's default Flate page would
+	// store raw pixels and push a phone photo past the output cap.
+	if heif {
+		pdfArgs = append(pdfArgs, "-compress", "jpeg")
+	}
 	if opts.Quality > 0 && opts.Quality <= 100 {
 		pdfArgs = append(pdfArgs, "-quality", fmt.Sprintf("%d", opts.Quality))
 	}

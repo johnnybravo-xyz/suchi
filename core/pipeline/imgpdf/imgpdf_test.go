@@ -155,6 +155,34 @@ func TestConvert(t *testing.T) {
 	}
 }
 
+// A phone HEIC is already lossy. Wrapping its decoded pixels with ImageMagick's
+// default Flate compression grows a 24-megapixel photo past the output cap, so
+// the document never reaches OCR. The same ratio is reproduced here with a
+// smaller fixture and cap.
+func TestConvertKeepsPhotographicHEICUnderCap(t *testing.T) {
+	binary, err := exec.LookPath(imgpdf.DefaultBinary)
+	if err != nil {
+		t.Skip("ImageMagick 7 not available")
+	}
+	inputPath := filepath.Join(t.TempDir(), "photo.heic")
+	if out, err := exec.Command(binary, "-seed", "7", "-size", "1071x1428", "plasma:fractal", inputPath).CombinedOutput(); err != nil {
+		t.Skipf("ImageMagick cannot synthesize HEIC: %v: %s", err, out)
+	}
+	src, err := os.ReadFile(inputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const capBytes = 2 << 20
+	res, err := imgpdf.Convert(t.Context(), bytes.NewReader(src),
+		slog.New(slog.NewTextHandler(io.Discard, nil)), imgpdf.Options{Ext: "heic", MaxOutputBytes: capBytes})
+	if err != nil || res.Skipped {
+		t.Fatalf("Convert: result=%+v err=%v", res, err)
+	}
+	if !bytes.HasPrefix(res.PDF, []byte("%PDF-")) || len(res.PDF) > capBytes {
+		t.Fatalf("PDF bytes=%d", len(res.PDF))
+	}
+}
+
 func TestConvertRejectsNonPDFOutput(t *testing.T) {
 	if _, err := os.Stat("/bin/sh"); err != nil {
 		t.Skip("requires /bin/sh")
