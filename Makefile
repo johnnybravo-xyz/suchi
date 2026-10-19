@@ -239,7 +239,8 @@ ui-clean:
 desktop-sidecar: ui
 	@set -eu; \
 	  target="$${DESKTOP_TARGET:-$$(rustup run $(DESKTOP_RUST_VERSION) rustc -vV | awk '/^host:/ { print $$2; exit }')}"; \
-	  version="$${SUCHI_DESKTOP_VERSION:-v0.3.0-dev}"; \
+	  configured_version="$$(bun -e 'console.log((await Bun.file("desktop/src-tauri/tauri.conf.json").json()).version)')"; \
+	  version="$${SUCHI_DESKTOP_VERSION:-v$$configured_version-dev}"; \
 	  revision="$${SUCHI_DESKTOP_REVISION:-$$(git rev-parse --short=12 HEAD)}"; \
 	  if test -z "$${SUCHI_DESKTOP_REVISION:-}" && ! git diff --quiet -- . ':!core/ui/spa/dist'; then revision="$$revision.dirty"; fi; \
 	  binary="desktop/src-tauri/binaries/suchi-sidecar-$$target"; \
@@ -330,6 +331,12 @@ desktop-sbom:
 # Rust 1.99's macOS rust-objcopy cannot load libLLVM from Tauri's Cargo subprocess.
 desktop-build:
 	@set -eu; \
+	  tauri_version="$$(bun -e 'console.log((await Bun.file("desktop/src-tauri/tauri.conf.json").json()).version)')"; \
+	  package_version="$$(bun -e 'console.log((await Bun.file("desktop/package.json").json()).version)')"; \
+	  cargo_version="$$(awk -F'"' '/^version = "/ { print $$2; exit }' desktop/src-tauri/Cargo.toml)"; \
+	  test "$$tauri_version" = "$$package_version" && test "$$tauri_version" = "$$cargo_version" || { \
+	    echo "desktop versions differ: tauri=$$tauri_version cargo=$$cargo_version package=$$package_version" >&2; exit 1; \
+	  }; \
 	  export PATH="$$(dirname "$$(rustup which --toolchain $(DESKTOP_RUST_VERSION) rustfmt)"):$${PATH}"; \
 	  host="$$(rustup run $(DESKTOP_RUST_VERSION) rustc -vV | awk '/^host:/ { print $$2; exit }')"; \
 	  if test "$$(uname -s)" = Darwin; then \

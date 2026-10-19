@@ -14,14 +14,23 @@ const QUIT: &str = "app-quit";
 pub fn install(app: &AppHandle, state: DesktopState) -> tauri::Result<()> {
     let package = app.package_info();
     let build = state.build_identity();
+    let (about_version, about_short_version) = if cfg!(target_os = "macos") {
+        (
+            Some(package.version.to_string()),
+            Some(build.revision.clone()),
+        )
+    } else {
+        (Some(package.version.to_string()), None)
+    };
     let about = PredefinedMenuItem::about(
         app,
         Some("About Suchi"),
         Some(AboutMetadata {
-            name: Some("Suchi".to_owned()),
-            version: Some(package.version.to_string()),
+            name: Some("Suchi — One-Time Desktop Experiment".to_owned()),
+            version: about_version,
+            short_version: about_short_version,
             comments: Some(format!(
-                "Private local document archive\nBundled server {} ({})",
+                "One-time experimental release — no planned support or updates\nPrivate local document archive\nBundled server {} ({})",
                 build.version, build.revision
             )),
             copyright: app.config().bundle.copyright.clone(),

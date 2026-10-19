@@ -25,8 +25,8 @@
     "category": "Productivity",
     "copyright": "Copyright (c) 2026 Ritesh Shrivastav",
     "homepage": "https://suchi.page",
-    "shortDescription": "Local document archive",
-    "longDescription": "Capture, file, retrieve, and review documents in a private local archive.",
+    "shortDescription": "One-time unsupported desktop experiment",
+    "longDescription": "One-time unsupported experimental desktop package for a private local document archive. No maintenance or follow-up releases are planned.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
