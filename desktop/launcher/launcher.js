@@ -3,11 +3,13 @@
 const invoke = window.__TAURI__.core.invoke;
 const title = document.querySelector("#title");
 const message = document.querySelector("#message");
+const progress = document.querySelector("#progress");
 const details = document.querySelector("#details");
 const setup = document.querySelector("#setup");
 const token = document.querySelector("#token");
 const actions = document.querySelector("#actions");
 const retry = document.querySelector("#retry");
+const openLogs = document.querySelector("#open-logs");
 const openApp = document.querySelector("#open-app");
 const stop = document.querySelector("#stop");
 const rollback = document.querySelector("#rollback");
@@ -21,9 +23,11 @@ function render(state) {
   message.textContent = state.message;
   details.hidden = !state.detail;
   details.textContent = state.detail || "";
+  progress.hidden = !state.busy;
   setup.hidden = !state.setupRequired;
-  actions.hidden = !(state.canRetry || state.canOpen || state.canStop || state.canRollback);
+  actions.hidden = !(state.canRetry || state.canOpen || state.canStop || state.canRollback || state.canOpenLogs);
   retry.hidden = !state.canRetry;
+  openLogs.hidden = !state.canOpenLogs;
   openApp.hidden = !state.canOpen;
   stop.hidden = !state.canStop;
   rollback.hidden = !state.canRollback;
@@ -38,11 +42,13 @@ async function refresh() {
       title: "Launcher unavailable",
       message: "Suchi could not read its local process state.",
       detail: "Restart the desktop application. Logs are available from the tray menu.",
+      busy: false,
       setupRequired: false,
       canRetry: false,
       canOpen: false,
       canStop: false,
       canRollback: false,
+      canOpenLogs: false,
       rollbackLabel: null,
     });
   }
@@ -54,6 +60,7 @@ document.querySelector("#reveal-token").addEventListener("click", async () => {
 });
 document.querySelector("#open-setup").addEventListener("click", () => invoke("open_setup"));
 retry.addEventListener("click", () => invoke("retry_processing"));
+openLogs.addEventListener("click", () => invoke("open_logs"));
 openApp.addEventListener("click", () => invoke("open_application"));
 stop.addEventListener("click", () => invoke("stop_processing"));
 rollback.addEventListener("click", () => invoke("rollback_operation"));

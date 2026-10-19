@@ -28,6 +28,10 @@
         </div>
       </header>
       <p id="message" class="message">Preparing the local document service…</p>
+      <div id="progress" class="progress" role="status" aria-live="polite">
+        <span class="spinner" aria-hidden="true"></span>
+        <span>Working locally…</span>
+      </div>
       <pre id="details" class="details" hidden></pre>
       <section id="setup" hidden>
         <p>Finish setup in the local app. The one-time token is available here only while setup is incomplete.</p>
@@ -39,6 +43,7 @@
       </section>
       <div id="actions" class="actions" hidden>
         <button id="retry" type="button" class="primary">Retry</button>
+        <button id="open-logs" type="button">Open logs</button>
         <button id="open-app" type="button">Open archive</button>
         <button id="stop" type="button">Stop processing</button>
         <button id="rollback" type="button">Roll back</button>

@@ -12,6 +12,7 @@
     "allow-reveal-setup-token",
     "allow-open-setup",
     "allow-open-application",
+    "allow-open-logs",
     "allow-rollback-operation",
     "allow-set-launch-at-login"
   ]

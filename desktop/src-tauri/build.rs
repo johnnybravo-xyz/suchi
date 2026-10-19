@@ -30,6 +30,7 @@ fn main() {
             "reveal_setup_token",
             "open_setup",
             "open_application",
+            "open_logs",
             "rollback_operation",
             "set_launch_at_login",
         ]));

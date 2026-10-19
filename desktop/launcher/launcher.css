@@ -47,6 +47,23 @@ header { display: flex; align-items: center; gap: 1rem; }
 h1 { margin: 0; font-size: 1.5rem; line-height: 1.2; letter-spacing: -.02em; }
 .message, #setup p { color: var(--muted); line-height: 1.55; }
 .message { margin: 1.5rem 0; }
+.progress {
+  display: flex;
+  align-items: center;
+  gap: .7rem;
+  margin: -0.5rem 0 1.5rem;
+  color: var(--muted);
+  font-size: .86rem;
+}
+.spinner {
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid var(--line-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
 .details, output {
   display: block;
   padding: .9rem 1rem;
@@ -84,6 +101,9 @@ footer {
   line-height: 1.4;
 }
 [hidden] { display: none !important; }
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation-duration: 1.8s; }
+}
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #141618;

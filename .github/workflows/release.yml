@@ -104,11 +104,28 @@ jobs:
           ./hack/verify-release-tag.sh "$REF_NAME"
 
           version=${REF_NAME#v}
-          desktop_version=$(python3 -c 'import json; print(json.load(open("desktop/src-tauri/tauri.conf.json"))["version"])')
-          if [ "$desktop_version" != "$version" ]; then
-            echo "desktop/src-tauri/tauri.conf.json version $desktop_version does not match $REF_NAME" >&2
-            exit 1
-          fi
+          python3 - "$version" <<'PY'
+          import json
+          import pathlib
+          import sys
+          import tomllib
+
+          expected = sys.argv[1]
+          versions = {
+              "desktop/src-tauri/tauri.conf.json": json.loads(
+                  pathlib.Path("desktop/src-tauri/tauri.conf.json").read_text()
+              )["version"],
+              "desktop/src-tauri/Cargo.toml": tomllib.loads(
+                  pathlib.Path("desktop/src-tauri/Cargo.toml").read_text()
+              )["package"]["version"],
+              "desktop/package.json": json.loads(
+                  pathlib.Path("desktop/package.json").read_text()
+              )["version"],
+          }
+          for path, actual in versions.items():
+              if actual != expected:
+                  raise SystemExit(f"{path} version {actual} does not match {sys.argv[1]}")
+          PY
           if [[ "$version" == *-* ]]; then
             prerelease=${version#*-}
             IFS=. read -ra identifiers <<< "$prerelease"

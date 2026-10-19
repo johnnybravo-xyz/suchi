@@ -6,6 +6,7 @@ use crate::{
 };
 use tauri::{AppHandle, State};
 use tauri_plugin_autostart::ManagerExt;
+use tauri_plugin_opener::OpenerExt;
 
 #[tauri::command]
 pub fn launcher_state(state: State<'_, DesktopState>) -> LauncherState {
@@ -40,6 +41,13 @@ pub fn open_setup(app: AppHandle, state: State<'_, DesktopState>) {
 #[tauri::command]
 pub fn open_application(app: AppHandle, state: State<'_, DesktopState>) {
     navigation::navigate_to_application(&app, state.origin());
+}
+
+#[tauri::command]
+pub fn open_logs(app: AppHandle, state: State<'_, DesktopState>) -> Result<(), String> {
+    app.opener()
+        .open_path(state.paths().logs.to_string_lossy(), None::<&str>)
+        .map_err(|_| "The private log folder could not be opened.".to_owned())
 }
 
 #[tauri::command]

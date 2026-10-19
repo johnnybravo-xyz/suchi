@@ -23,9 +23,9 @@ pub fn create_main(
     let new_window_app = app.clone();
     WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
         .initialization_script(DESKTOP_SHELL_INIT)
-        .title("Suchi")
+        .title("Suchi — Local Archive")
         .inner_size(1100.0, 760.0)
-        .min_inner_size(760.0, 560.0)
+        .min_inner_size(820.0, 600.0)
         .center()
         .visible(!initially_hidden)
         .data_directory(paths.webview_cache.clone())

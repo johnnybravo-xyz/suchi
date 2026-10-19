@@ -18,10 +18,12 @@ test("starts polling and renders state as a classic script", async () => {
     "#title",
     "#message",
     "#details",
+    "#progress",
     "#setup",
     "#token",
     "#actions",
     "#retry",
+    "#open-logs",
     "#open-app",
     "#stop",
     "#rollback",
@@ -35,11 +37,13 @@ test("starts polling and renders state as a classic script", async () => {
     title: "Archive ready",
     message: "Open Suchi.",
     detail: "Ready on loopback.",
+    busy: true,
     setupRequired: true,
     canRetry: false,
     canOpen: true,
     canStop: true,
     canRollback: false,
+    canOpenLogs: true,
     rollbackLabel: null,
   };
 
@@ -75,8 +79,10 @@ test("starts polling and renders state as a classic script", async () => {
     expect(elements.get("#title").textContent).toBe(state.title);
     expect(elements.get("#message").textContent).toBe(state.message);
     expect(elements.get("#details").hidden).toBe(false);
+    expect(elements.get("#progress").hidden).toBe(false);
     expect(elements.get("#setup").hidden).toBe(false);
     expect(elements.get("#actions").hidden).toBe(false);
+    expect(elements.get("#open-logs").hidden).toBe(false);
     expect(elements.get("#open-app").hidden).toBe(false);
     expect(elements.get("#stop").hidden).toBe(false);
 

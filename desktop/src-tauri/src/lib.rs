@@ -7,6 +7,7 @@ mod environment;
 mod identity;
 mod legacy;
 mod logging;
+mod menu;
 mod navigation;
 mod paths;
 mod prerequisites;
@@ -51,6 +52,7 @@ pub fn run() {
             commands::open_setup,
             commands::open_application,
             commands::rollback_operation,
+            commands::open_logs,
             commands::set_launch_at_login,
         ])
         .setup(move |app| {
@@ -93,6 +95,7 @@ pub fn run() {
             }
             let origin = state.origin().to_owned();
             app.manage(state.clone());
+            menu::install(&handle, state.clone())?;
             window::create_main(&handle, &paths, origin, initially_hidden)?;
             tray::install(&handle, state.clone())?;
             std::thread::spawn(move || {
@@ -124,6 +127,11 @@ pub fn run() {
                 state.begin_quit(app.clone());
             }
         }
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Reopen {
+            has_visible_windows,
+            ..
+        } if !has_visible_windows => navigation::show_main_window(app),
         _ => {}
     });
 }

@@ -10,16 +10,20 @@ pub fn permits_navigation(app: &AppHandle, url: &Url, application_origin: &str) 
     {
         return true;
     }
-    if matches!(url.scheme(), "https" | "mailto") {
+    if is_external_url(url) {
         let _ = app.opener().open_url(url.as_str(), None::<&str>);
     }
     false
 }
 
 pub fn open_external(app: &AppHandle, url: &Url) {
-    if matches!(url.scheme(), "https" | "mailto") {
+    if is_external_url(url) {
         let _ = app.opener().open_url(url.as_str(), None::<&str>);
     }
+}
+
+fn is_external_url(url: &Url) -> bool {
+    matches!(url.scheme(), "https" | "mailto")
 }
 
 pub fn navigate_to_application(app: &AppHandle, application_origin: &str) {
@@ -119,6 +123,36 @@ mod tests {
         assert!(!is_application_url(
             &Url::parse("https://127.0.0.1:8123/inbox").unwrap(),
             "http://127.0.0.1:8123",
+        ));
+    }
+
+    #[test]
+    fn only_explicit_safe_schemes_are_external() {
+        assert!(is_external_url(
+            &Url::parse("https://suchi.page/docs").unwrap()
+        ));
+        assert!(is_external_url(
+            &Url::parse("mailto:hello@suchi.page").unwrap()
+        ));
+        assert!(!is_external_url(&Url::parse("http://example.com").unwrap()));
+        assert!(!is_external_url(
+            &Url::parse("file:///tmp/archive").unwrap()
+        ));
+        assert!(!is_external_url(
+            &Url::parse("javascript:alert(1)").unwrap()
+        ));
+    }
+
+    #[test]
+    fn launcher_origin_is_exact() {
+        assert!(is_launcher_url(
+            &Url::parse("tauri://localhost/index.html").unwrap()
+        ));
+        assert!(!is_launcher_url(
+            &Url::parse("tauri://other/index.html").unwrap()
+        ));
+        assert!(!is_launcher_url(
+            &Url::parse("http://tauri.localhost.example/index.html").unwrap()
         ));
     }
 }
