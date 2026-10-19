@@ -1267,7 +1267,7 @@
   "filingTreeSettings.couldNotUpdateTheFilingTree": "Could not update the filing tree.",
   "filingTreeSettings.currentFilingTree": "Current filing tree",
   "filingTreeSettings.currentTree": "Current tree",
-  "filingTreeSettings.currentValue": "Current · {_}",
+  "filingTreeSettings.currentValue": "Current · {name}",
   "filingTreeSettings.exportedValue": "Exported {download}",
   "filingTreeSettings.exportFailed": "Export failed",
   "filingTreeSettings.exportThisFilingTree": "Export this filing tree",
