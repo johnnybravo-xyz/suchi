@@ -64,23 +64,33 @@ as the web app. Matching, BM25, recency, snippets, errors, and ACLs are not
 reimplemented by MCP; see [Search architecture: MCP](/search#mcp).
 
 ```text
-"distribution advice" jd:22 -tag:archived added:>=2026-01-01
+field:Person=Ritesh field:Country=India tag:"type:driving-licence"
 ```
+
+The query can combine free text with `field:`, `has-field:`, `tag:`, `jd:`,
+`sensitivity:`, and the other operators documented in the shared query
+language. Exact custom-field clauses use the definition's name and typed value;
+call `list_custom_fields` first when the schema is not known.
 
 - `query`: required string
 - `page_size`: optional integer, default 10 and maximum 25
 
 Results include document IDs, titles, snippets, rank, MIME type, and creation
-time after token-owner visibility is applied. Requires `documents:read`.
+time after token-owner visibility and the token's bound filing system are
+applied. Confidential and Restricted results have empty snippets. Requires
+`documents:read`.
 
 ### `get_document`
 
-Returns one document through `GET /api/documents/{id}`.
+Returns one document through `GET /api/documents/{id}` in the token's bound
+filing system.
 
 - `id`: required document ID
 
-The response includes extracted content and visible metadata, so grant this
-tool only to clients allowed to read archive text.
+The response includes extracted content and visible metadata. Calling this tool
+sends that content to the MCP client and to any model or remote runtime behind
+it; an empty sensitive-search snippet is not consent for that egress. Grant and
+invoke this tool only when the client is allowed to read archive text.
 
 ### `list_inbox`
 

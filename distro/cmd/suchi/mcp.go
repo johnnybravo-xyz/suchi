@@ -272,15 +272,16 @@ func registerTools(server *mcp.Server, client *suchiClient) {
 // --- search_documents ---
 
 type searchArgs struct {
-	Query    string `json:"query"    jsonschema:"the full-text search query"`
+	Query    string `json:"query" jsonschema:"free text plus shared filters such as field:Person=Ritesh, has-field:Person, tag:\"type:passport\", jd:11, and sensitivity:restricted"`
 	PageSize int    `json:"page_size,omitempty" jsonschema:"max results (default 10, max 25)"`
 }
 
 func registerSearch(server *mcp.Server, client *suchiClient) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "search_documents",
-		Description: "Full-text search over suchi's document corpus (title + " +
-			"content). Returns ranked hits with a highlighted snippet.",
+		Description: "Search documents visible in the token's bound filing system using the web app's query language: " +
+			"free text plus field:, has-field:, tag:, jd:, and sensitivity: filters. " +
+			"Returns ranked ACL-filtered hits; confidential and restricted snippets are empty.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args searchArgs) (*mcp.CallToolResult, any, error) {
 		limit := args.PageSize
 		if limit <= 0 || limit > 25 {
@@ -302,8 +303,9 @@ type getDocArgs struct {
 
 func registerGetDocument(server *mcp.Server, client *suchiClient) {
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "get_document",
-		Description: "Fetch a single document by id — title, extracted content, tags, correspondents, custom fields.",
+		Name: "get_document",
+		Description: "Fetch one document by id from the token's bound filing system. " +
+			"Returns visible metadata and extracted content to the agent client; use only when document-text egress is intended.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args getDocArgs) (*mcp.CallToolResult, any, error) {
 		if args.ID <= 0 {
 			return nil, nil, errors.New("id must be > 0")

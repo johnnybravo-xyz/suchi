@@ -85,6 +85,25 @@ Restart Claude Desktop. In a new chat, the "🔌" indicator should
 show `suchi` connected. Ask it "search my documents for
 'insurance'" — it will call `search_documents` under the hood.
 
+Rich metadata clauses use the same query language as browser search. For
+example, a client locating the owner's Indian driving licence can call
+`search_documents` with:
+
+```text
+field:Person=Ritesh field:Country=India tag:"type:driving-licence"
+```
+
+Those clauses are evaluated only inside the token's bound filing system and
+normal ACL visibility. Use `list_custom_fields` when an agent does not know the
+exact controlled field name or choice.
+
+`search_documents` suppresses snippets for Confidential and Restricted
+documents. Treat the resulting title, ID, and local Suchi route as a safe
+locator boundary. Calling `get_document` returns extracted document content to
+the MCP client—and therefore to any model or remote runtime behind that
+client—even when the search snippet was empty. Do not fetch content merely to
+locate a sensitive document.
+
 If `suchi-mcp` isn't on PATH, use the absolute path:
 
 ```json
