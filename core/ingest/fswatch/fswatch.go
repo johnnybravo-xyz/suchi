@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -525,20 +524,20 @@ type casReader interface {
 	Get(sha string) (io.ReadCloser, error)
 }
 
-// sniffMIME reads up to 512 bytes from the stored blob and runs
-// net/http.DetectContentType — same policy as the upload API.
+// sniffMIME reads the stored blob head and runs mimeutil.DetectContentType —
+// same policy as the upload API.
 func (w *Watcher) sniffMIME(sha string) (string, error) {
 	rc, err := w.cas.Get(sha)
 	if err != nil {
 		return "", err
 	}
 	defer rc.Close()
-	var head [512]byte
+	var head [mimeutil.SniffBytes]byte
 	n, err := io.ReadFull(rc, head[:])
 	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
 		return "", err
 	}
-	return http.DetectContentType(head[:n]), nil
+	return mimeutil.DetectContentType(head[:n]), nil
 }
 
 // deriveTitle picks the doc title: sidecar wins; otherwise strip the

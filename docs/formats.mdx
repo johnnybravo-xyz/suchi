@@ -4,7 +4,10 @@ description: "Every format suchi ingests, the binary it needs, and where it land
 ---
 
 suchi's ingest pipeline branches by MIME type sniffed server-side from
-the first 512 bytes of the upload. Every branch **degrades gracefully**:
+the first 1024 bytes of the upload. A PDF header preceded by a short binary
+prefix or leading whitespace within those bytes, as some e-filing downloads
+and invoice generators produce, is still routed as a PDF; qpdf repairs the
+working copy and the original stays unchanged. Every branch **degrades gracefully**:
 if the binary a branch needs isn't installed, the doc is still stored
 and searchable, `documents.content` just lands empty until the tool
 shows up.

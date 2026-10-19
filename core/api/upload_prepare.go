@@ -114,7 +114,7 @@ func (s *Server) prepareUpload(
 }
 
 func sniffMultipartMIME(file multipart.File, size int64) (string, error) {
-	var head [512]byte
+	var head [mimeutil.SniffBytes]byte
 	n, readErr := io.ReadFull(file, head[:])
 	if readErr != nil && readErr != io.ErrUnexpectedEOF && readErr != io.EOF {
 		return "", readErr
@@ -123,7 +123,7 @@ func sniffMultipartMIME(file multipart.File, size int64) (string, error) {
 		return "", err
 	}
 
-	detected := http.DetectContentType(head[:n])
+	detected := mimeutil.DetectContentType(head[:n])
 	if detected != "application/zip" || size <= 0 {
 		return detected, nil
 	}

@@ -42,6 +42,10 @@ Notable user-visible changes to Suchi are recorded here.
 - Phone HEIC/HEIF photos are wrapped in JPEG-compressed PDF pages before OCR.
   A 24-megapixel iPhone photo previously expanded past the 32 MiB conversion
   cap and its processing job died, leaving the document without text.
+- PDFs whose header follows a short prefix within the first 1024 bytes are now
+  processed as PDFs. Income-tax e-filing downloads wrapped in a serialization
+  prefix, and invoices beginning with a newline, were stored as binary files
+  without text; select them and choose **Rescan** to extract their text.
 - Starting a second Suchi process against the same archive now fails immediately
   with `archive_in_use` instead of running independent writers and workers
   against one SQLite database.
