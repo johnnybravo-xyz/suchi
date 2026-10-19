@@ -10,11 +10,16 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/johnnybravo-xyz/suchi/core/asn"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
@@ -946,10 +951,15 @@ func (s *Server) SaveScanSettings(w http.ResponseWriter, r *http.Request) {
 
 // ---------- ingest sources ----------
 
-// fsPath restricts to absolute POSIX paths — no shell metachars, no
-// backslashes. The fs-watch consumer still resolves + validates the
-// path itself; this is belt-and-braces.
-var fsPath = regexp.MustCompile(`^/[A-Za-z0-9 ._\-/]{0,255}$`)
+// validWatchDir accepts an absolute UTF-8 path typed as-is, so folders named
+// with spaces, apostrophes, `@`, `~` or accents work. The path never reaches a
+// shell: the watcher resolves it and confines reads with os.OpenRoot. Quotes
+// fail the absolute-path check and backslashes are refused, because a path
+// copied from a terminal (`Visa\ Docs`) names a folder that does not exist.
+func validWatchDir(path string) bool {
+	return len(path) <= 4096 && utf8.ValidString(path) && filepath.IsAbs(path) &&
+		!strings.ContainsRune(path, '\\') && !strings.ContainsFunc(path, unicode.IsControl)
+}
 
 var (
 	errFSWatchSystemUnavailable = errors.New("filesystem watcher system is unavailable")
@@ -1020,10 +1030,29 @@ func (s *Server) SaveIngestSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		body.FSWatchOwnerEmail = normalized
 	}
-	if body.FSWatchDir != "" && !fsPath.MatchString(body.FSWatchDir) {
+	if body.FSWatchDir != "" && !validWatchDir(body.FSWatchDir) {
 		s.writeError(w, http.StatusBadRequest, "bad_dir",
-			"fs_watch_dir must be an absolute path with safe characters")
+			"fs_watch_dir must be an absolute path typed as-is: spaces are fine, quotes and backslash escapes are not")
 		return
+	}
+	// Name the reason here: a failed watcher reload only reports that the
+	// source could not be applied. The watcher re-checks when it starts.
+	if body.FSWatchDir != "" {
+		info, err := os.Stat(body.FSWatchDir)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			s.writeError(w, http.StatusBadRequest, "dir_not_found",
+				"fs_watch_dir does not exist on the server: "+body.FSWatchDir)
+			return
+		case err != nil:
+			s.writeError(w, http.StatusBadRequest, "bad_dir",
+				"fs_watch_dir cannot be read by the server: "+body.FSWatchDir)
+			return
+		case !info.IsDir():
+			s.writeError(w, http.StatusBadRequest, "bad_dir",
+				"fs_watch_dir is not a directory: "+body.FSWatchDir)
+			return
+		}
 	}
 	if (body.FSWatchDir == "") != (body.FSWatchOwnerEmail == "") {
 		s.writeError(w, http.StatusBadRequest, "incomplete_source",

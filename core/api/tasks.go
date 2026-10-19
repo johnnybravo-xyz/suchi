@@ -51,6 +51,7 @@ type ApprovalTask struct {
 	DocJDCategoryCode int64  `json:"doc_jd_category_code,omitempty"`
 	DocJDCategoryName string `json:"doc_jd_category_name,omitempty"`
 	DocHasThumbnail   bool   `json:"doc_has_thumbnail,omitempty"`
+	DocSensitivity    string `json:"doc_sensitivity,omitempty"`
 	StateKey          string `json:"state_key"`
 	Assignee          string `json:"assignee"`
 	Prompt            string `json:"prompt"`
@@ -486,7 +487,7 @@ func materializeApprovalTasks(rows *sql.Rows) ([]ApprovalTask, error) {
 		if err := rows.Scan(&task.ID, &task.RunID, &task.ApprovalID, &docID, &task.ApprovalName,
 			&task.StateKey, &task.Assignee, &task.Prompt, &choicesRaw, &task.Status, &deadline,
 			&task.CreatedAt, &varsRaw, &task.DocTitle, &task.DocJDCategoryID, &task.DocJDCategoryCode,
-			&task.DocJDCategoryName, &hasThumb); err != nil {
+			&task.DocJDCategoryName, &hasThumb, &task.DocSensitivity); err != nil {
 			return nil, fmt.Errorf("scan approval_tasks row: %w", err)
 		}
 		if docID > 0 {
@@ -532,7 +533,8 @@ func (s *Server) approvalTasksForUser(r *http.Request, userID int64, role string
 		       COALESCE(r.vars_json, '{}'), COALESCE(doc.title, ''),
 		       COALESCE(doc.jd_category_id, 0),
 		       COALESCE(jc.code, 0), COALESCE(jc.name, ''),
-		       CASE WHEN COALESCE(doc.thumb_sha, '') != '' THEN 1 ELSE 0 END
+		       CASE WHEN COALESCE(doc.thumb_sha, '') != '' THEN 1 ELSE 0 END,
+		       COALESCE(doc.sensitivity, '')
 		FROM approval_tasks t
 		JOIN approval_runs r ON r.id = t.run_id
 		JOIN approval_defs def ON def.id = r.def_id

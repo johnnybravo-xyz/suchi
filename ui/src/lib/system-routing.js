@@ -38,7 +38,7 @@ export async function enterRoute(path, query) {
       if (code) {
         const params = new URLSearchParams(query)
         params.set('system', code)
-        history.replaceState(null, '', `#${path}?${params}`)
+        history.replaceState(history.state, '', `#${path}?${params}`)
         window.dispatchEvent(new HashChangeEvent('hashchange'))
       }
     }

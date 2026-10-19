@@ -2,6 +2,7 @@
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import english from '../i18n/locales/en.json' with { type: 'json' }
 import german from '../testdata/locales/de.js'
 import { localeState, registerCatalogForTest, setLocale, t } from './i18n.svelte.js'
 import { formatDate, formatNumber, plural } from './format.js'
@@ -34,4 +35,13 @@ test('rejects incomplete catalogs and placeholder drift', async () => {
     'apiError.requestFailed': 'Fehler {code}',
   }
   await assert.rejects(registerCatalogForTest('de-X-drifted', drifted), /placeholders differ/)
+})
+
+test('every English placeholder can be interpolated', () => {
+  // `{{ … }}` is literal folder-layout template text, not a placeholder.
+  for (const [key, message] of Object.entries(english)) {
+    for (const [placeholder] of String(message).matchAll(/(?<!\{)\{[^{}]*\}(?!\})/g)) {
+      assert.match(placeholder, /^\{[A-Za-z][A-Za-z0-9_]*\}$/, `${key}: ${placeholder}`)
+    }
+  }
 })

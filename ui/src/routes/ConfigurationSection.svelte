@@ -438,7 +438,7 @@
   function elapsedLabel(milliseconds) {
     const value = Number(milliseconds) || 0
     if (value < 1000) return translate("configurationSection.valueMs", { "value": Math.round(value) })
-    return translate("configurationSection.valueS", { "$": (value / 1000).toFixed(1).replace(/\.0$/, '') })
+    return translate("configurationSection.valueS", { "seconds": (value / 1000).toFixed(1).replace(/\.0$/, '') })
   }
 
   const llmIsRemote = $derived(llmMode === 'subscription' || (!!llm.endpoint_url && !isLocalEndpoint(llm.endpoint_url)))

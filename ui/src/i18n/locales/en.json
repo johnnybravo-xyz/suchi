@@ -651,7 +651,7 @@
   "configurationSection.useTheOpenaiCompatibleBaseUrlFrom": "Use the OpenAI-compatible base URL from your provider. Suchi sends extracted text, never the original file.",
   "configurationSection.valueModelConfidenceValueSelfReported": "{title} · Model confidence {confidence}% (self-reported)",
   "configurationSection.valueMs": "{value} ms",
-  "configurationSection.valueS": "{$} s",
+  "configurationSection.valueS": "{seconds} s",
   "configurationSection.waitingForSignIn": ". Waiting for sign-in…",
   "configurationSection.watchedDirectoryOnTheServer": "Watched directory (on the server)",
   "configurationSection.watchedFolder": "Watched folder",

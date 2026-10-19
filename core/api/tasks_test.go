@@ -421,8 +421,8 @@ func TestApprovalTasksForUser_ScopedToAssignee(t *testing.T) {
 		INSERT INTO jd_categories(system_id, id, area_start, code, name, system)
 		VALUES (1, 8, 20, 24, 'Receipts', 0);
 		INSERT INTO documents(system_id, id, owner_id, original_blob, original_size, title,
-		                      jd_category_id, thumb_sha, created_at, updated_at)
-		VALUES (1, 17, 5, 'sha-17', 1, 'Bank statement.pdf', 8, 'thumb-17', 0, 0);
+		                      jd_category_id, thumb_sha, sensitivity, created_at, updated_at)
+		VALUES (1, 17, 5, 'sha-17', 1, 'Bank statement.pdf', 8, 'thumb-17', 'restricted', 0, 0);
 		UPDATE approval_runs SET doc_id = 17 WHERE id = ?;
 	`, firstRun); err != nil {
 		t.Fatal(err)
@@ -452,7 +452,7 @@ func TestApprovalTasksForUser_ScopedToAssignee(t *testing.T) {
 		}
 		if wt.RunID == firstRun && (wt.DocTitle != "Bank statement.pdf" || wt.DocJDCategoryID != 8 ||
 			wt.DocJDCategoryCode != 24 || wt.DocJDCategoryName != "Receipts" ||
-			!wt.DocHasThumbnail) {
+			!wt.DocHasThumbnail || wt.DocSensitivity != "restricted") {
 			t.Errorf("document context not populated: %+v", wt)
 		}
 	}

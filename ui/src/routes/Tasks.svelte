@@ -4,7 +4,7 @@
   import { scopedHash as filingHref } from '../lib/systems.svelte.js'
   import { listTasks, resolveApprovalTask, retryDeadJob, dismissDeadJob, thumbPath,
            listIntelligence, resolveIntelligence } from '../lib/api.js'
-  import { fmtDate, formatNumber, plural } from '../lib/format.js'
+  import { fmtDate, formatNumber, isHighSensitivity, plural } from '../lib/format.js'
   import { DATE_ROLES, formatIntelligenceValue, canReviewDate, reviewFailure } from '../lib/intelligence.js'
   import Icon from '../lib/Icon.svelte'
 
@@ -238,6 +238,7 @@
           documentID: candidate.document_id,
           title: candidate.document_title,
           thumbnail: candidate.document_has_thumbnail,
+          sensitivity: candidate.document_sensitivity,
           candidates: [],
         })
       }
@@ -390,10 +391,10 @@
               <input type="checkbox" aria-label={translate("tasks.selectEverySuggestedDateFromValue", { "documentID": group.title || `document ${group.documentID}` })}
                      disabled={intelligenceBusy || !groupSelection.available} checked={groupSelection.all} use:indeterminate={groupSelection.some}
                      onchange={(event) => setCandidateSelection(group.candidates.map(candidate => candidate.id), event.currentTarget.checked)} />
-              <a class="task-thumb intelligence-thumb" class:placeholder={!group.thumbnail}
+              <a class="task-thumb intelligence-thumb" class:placeholder={!group.thumbnail} class:blurred={isHighSensitivity(group.sensitivity)}
                  href={filingHref(`#/doc/${group.documentID}`)} aria-label={translate("tasks.openValue", { "documentID": group.title || `document ${group.documentID}` })}>
                 {#if group.thumbnail}
-                  <img src={thumbPath(group.documentID)} alt="" loading="lazy" />
+                  <img src={thumbPath(group.documentID, isHighSensitivity(group.sensitivity))} alt="" loading="lazy" />
                 {:else}
                   <Icon name="docs" size={20} />
                 {/if}
@@ -453,11 +454,11 @@
         <article class="approval-card workflow-approval-card">
           {#if group.document}
             <header class="approval-card-header document-header">
-              <a class="task-thumb" class:placeholder={!group.document.doc_has_thumbnail}
+              <a class="task-thumb" class:placeholder={!group.document.doc_has_thumbnail} class:blurred={isHighSensitivity(group.document.doc_sensitivity)}
                  href={filingHref(`#/doc/${group.document.doc_id}`)}
                  aria-label={translate("tasks.openValue2", { "doc_id": group.document.doc_title || `document ${group.document.doc_id}` })}>
                 {#if group.document.doc_has_thumbnail}
-                  <img src={thumbPath(group.document.doc_id)} alt="" loading="lazy" />
+                  <img src={thumbPath(group.document.doc_id, isHighSensitivity(group.document.doc_sensitivity))} alt="" loading="lazy" />
                 {:else}
                   <Icon name="docs" size={22} />
                 {/if}
@@ -623,6 +624,7 @@
     border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--surface-2)
   }
   .task-thumb img { width:100%;height:100%;object-fit:cover;display:block }
+  .task-thumb.blurred img { filter:blur(6px) }
   .task-thumb.placeholder { color:var(--faint) }
   .group-context { padding:9px 13px;border-bottom:1px solid var(--line);color:var(--muted);font-size:.78rem;line-height:1.45;background:var(--surface) }
   .decision-list { padding:0 13px }

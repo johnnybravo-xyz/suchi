@@ -8,6 +8,7 @@ package api
 // deploy/mail-mbsync/smoke-test.sh).
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -18,6 +19,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -658,8 +660,9 @@ func TestSetupRuntimeSettingsApplyLiveAndReadBack(t *testing.T) {
 		t.Fatalf("scan readback status=%d body=%s", scanGetRec.Code, scanGetRec.Body.String())
 	}
 
+	inbox := t.TempDir()
 	fsReq := httptest.NewRequest(http.MethodPost, "/api/admin/settings/ingest",
-		strings.NewReader(`{"fs_watch_dir":"/tmp/suchi-inbox","fs_watch_owner_email":"u1@t.local"}`))
+		strings.NewReader(`{"fs_watch_dir":"`+inbox+`","fs_watch_owner_email":"u1@t.local"}`))
 	fsReq = fsReq.WithContext(auth.WithPrincipal(fsReq.Context(), admin))
 	fsRec := httptest.NewRecorder()
 	s.SaveIngestSettings(fsRec, fsReq)
@@ -670,7 +673,7 @@ func TestSetupRuntimeSettingsApplyLiveAndReadBack(t *testing.T) {
 	fsGet = fsGet.WithContext(auth.WithPrincipal(fsGet.Context(), admin))
 	fsGetRec := httptest.NewRecorder()
 	s.GetIngestSettings(fsGetRec, fsGet)
-	if fsGetRec.Code != http.StatusOK || !strings.Contains(fsGetRec.Body.String(), "/tmp/suchi-inbox") ||
+	if fsGetRec.Code != http.StatusOK || !strings.Contains(fsGetRec.Body.String(), inbox) ||
 		!strings.Contains(fsGetRec.Body.String(), `"fs_watch_owner_email":"u1@t.local"`) {
 		t.Fatalf("fs-watch readback status=%d body=%s", fsGetRec.Code, fsGetRec.Body.String())
 	}
@@ -693,7 +696,7 @@ func TestSetupRuntimeSettingsApplyLiveAndReadBack(t *testing.T) {
 
 	s.FSWatchReloader = func(context.Context) error { return errors.New("invalid watch directory") }
 	badReq := httptest.NewRequest(http.MethodPost, "/api/admin/settings/ingest",
-		strings.NewReader(`{"fs_watch_dir":"/tmp/unusable","fs_watch_owner_email":"u1@t.local"}`))
+		strings.NewReader(`{"fs_watch_dir":"`+t.TempDir()+`","fs_watch_owner_email":"u1@t.local"}`))
 	badReq = badReq.WithContext(auth.WithPrincipal(badReq.Context(), admin))
 	badRec := httptest.NewRecorder()
 	s.SaveIngestSettings(badRec, badReq)
@@ -701,8 +704,59 @@ func TestSetupRuntimeSettingsApplyLiveAndReadBack(t *testing.T) {
 		t.Fatalf("failed reload status=%d body=%s", badRec.Code, badRec.Body.String())
 	}
 	rolledBack := settings.ResolveFSWatchConfig(context.Background(), s.DB, settings.FSWatchConfig{})
-	if rolledBack.Dir != "/tmp/suchi-inbox" || rolledBack.OwnerID != 1 {
+	if rolledBack.Dir != inbox || rolledBack.OwnerID != 1 {
 		t.Fatalf("failed reload persisted invalid settings: %+v", rolledBack)
+	}
+}
+
+func TestSaveIngestSettingsNamesUnusableDirectory(t *testing.T) {
+	d := openTestDB(t)
+	seedUser(t, d, 1)
+	reloads := 0
+	s := &Server{Actions: testActions(t), DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		FSWatchReloader: func(context.Context) error { reloads++; return nil }}
+	admin := &pluginapi.Principal{Kind: "user", UserID: 1, Role: "admin"}
+	root := t.TempDir()
+	file := filepath.Join(root, "notes.txt")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct{ name, dir, code string }{
+		{"quoted", `"` + root + `"`, "bad_dir"},
+		{"escaped", root + `/Visa\ Docs`, "bad_dir"},
+		{"missing", filepath.Join(root, "Visa Docs"), "dir_not_found"},
+		{"file", file, "bad_dir"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body, _ := json.Marshal(map[string]string{"fs_watch_dir": tt.dir, "fs_watch_owner_email": "u1@t.local"})
+			req := httptest.NewRequest(http.MethodPost, "/api/admin/settings/ingest", bytes.NewReader(body))
+			req = req.WithContext(auth.WithPrincipal(req.Context(), admin))
+			rec := httptest.NewRecorder()
+			s.SaveIngestSettings(rec, req)
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), tt.code) {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+	if reloads != 0 {
+		t.Fatalf("rejected directories reached the watcher %d times", reloads)
+	}
+	if got := settings.ResolveFSWatchConfig(context.Background(), d, settings.FSWatchConfig{}); got.Dir != "" {
+		t.Fatalf("rejected directory persisted: %+v", got)
+	}
+
+	spaced := filepath.Join(root, "Visa Docs")
+	if err := os.Mkdir(spaced, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(map[string]string{"fs_watch_dir": " " + spaced + "/ ", "fs_watch_owner_email": "u1@t.local"})
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/settings/ingest", bytes.NewReader(body))
+	req = req.WithContext(auth.WithPrincipal(req.Context(), admin))
+	rec := httptest.NewRecorder()
+	s.SaveIngestSettings(rec, req)
+	if rec.Code != http.StatusNoContent || reloads != 1 {
+		t.Fatalf("spaced directory status=%d reloads=%d body=%s", rec.Code, reloads, rec.Body.String())
 	}
 }
 
@@ -807,19 +861,24 @@ func TestLangCode(t *testing.T) {
 	}
 }
 
-func TestFSPath(t *testing.T) {
-	good := []string{"/data/staging", "/mnt/homelab/ingest", "/tmp/x", "/"}
+func TestValidWatchDir(t *testing.T) {
+	good := []string{
+		"/data/staging", "/", "/Users/a/My Docs",
+		"/Users/a/Library/CloudStorage/ProtonDrive-a@example.com-folder",
+		"/Users/a/Library/Mobile Documents/com~apple~CloudDocs",
+		"/Users/a/Ritesh's Docs (2024)", "/Users/a/Résumés",
+	}
 	bad := []string{
-		"", "relative/path", "/back\\slash", "/semi;colon",
-		"/pipe|", "/tick`", "/quote'", "/dollar$var",
+		"", "relative/path", `"/Users/a/My Docs"`, `/Users/a/Visa\ Docs/`, "/new\nline", "/nul\x00byte",
+		"/bad\xffutf8", "/" + strings.Repeat("a", 4096),
 	}
 	for _, p := range good {
-		if !fsPath.MatchString(p) {
+		if !validWatchDir(p) {
 			t.Errorf("expected valid: %q", p)
 		}
 	}
 	for _, p := range bad {
-		if fsPath.MatchString(p) {
+		if validWatchDir(p) {
 			t.Errorf("expected invalid: %q", p)
 		}
 	}
