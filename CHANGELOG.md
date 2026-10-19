@@ -19,6 +19,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- A document-link write with a fractional, negative or zero document ID is
+  rejected. A fractional ID was previously rounded down to a different
+  document, and a zero ID removed the existing link.
 - Deleting a folder layout that an automation still assigns is refused instead
   of leaving rules that fail on every new matching document. The UI keeps the
   layout visible and names the rules that must change.

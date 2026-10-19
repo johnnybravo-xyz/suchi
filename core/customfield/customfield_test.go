@@ -53,6 +53,28 @@ func TestValidate_Number(t *testing.T) {
 	}
 }
 
+func TestValidate_DocumentLink(t *testing.T) {
+	h := Lookup("documentlink")
+	accepted := map[any]int64{
+		float64(42): 42,
+		"42":        42,
+		int64(42):   42,
+		nil:         0,
+		"":          0,
+	}
+	for in, want := range accepted {
+		got, err := h.Validate(nil, in)
+		if err != nil || got.(int64) != want {
+			t.Errorf("%#v → %v, %v want %d", in, got, err, want)
+		}
+	}
+	for _, in := range []any{12.7, -3.0, "-3", "12.5", "#12", 1e300, true, []any{12}} {
+		if got, err := h.Validate(nil, in); err == nil {
+			t.Errorf("%#v accepted as %v", in, got)
+		}
+	}
+}
+
 func TestValidate_Date(t *testing.T) {
 	h := Lookup("date")
 	got, err := h.Validate(nil, "2026-08-04")

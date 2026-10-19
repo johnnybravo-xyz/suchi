@@ -40,6 +40,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"strconv"
 	"strings"
@@ -487,8 +488,16 @@ var (
 
 var handlerDocumentLink = &Handler{
 	Name: "documentlink",
+	// Zero means "no link", so an empty value clears the row like other types.
 	Validate: func(_ json.RawMessage, raw any) (any, error) {
-		return coerceInt64(raw)
+		id, err := coerceInt64(raw)
+		if err != nil {
+			return nil, fmt.Errorf("document link: %w", err)
+		}
+		if id < 0 {
+			return nil, errors.New("document link: document id must be positive")
+		}
+		return id, nil
 	},
 	Write: func(ctx context.Context, tx *sql.Tx, docID, fieldID int64, typed any) error {
 		return WriteDocumentLinkInTx(ctx, tx, docID, fieldID, typed.(int64), false)
@@ -589,6 +598,11 @@ func coerceFloat(raw any) (float64, error) {
 func coerceInt64(raw any) (int64, error) {
 	switch v := raw.(type) {
 	case float64:
+		// JSON numbers decode as float64; refuse values that would truncate or
+		// lose precision instead of silently naming a different integer.
+		if v != math.Trunc(v) || math.Abs(v) > 1<<53 {
+			return 0, fmt.Errorf("int: %v is not a whole number", v)
+		}
 		return int64(v), nil
 	case int:
 		return int64(v), nil
