@@ -73,9 +73,12 @@ pinned Bun stage and copies only `ui/dist` into the Go stage; Bun and
 offline binary and serve `third-party-notices.txt` with the application.
 
 The desktop app uses this same embedded bundle in the system WebView. Its static
-launcher exists only before sidecar readiness; it is not a frontend fork.
-Navigation stays on the verified loopback origin, with explicit `https:` and
-`mailto:` links delegated to the operating system.
+launcher exists only before sidecar readiness; it is not a frontend fork. The
+native host owns startup/error controls, app menu, tray, and close-to-background
+lifecycle. Navigation stays on the bundled launcher or exact verified loopback
+origin; explicit `https:` and `mailto:` links are delegated to the operating
+system and every other foreign navigation is denied. The loopback SPA receives
+no Tauri command capability.
 
 Settings reads `build_version` and optional `build_revision` from the existing
 `/api/whoami` session response. The executable supplies this identity once at

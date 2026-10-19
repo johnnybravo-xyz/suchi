@@ -179,32 +179,53 @@ operator backup. If no live session survives to bind an occupied unbound OIDC
 email, stop and restore with the old binary/config; do not delete, merge, or
 recreate the account to bypass the conflict.
 
-## Desktop release packages
+## One-time experimental desktop release
+
+The desktop package is one unsupported, manually attached experiment from the
+`feature/local-install` branch. It is not merged into `main`, is not a
+first-class release artifact, and has no planned maintenance or follow-up
+release. The main release workflow intentionally contains no desktop build,
+signing, collection, checksum, or publication job. Do not add desktop jobs or
+dependencies to that workflow.
 
 | Target | Packages |
 | --- | --- |
 | macOS, universal arm64/x86-64 | notarized `.app` archive and `.dmg` |
 | Linux, amd64/arm64 glibc | signed `.deb` and `.rpm` |
 
-Windows and AppImage are not release targets. `desktop/src-tauri/tauri.conf.json`
-must carry the tag version without `v`. Published macOS jobs require
-`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`,
-`APPLE_PASSWORD`, and `APPLE_TEAM_ID`; Linux jobs require
-`LINUX_PACKAGE_SIGNING_KEY` and `LINUX_PACKAGE_SIGNING_KEY_ID`.
+Windows and AppImage packages are not available. For the one manual release,
+`desktop/src-tauri/tauri.conf.json`, `desktop/src-tauri/Cargo.toml`, and
+`desktop/package.json` must carry the same version without `v`; `make
+desktop-build` rejects a mismatch. `SUCHI_DESKTOP_VERSION` and
+`SUCHI_DESKTOP_REVISION` become the bundled sidecar identity shown by About and
+verified before launch.
 
-Each matrix job verifies the packaged sidecar, allowlisted contents, signature,
-SBOM, and an installed/packaged launch. macOS additionally requires Gatekeeper
-acceptance and stapled notarization. The release collector publishes package
-checksums and includes them in the signed checksum/cosign output.
-
-Local packaging:
+Build on each native platform from the signed release revision:
 
 ```sh
-make desktop-check desktop-security desktop-build
+export VERSION=v0.3.0
+export SUCHI_DESKTOP_VERSION="$VERSION"
+export SUCHI_DESKTOP_REVISION="$(git rev-parse HEAD)"
+
+make desktop-check desktop-security desktop-build desktop-sbom
 DESKTOP_LAUNCH_SMOKE=1 hack/smoke-desktop-package.sh
 ```
 
-Local builds prove layout and launch, not release identity or notarization.
+The operator must separately sign Linux packages and sign, notarize, staple, and
+Gatekeeper-check macOS packages. Archive `Suchi.app` with
+`ditto -c -k --keepParent`, then rename the staged package and SBOM outputs to
+the established `suchi-desktop-$VERSION-macos-universal.*`,
+`suchi-desktop-$VERSION-linux-amd64.*`, and
+`suchi-desktop-$VERSION-linux-arm64.*` patterns. Place them in `dist/desktop`,
+then create the checksum and attach every file manually:
+
+```sh
+(cd dist/desktop && shasum -a 256 suchi-desktop-* > DESKTOP-SHA256SUMS)
+gh release upload "$VERSION" dist/desktop/*
+```
+
+Manual local builds prove layout and launch only. Do not describe an unsigned,
+unnotarized, or unstapled package as a release artifact.
 
 ## Release checklist
 
@@ -225,8 +246,8 @@ do not duplicate them here.
    rebuilds it in the pinned Bun stage for container images.
 
 2. Move the `[Unreleased]` entries under the new version and date. Update
-   `developmentVersion` in `distro/cmd/suchi/main.go` to the current source version
-   line with a `-dev` suffix.
+   `developmentVersion` in `distro/cmd/suchi/main.go` to the current source
+   version line with a `-dev` suffix.
 3. Review every OCR, content and LLM pipeline revision changed since the previous
    release. `distro/cmd/suchi/pipeline_proposals.go` is the tagged automatic
    reminder policy:
@@ -250,8 +271,6 @@ do not duplicate them here.
    make check
    make security-check
    make smoke
-   make desktop-check
-   make desktop-security
    make bench-check
    docker build --check .
    docker compose config --quiet

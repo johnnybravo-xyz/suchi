@@ -94,11 +94,14 @@ Reproducible binary-size and startup measurements live under
 
 ## Quick Start
 
-For one person using one macOS or Linux computer, download the signed native
-app from [Releases](https://github.com/johnnybravo-xyz/suchi/releases). It
-bundles the Suchi server, binds it to loopback, manages launch-at-login and
-transactional complete backups, and opens the same web app in the system
-WebView. See [Desktop local install](docs/local-install.mdx) for signature
+For one person using one macOS or Linux computer, one **unsupported,
+one-time experimental** desktop package is available from
+[Releases](https://github.com/johnnybravo-xyz/suchi/releases). It is not a
+first-class deployment artifact, will not be merged into the mainline product,
+and has no planned maintenance or follow-up release. It bundles the Suchi
+server, binds it to loopback, manages launch-at-login and transactional complete
+backups, and opens the same web app in the system WebView. See
+[One-time experimental desktop install](docs/local-install.mdx) for signature
 verification, migration, upgrade, restore, and uninstall instructions.
 
 For a server or multi-device installation, the versioned standard image is a

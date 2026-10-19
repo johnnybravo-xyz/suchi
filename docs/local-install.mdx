@@ -1,7 +1,14 @@
 ---
-title: "Desktop local install"
-description: "Install the signed macOS or Linux app, manage its local archive, and recover upgrades or restores."
+title: "One-time experimental desktop install"
+description: "Install the unsupported one-time macOS or Linux desktop experiment and manage its local archive."
 ---
+
+<Warning>
+  Suchi Desktop is a one-time, unsupported experimental release. It is not a
+  first-class deployment artifact, will not be merged into mainline, and has no
+  planned maintenance, security support, or follow-up release. Use the server
+  container or direct binary for a supported deployment path.
+</Warning>
 
 The desktop app bundles the normal Suchi server and opens its canonical web app
 in the system WebView. Use it for one person on one computer. Use a [server
@@ -21,17 +28,12 @@ available for the platforms listed on each release.
 
 ## Verify and install
 
-Verify the signed release checksum before trusting a package:
+Verify the separately published desktop checksum before checking the native
+package signature:
 
 ```sh
-cosign verify-blob \
-  --bundle SHA256SUMS.cosign.bundle \
-  --certificate-identity-regexp 'https://github.com/johnnybravo-xyz/suchi/' \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  SHA256SUMS
-
-shasum -a 256 -c SHA256SUMS --ignore-missing  # macOS
-sha256sum -c SHA256SUMS --ignore-missing      # Linux
+shasum -a 256 -c DESKTOP-SHA256SUMS --ignore-missing  # macOS
+sha256sum -c DESKTOP-SHA256SUMS --ignore-missing      # Linux
 ```
 
 On macOS, open the DMG, drag **Suchi** to **Applications**, and open it there.
@@ -58,18 +60,27 @@ CycloneDX SBOMs; native packages include `LICENSE`, `NOTICE`, and Rust notices.
 
 ## First launch and tray
 
-The app verifies its bundled sidecar, checks archive compatibility and optional
-parsers, then starts on `127.0.0.1:8000`. It opens the web app only after a
-nonce-bound readiness file and `/readyz` both succeed. A migrated legacy install
-retains its selected loopback port.
+The native startup window reports prerequisite checks and sidecar startup before
+the archive is available. It opens the web app only after a nonce-bound readiness
+file and `/readyz` both succeed. A startup failure remains in that window with
+the concrete error, **Open logs**, and **Retry** actions. Suchi never kills a
+different process that owns its configured port.
+
+A new install uses the operating system's private application-data directory, so
+there is no arbitrary archive-folder prompt. This keeps archive locking, private
+permissions, backup placement, and uninstall behavior deterministic. A migrated
+legacy install retains its validated archive path and selected loopback port.
 
 On a new archive, choose **Reveal setup token**, then **Open setup**, and create
-the first administrator. Port 8000 must be free; Suchi never kills another
-process that owns it.
+the first administrator.
 
-Closing the window hides it. The tray controls show/hide, start/stop processing,
-complete backup/restore, data/backup/log folders, **Launch at Login**, and quit.
-**Quit Suchi** stops the supervised server before exiting.
+Closing the window hides it while local processing continues. The native
+application menu provides **About Suchi**, **Reload**, **Open Logs**, and
+**Quit Suchi**; About reports the packaged app version and bundled server build.
+The tray controls show/hide, start/stop processing, complete backup/restore,
+data/backup/log folders, **Launch at Login**, and quit. On macOS, reopening the
+app from the Dock restores a hidden window. **Quit Suchi** stops the supervised
+server before exiting.
 
 PDF previews inside the desktop app use Suchi's bundled offline renderer with
 page and zoom controls. Opening the server in a separate browser keeps that
@@ -86,7 +97,9 @@ the SPA checks them before loading the related code or making a request.
 The launcher clears inherited network-integration configuration and gives local
 parsers a fixed search path: Homebrew and system paths on macOS, or
 `/usr/local/bin:/usr/bin:/bin` on Linux. It never downloads parsers or checks for
-updates. Explicit `https:` or `mailto:` links open through the operating system.
+updates. Explicit `https:` and `mailto:` links open through the operating system.
+Every other navigation outside the bundled launcher and exact loopback app
+origin is blocked.
 
 Missing parsers degrade only their formats:
 
@@ -101,8 +114,11 @@ The launcher reports the same inventory as `suchi prerequisites --json`.
 
 ## Files and archive ownership
 
-Use the tray folder actions; platform path APIs and migrated state are
-canonical. A new install separates these paths:
+Use the tray's data, backup, and log folder actions; **Open Logs** is also in the
+application menu. Platform path APIs and migrated state are canonical. Suchi
+deliberately keeps a new archive in its private, managed application-data
+location rather than asking for a user-selected folder. A new install separates
+these paths:
 
 ```text
 application data/archive/       database, blobs, keys, staging

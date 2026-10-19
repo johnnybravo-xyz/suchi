@@ -5,8 +5,10 @@ Notable user-visible changes to Suchi are recorded here.
 ## [Unreleased]
 
 ### Added
-- Native Suchi desktop packages for universal macOS and amd64/arm64 Linux,
-  using the existing local server and web app with tray-controlled lifecycle.
+- One unsupported, one-time experimental Suchi desktop package for universal
+  macOS and amd64/arm64 Linux, using the existing local server and web app with
+  native startup/error status, an application menu, and tray-controlled
+  lifecycle. It is not planned for mainline or a follow-up release.
 - Complete `.suchi-backup` archives, CLI verification/restore/recovery, and
   crash-safe desktop upgrade, downgrade, and restore transactions.
 - Exact migration from the final managed legacy local installer, preserving its
@@ -37,6 +39,11 @@ Notable user-visible changes to Suchi are recorded here.
   schema compatibility is checked before startup can mutate an archive.
 - Suchi Desktop uses a bundled offline PDF renderer with page and zoom controls;
   browser access retains the browser's native PDF preview.
+- Closing the desktop window now keeps local processing in the background;
+  **Quit Suchi** from the application menu or tray performs a supervised server
+  shutdown. Reopening the macOS app restores the hidden window.
+- Desktop WebView navigation is restricted to the bundled launcher and exact
+  loopback app origin. Explicit HTTPS and email links open in the OS handler.
 
 - Saved decryption passwords now separate their editable label, last-used date,
   and most recently unlocked document into labeled columns. Labels remain plain

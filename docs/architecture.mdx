@@ -108,7 +108,7 @@ a pinned Bun build stage and copies only generated files into the Go stage.
 
 ## Desktop local runtime
 
-The native package reuses the Go server and canonical embedded SPA:
+The one-time experimental native package reuses the Go server and canonical embedded SPA:
 
 ```mermaid
 flowchart LR
@@ -118,10 +118,13 @@ flowchart LR
 ```
 
 `desktop/src-tauri/src/` owns paths, sidecar identity, process/readiness
-supervision, and the tray. It verifies the packaged sidecar's metadata and
-SHA-256 before every spawn, clears the inherited environment, keeps child stdin
-as the lifetime channel, and requires both an atomic nonce-bound ready file and
-direct `/readyz` response before opening the SPA. The launcher never kills an
+supervision, window/navigation policy, the native application menu, and the
+tray. It verifies the packaged sidecar's metadata and SHA-256 before every
+spawn, clears the inherited environment, keeps child stdin as the lifetime
+channel, and requires both an atomic nonce-bound ready file and direct `/readyz`
+response before opening the SPA. Startup and maintenance states remain in the
+bundled launcher window; failures expose the private log folder and retry
+without granting Tauri commands to the loopback SPA. The launcher never kills an
 unrelated port owner.
 
 `core/archivelock` gives server and offline CLI work one exclusive archive
@@ -138,9 +141,13 @@ installer-owned service files after readiness.
 
 `DEPLOYMENT_PROFILE=desktop_local` is server-enforced: literal loopback only;
 no TLS, OIDC, shares, model connections, managed mail, or mobile pairing. Release
-packages are universal macOS app/DMG and glibc Linux deb/rpm, gated by package
-allowlists, launch smoke, signatures, notices, advisory audit, checksums, and
-SBOMs. See [Desktop local install](/local-install).
+packages are universal macOS app/DMG and glibc Linux deb/rpm. They are built
+from `feature/local-install` and attached manually as one unsupported experiment;
+the main release workflow does not build, sign, collect, or publish them.
+Matching Tauri, Cargo, and desktop package versions become the native package
+version, while the bundled sidecar identity carries the manually injected
+release version and source revision. See [One-time experimental desktop
+install](/local-install).
 
 ## From upload to usable document
 
