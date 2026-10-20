@@ -1,13 +1,19 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
   import { t as translate } from "./i18n.svelte.js";
-  let { url, label = translate("linkQR.showQrCode"), open = $bindable(false) } = $props()
+  let {
+    url,
+    label = translate("linkQR.showQrCode"),
+    open = $bindable(false),
+    allowedProtocols = ['http:', 'https:'],
+  } = $props()
   let code = $state(null)
   let error = $state('')
 
   $effect(() => {
     if (!open) return
     const value = url
+    const protocols = allowedProtocols
     let current = true
     code = null
     error = ''
@@ -15,7 +21,7 @@
       if (!current) return
       // URL serialization encodes Unicode without changing the encoder's globals.
       const link = new URL(value)
-      if (!['http:', 'https:'].includes(link.protocol) || link.username || link.password) {
+      if (!protocols.includes(link.protocol) || link.username || link.password) {
         throw new Error(translate("linkQR.invalidLink"))
       }
       const qr = qrcode(0, 'M')

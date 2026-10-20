@@ -3,6 +3,7 @@
   import { t as translate } from "./i18n.svelte.js";
   import { onDestroy, onMount, tick, untrack } from 'svelte'
   import { changeMyEmail } from './api.js'
+  import { twoFactorErrorMessage } from './twoFactorErrors.js'
   import { session } from './session.svelte.js'
   import Icon from './Icon.svelte'
 
@@ -10,17 +11,21 @@
   let newEmail = $state('')
   let confirmEmail = $state('')
   let currentPassword = $state('')
+  let twoFactorCode = $state('')
+  let needsTwoFactor = $state(false)
   let error = $state('')
   let busy = $state(false)
   let dialog
   let newEmailInput
   let confirmEmailInput
   let passwordInput
+  let twoFactorInput = $state()
   let disposed = false
   const account = untrack(() => session.user)
 
   function clearPassword() {
     currentPassword = ''
+    twoFactorCode = ''
   }
 
   function clearForm() {
@@ -80,10 +85,21 @@
     busy = true
     const targetEmail = newEmail.trim()
     try {
-      await changeMyEmail(targetEmail, currentPassword)
+      await changeMyEmail(targetEmail, currentPassword, needsTwoFactor ? twoFactorCode.replace(/\s/g, '') : '')
     } catch (exception) {
+      // The server asks for the code only after the password matched.
+      if (exception?.code === 'two_factor_required' && !needsTwoFactor) {
+        needsTwoFactor = true
+        twoFactorCode = ''
+        busy = false
+        await tick()
+        twoFactorInput?.focus()
+        return
+      }
       clearPassword()
-      error = exception?.message || translate("emailChangeDialog.couldNotChangeTheSignInEmail")
+      error = twoFactorErrorMessage(exception)
+        || (exception?.code === 'invalid_credentials' ? translate("twoFactorErrors.passwordOrCodeDidNotMatch") : '')
+        || exception?.message || translate("emailChangeDialog.couldNotChangeTheSignInEmail")
       busy = false
       await tick()
       passwordInput?.focus()
@@ -148,11 +164,18 @@
                  bind:value={currentPassword} type="password" autocomplete="current-password"
                  required disabled={busy} />
         </label>
+        {#if needsTwoFactor}
+          <label class="field full" for="email-change-two-factor">{translate("emailChangeDialog.twoFactorCode")}
+            <input id="email-change-two-factor" class="input" bind:this={twoFactorInput} bind:value={twoFactorCode}
+                   type="text" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false"
+                   required disabled={busy} />
+          </label>
+        {/if}
       </div>
       {#if error}<div class="err email-change-error" role="alert">{error}</div>{/if}
       <div class="form-actions">
         <button class="btn" type="button" disabled={busy} onclick={close}>{translate("common.cancel")}</button>
-        <button class="btn primary" disabled={busy || !newEmail || !confirmEmail || !currentPassword}>
+        <button class="btn primary" disabled={busy || !newEmail || !confirmEmail || !currentPassword || (needsTwoFactor && !twoFactorCode.trim())}>
           {busy ? translate("emailChangeDialog.changing") : translate("emailChangeDialog.changeSignInEmail")}
         </button>
       </div>

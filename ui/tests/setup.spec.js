@@ -30,6 +30,69 @@ test('keeps the document refresh control aligned without duplicating Trash navig
   expect(Math.abs(refresh.height - viewToggle.height)).toBeLessThanOrEqual(1)
 })
 
+test('completes local sign-in with an authenticator or recovery code', async ({ page }) => {
+  await mockAPI(page, { filingTreeChosen: true })
+  let signedIn = false
+  const attempts = []
+  await page.route('**/api/**', route => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname
+    if (path === '/api/whoami') {
+      return signedIn
+        ? route.fulfill({ json: {
+          kind: 'user', user_id: 1, email: 'admin@example.test', display_name: 'Admin',
+          role: 'admin', authn_by: 'local-auth', email_change_mode: 'password', capabilities: [],
+        } })
+        : route.fulfill({ status: 401, json: { code: 'unauthorized', error: 'auth required' } })
+    }
+    if (path !== '/api/login') return route.fallback()
+    const body = request.postDataJSON()
+    attempts.push(body)
+    if (!body.two_factor_code) {
+      return route.fulfill({ status: 401, json: { code: 'two_factor_required' } })
+    }
+    if (body.two_factor_code === '111111') {
+      return route.fulfill({ status: 429, headers: { 'Retry-After': '120' }, json: { code: 'too_many_attempts' } })
+    }
+    if (body.two_factor_code !== '654321') {
+      return route.fulfill({ status: 401, json: { code: 'invalid_credentials' } })
+    }
+    signedIn = true
+    return route.fulfill({ json: { ok: true } })
+  })
+
+  await page.goto('/#/dashboard')
+  await page.getByLabel('Email', { exact: true }).fill('admin@example.test')
+  await page.getByLabel('Password', { exact: true }).fill('correct-password')
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  const factor = page.getByLabel('Authenticator or recovery code', { exact: true })
+  await expect(factor).toBeFocused()
+
+  await page.getByLabel('Email', { exact: true }).fill('other@example.test')
+  await expect(page.getByLabel('Password', { exact: true })).toHaveValue('')
+  await expect(factor).toHaveCount(0)
+
+  await page.getByLabel('Email', { exact: true }).fill('admin@example.test')
+  await page.getByLabel('Password', { exact: true }).fill('correct-password')
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  // Six digits submit on their own.
+  await factor.fill('000000')
+  await expect(page.getByText('The authenticator or recovery code did not match.', { exact: true })).toBeVisible()
+  await expect(factor).toHaveValue('')
+  await factor.fill('111111')
+  await expect(page.getByText('Too many incorrect codes. Try again in 2 minutes.', { exact: true })).toBeVisible()
+  await factor.fill('654321')
+  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible()
+
+  expect(attempts).toEqual([
+    { email: 'admin@example.test', password: 'correct-password' },
+    { email: 'admin@example.test', password: 'correct-password' },
+    { email: 'admin@example.test', password: 'correct-password', two_factor_code: '000000' },
+    { email: 'admin@example.test', password: 'correct-password', two_factor_code: '111111' },
+    { email: 'admin@example.test', password: 'correct-password', two_factor_code: '654321' },
+  ])
+})
+
 test('clears account data and rejects late reads after signing in as another user', async ({ page }) => {
   await mockAPI(page, {
     documentsCount: 731,
@@ -652,7 +715,7 @@ async function mockAPI(page, options = {}) {
       email: options.userEmail || (options.demoSession ? 'visitor@demo.local' : 'admin@example.test'),
       display_name: options.demoSession ? 'Demo visitor' : 'Admin',
       role: options.userRole || (options.demoSession ? 'member' : 'admin'),
-      authn_by: options.demoSession ? 'demo' : 'local',
+      authn_by: options.authnBy || (options.demoSession ? 'demo' : options.emailChangeMode === 'oidc' ? 'oidc' : 'local-auth'),
       email_change_mode: options.emailChangeMode || (options.demoSession ? 'disabled' : 'password'),
       build_version: options.buildVersion,
       build_revision: options.buildRevision,
@@ -3279,6 +3342,50 @@ test('prevents self-disable while allowing other users to be disabled and enable
   ])
 })
 
+test('lets an administrator reset another users two-factor authentication', async ({ page }) => {
+  await mockAPI(page, { filingTreeChosen: true })
+  const requests = []
+  let attempts = 0
+  await page.route('**/api/admin/users', route => route.fulfill({ json: {
+    results: [
+      { id: 1, email: 'admin@example.test', display_name: 'Admin', role: 'admin', capabilities: [] },
+      { id: 2, email: 'member@example.test', display_name: 'Member', role: 'member',
+        disabled: false, capabilities: [], two_factor_enabled: true },
+    ],
+  } }))
+  await page.route('**/api/admin/users/2/two-factor/reset', route => {
+    requests.push(route.request().postDataJSON())
+    attempts++
+    return attempts === 1
+      ? route.fulfill({ status: 401, json: { code: 'invalid_credentials' } })
+      : route.fulfill({ status: 204 })
+  })
+
+  await page.goto('/#/settings?tab=archive&section=users')
+  const member = page.locator('.user-entry').filter({ hasText: 'member@example.test' })
+  await expect(member.getByText('2FA', { exact: true })).toBeVisible()
+  await member.getByRole('button', { name: 'Reset 2FA', exact: true }).click()
+  let dialog = page.getByRole('dialog', { name: 'Reset 2FA', exact: true })
+  await dialog.getByLabel('Your current password', { exact: true }).fill('wrong-password')
+  await dialog.getByLabel('Your authenticator or recovery code', { exact: true }).fill('111111')
+  await dialog.getByRole('button', { name: 'Reset 2FA', exact: true }).click()
+  await expect(dialog.getByRole('alert')).toHaveText('The password or code did not match.')
+  await expect(dialog.getByLabel('Your current password', { exact: true })).toHaveValue('')
+  await expect(dialog.getByLabel('Your authenticator or recovery code', { exact: true })).toHaveValue('')
+
+  await dialog.getByLabel('Your current password', { exact: true }).fill('admin-password')
+  await dialog.getByLabel('Your authenticator or recovery code', { exact: true }).fill('222222')
+  await dialog.getByRole('button', { name: 'Reset 2FA', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  await expect(member.getByText('2FA', { exact: true })).toHaveCount(0)
+  await expect(member.getByRole('button', { name: 'Reset 2FA', exact: true })).toHaveCount(0)
+  await expect(page.locator('.toast[role="status"]')).toHaveText('Reset two-factor authentication for member@example.test')
+  expect(requests).toEqual([
+    { current_password: 'wrong-password', two_factor_code: '111111' },
+    { current_password: 'admin-password', two_factor_code: '222222' },
+  ])
+})
+
 test('does not store hidden member grants when creating an administrator', async ({ page }) => {
   await mockAPI(page, { filingTreeChosen: true })
   await page.goto('/#/settings?tab=archive&section=users')
@@ -4477,6 +4584,46 @@ test('changes a password-managed sign-in email through focused reauthentication'
   ])
 })
 
+test('asks for the second factor when an enrolled account changes its email', async ({ page }) => {
+  const options = { userEmail: 'admin@example.test', emailChangeMode: 'password' }
+  await mockAPI(page, options)
+  const requests = []
+  await page.route('**/api/users/me/email', route => {
+    const body = route.request().postDataJSON()
+    requests.push(body)
+    if (!body.two_factor_code) return route.fulfill({ status: 401, json: { code: 'two_factor_required' } })
+    if (body.two_factor_code !== '654321') return route.fulfill({ status: 401, json: { code: 'invalid_credentials' } })
+    options.userEmail = body.email
+    return route.fulfill({ status: 204 })
+  })
+
+  await page.goto('/#/settings')
+  const profile = page.getByRole('region', { name: 'Profile', exact: true })
+  await profile.getByRole('button', { name: 'Change email', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Change sign-in email', exact: true })
+  await dialog.getByLabel('New email', { exact: true }).fill('changed@example.test')
+  await dialog.getByLabel('Confirm new email', { exact: true }).fill('changed@example.test')
+  await dialog.getByLabel('Current password', { exact: true }).fill('correct password')
+  await dialog.getByRole('button', { name: 'Change sign-in email', exact: true }).click()
+
+  const code = dialog.getByLabel('Authenticator or recovery code', { exact: true })
+  await expect(code).toBeFocused()
+  await expect(dialog.getByLabel('Current password', { exact: true })).toHaveValue('correct password')
+  await code.fill('000000')
+  await dialog.getByRole('button', { name: 'Change sign-in email', exact: true }).click()
+  await expect(dialog.getByRole('alert')).toHaveText('The password or code did not match.')
+
+  await dialog.getByLabel('Current password', { exact: true }).fill('correct password')
+  await code.fill('654321')
+  await dialog.getByRole('button', { name: 'Change sign-in email', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  expect(requests).toEqual([
+    { email: 'changed@example.test', current_password: 'correct password' },
+    { email: 'changed@example.test', current_password: 'correct password', two_factor_code: '000000' },
+    { email: 'changed@example.test', current_password: 'correct password', two_factor_code: '654321' },
+  ])
+})
+
 test('clears an open email-change secret when the account changes', async ({ page }) => {
   await mockAPI(page, { emailChangeMode: 'password' })
   let identityReads = 0
@@ -4522,6 +4669,7 @@ test('uses provider reauthentication for OIDC-managed email and consumes fixed n
   await expect(profile.getByText('Sign-in: Identity provider', { exact: true })).toBeVisible()
   await expect(profile.getByText(/identity provider manages this address/i)).toBeVisible()
   await expect(profile.getByRole('button', { name: 'Change email', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'Security', exact: true })).toHaveCount(0)
   await profile.getByRole('button', { name: 'Sync from identity provider', exact: true }).click()
   await expect(page.locator('.toast[role="status"]')).toHaveText('Sign-in email changed')
   await expect(page).toHaveURL(/\/#\/settings$/)
@@ -4553,6 +4701,188 @@ test('keeps disabled account email read-only without a mutation path', async ({ 
   await expect(profile.getByText('Sign-in email changes are not available for this account.')).toBeVisible()
   await expect(profile.getByRole('button', { name: 'Change email', exact: true })).toHaveCount(0)
   await expect(profile.getByRole('button', { name: 'Sync from identity provider', exact: true })).toHaveCount(0)
+})
+
+test('sets up, regenerates, and disables two-factor authentication', async ({ page }) => {
+  await mockAPI(page, { filingTreeChosen: true })
+  let enabled = false
+  let recoveryCount = 0
+  let enrollments = 0
+  const mutations = []
+  const firstCodes = Array.from({ length: 10 }, (_, index) => `AAAA-BBBB-CCCC-${String(index).padStart(4, '0')}`)
+  const secondCodes = Array.from({ length: 10 }, (_, index) => `DDDD-EEEE-FFFF-${String(index).padStart(4, '0')}`)
+  await page.route('**/api/account/two-factor**', route => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname
+    if (request.method() === 'GET' && path === '/api/account/two-factor') {
+      return route.fulfill({ json: { enabled, recovery_codes_remaining: recoveryCount } })
+    }
+    const body = request.postDataJSON()
+    mutations.push({ path, body })
+    if (path === '/api/account/two-factor/enrollment') {
+      enrollments++
+      return route.fulfill({ json: {
+        secret: 'JBSWY3DPEHPK3PXP',
+        provisioning_uri: 'otpauth://totp/suchi%3Aadmin%40example.test?secret=JBSWY3DPEHPK3PXP&issuer=suchi&digits=6&period=30',
+        enrollment_token: `enrollment-${enrollments}`,
+        expires_at: 1893456000,
+      } })
+    }
+    if (path === '/api/account/two-factor/recovery-codes') {
+      recoveryCount = secondCodes.length
+      return route.fulfill({ json: { recovery_codes: secondCodes } })
+    }
+    if (path === '/api/account/two-factor/disable') {
+      enabled = false
+      recoveryCount = 0
+      return route.fulfill({ status: 204 })
+    }
+    enabled = true
+    recoveryCount = firstCodes.length
+    return route.fulfill({ json: { recovery_codes: firstCodes, active_api_tokens: 2 } })
+  })
+
+  await page.goto('/#/settings')
+  const security = page.getByRole('region', { name: 'Security', exact: true })
+  await expect(security.getByText('Two-factor authentication is off', { exact: true })).toBeVisible()
+  await security.getByRole('button', { name: 'Set up authenticator', exact: true }).click()
+  let dialog = page.getByRole('dialog', { name: 'Set up authenticator', exact: true })
+  await dialog.getByLabel('Current password', { exact: true }).fill('account-password')
+  await dialog.getByRole('button', { name: 'Continue', exact: true }).click()
+  dialog = page.getByRole('dialog', { name: 'Connect authenticator', exact: true })
+  await expect(dialog.getByLabel('Manual setup secret', { exact: true })).toHaveValue('JBSWY3DPEHPK3PXP')
+  await dialog.getByRole('button', { name: 'Show authenticator QR code', exact: true }).click()
+  await expect(dialog.getByRole('img', { name: 'QR code for the displayed link', exact: true })).toBeVisible()
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+
+  await security.getByRole('button', { name: 'Set up authenticator', exact: true }).click()
+  dialog = page.getByRole('dialog', { name: 'Set up authenticator', exact: true })
+  await expect(dialog.getByLabel('Current password', { exact: true })).toHaveValue('')
+  await dialog.getByLabel('Current password', { exact: true }).fill('account-password')
+  await dialog.getByRole('button', { name: 'Continue', exact: true }).click()
+  dialog = page.getByRole('dialog', { name: 'Connect authenticator', exact: true })
+  await dialog.getByLabel('Authenticator code', { exact: true }).fill('123456')
+  await dialog.getByRole('button', { name: 'Enable two-factor authentication', exact: true }).click()
+
+  dialog = page.getByRole('dialog', { name: 'Save recovery codes', exact: true })
+  await expect(dialog.getByText(firstCodes[0], { exact: true })).toBeVisible()
+  await expect(dialog.getByText(firstCodes.at(-1), { exact: true })).toBeVisible()
+  await expect(dialog).toContainText('2 API tokens or paired devices created before this still work.')
+  await expect(dialog.getByRole('button', { name: 'Done', exact: true })).toBeDisabled()
+  const download = page.waitForEvent('download')
+  await dialog.getByRole('button', { name: 'Download', exact: true }).click()
+  expect((await download).suggestedFilename()).toBe('suchi-recovery-codes.txt')
+  await dialog.getByLabel('I saved these recovery codes somewhere safe.', { exact: true }).check()
+  await dialog.getByRole('button', { name: 'Done', exact: true }).click()
+  await expect(security.getByText('Two-factor authentication is on', { exact: true })).toBeVisible()
+  await expect(security.getByText('Recovery codes remaining: 10', { exact: true })).toBeVisible()
+
+  await security.getByRole('button', { name: 'Regenerate recovery codes', exact: true }).click()
+  dialog = page.getByRole('dialog', { name: 'Regenerate recovery codes', exact: true })
+  await dialog.getByLabel('Current password', { exact: true }).fill('account-password')
+  await dialog.getByLabel('Authenticator or recovery code', { exact: true }).fill('234567')
+  await dialog.getByRole('button', { name: 'Regenerate recovery codes', exact: true }).click()
+  dialog = page.getByRole('dialog', { name: 'Save recovery codes', exact: true })
+  await expect(dialog.getByText(secondCodes[0], { exact: true })).toBeVisible()
+  await dialog.getByLabel('I saved these recovery codes somewhere safe.', { exact: true }).check()
+  await dialog.getByRole('button', { name: 'Done', exact: true }).click()
+
+  await security.getByRole('button', { name: 'Disable', exact: true }).click()
+  dialog = page.getByRole('dialog', { name: 'Disable two-factor authentication', exact: true })
+  await dialog.getByLabel('Current password', { exact: true }).fill('account-password')
+  await dialog.getByLabel('Authenticator or recovery code', { exact: true }).fill('345678')
+  await dialog.getByRole('button', { name: 'Disable two-factor authentication', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  await expect(security.getByText('Two-factor authentication is off', { exact: true })).toBeVisible()
+
+  expect(mutations).toEqual([
+    { path: '/api/account/two-factor/enrollment', body: { current_password: 'account-password' } },
+    { path: '/api/account/two-factor/enrollment', body: { current_password: 'account-password' } },
+    { path: '/api/account/two-factor', body: { enrollment_token: 'enrollment-2', authenticator_code: '123456' } },
+    { path: '/api/account/two-factor/recovery-codes', body: { current_password: 'account-password', two_factor_code: '234567' } },
+    { path: '/api/account/two-factor/disable', body: { current_password: 'account-password', two_factor_code: '345678' } },
+  ])
+})
+
+test('warns about low recovery codes and explains rejected codes', async ({ page }) => {
+  await mockAPI(page, { filingTreeChosen: true })
+  await page.route('**/api/account/two-factor**', route => {
+    const request = route.request()
+    if (request.method() === 'GET') return route.fulfill({ json: { enabled: true, recovery_codes_remaining: 1 } })
+    return route.fulfill({ status: 401, json: { code: 'invalid_credentials' } })
+  })
+
+  await page.goto('/#/settings')
+  const security = page.getByRole('region', { name: 'Security', exact: true })
+  await expect(security.getByText('Only 1 recovery code left. Make new ones so a lost phone does not lock you out.', { exact: true })).toBeVisible()
+  await security.getByRole('button', { name: 'Regenerate recovery codes', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Regenerate recovery codes', exact: true })
+  await dialog.getByLabel('Current password', { exact: true }).fill('account-password')
+  await dialog.getByLabel('Authenticator or recovery code', { exact: true }).fill('000000')
+  await dialog.getByRole('button', { name: 'Regenerate recovery codes', exact: true }).click()
+  await expect(dialog.getByRole('alert')).toHaveText('The password or code did not match.')
+})
+
+test('discards a late two-factor enrollment response after the account changes', async ({ page }) => {
+  await mockAPI(page, { filingTreeChosen: true })
+  let actor = 1
+  let enrollment
+  const identity = () => ({
+    kind: 'user',
+    user_id: actor,
+    email: actor === 1 ? 'first@example.test' : 'second@example.test',
+    display_name: actor === 1 ? 'First user' : 'Second user',
+    role: 'admin',
+    authn_by: 'local-auth',
+    email_change_mode: 'password',
+    capabilities: [],
+    public_share_available: false,
+  })
+  await page.route('**/api/**', route => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname
+    if (request.method() === 'GET' && path === '/api/whoami') {
+      return route.fulfill({ json: identity() })
+    }
+    if (request.method() === 'PATCH' && path === '/api/users/me') {
+      actor = 2
+      return route.fulfill({ status: 204 })
+    }
+    if (request.method() === 'GET' && path === '/api/account/two-factor') {
+      return route.fulfill({ json: { enabled: false, recovery_codes_remaining: 0 } })
+    }
+    if (request.method() === 'POST' && path === '/api/account/two-factor/enrollment') {
+      enrollment = route
+      return
+    }
+    return route.fallback()
+  })
+
+  await page.goto('/#/settings')
+  const security = page.getByRole('region', { name: 'Security', exact: true })
+  await security.getByRole('button', { name: 'Set up authenticator', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Set up authenticator', exact: true })
+  await dialog.getByLabel('Current password', { exact: true }).fill('first-password')
+  await dialog.getByRole('button', { name: 'Continue', exact: true }).click()
+  await expect.poll(() => !!enrollment).toBe(true)
+
+  await page.getByRole('button', { name: 'Save profile', exact: true }).evaluate(button => button.click())
+  await expect(page.getByLabel('Email', { exact: true })).toHaveValue('second@example.test')
+  await expect(dialog).toHaveCount(0)
+  await expect(security.getByRole('button', { name: 'Set up authenticator', exact: true })).toBeEnabled()
+
+  const finished = page.waitForEvent('requestfinished', request => request === enrollment.request())
+  await enrollment.fulfill({ json: {
+    secret: 'FIRSTACCOUNTSEED',
+    provisioning_uri: 'otpauth://totp/Suchi%3Afirst%40example.test?secret=FIRSTACCOUNTSEED&issuer=Suchi',
+    enrollment_token: 'first-account-enrollment',
+    expires_at: 1893456000,
+  } })
+  await finished
+  await page.waitForTimeout(50)
+  await expect(page.getByRole('dialog', { name: 'Connect authenticator', exact: true })).toHaveCount(0)
+  await expect(page.getByLabel('Manual setup secret', { exact: true })).toHaveCount(0)
 })
 
 test('keeps the email-change dialog inside an enlarged mobile viewport', async ({ page }) => {
@@ -4627,7 +4957,7 @@ for (const demoSession of ['anon', 'scratch']) {
     for (const name of ['Save profile', 'Change photo', 'Change email', 'Sync from identity provider', 'Pair mobile app', 'Create token', 'Delete saved password']) {
       await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0)
     }
-    for (const name of ['Mobile app', 'API tokens', 'Saved decryption passwords', 'Mailboxes']) {
+    for (const name of ['Security', 'Mobile app', 'API tokens', 'Saved decryption passwords', 'Mailboxes']) {
       await expect(page.getByRole('heading', { name, exact: true })).toHaveCount(0)
     }
     await page.evaluate(() => window.dispatchEvent(new Event('focus')))
@@ -4787,7 +5117,7 @@ test('connected mobile apps ignore a late list from the previous account', async
   let tokenReads = 0
   let oldRead
   await page.route('**/api/whoami', route => ++identityReads === 1 ? route.fallback() : route.fulfill({ json: {
-    user_id: 2, email: 'second@example.test', display_name: 'Second user', role: 'member', capabilities: [], authn_by: 'local',
+    user_id: 2, email: 'second@example.test', display_name: 'Second user', role: 'member', capabilities: [], authn_by: 'local-auth',
   } }))
   await page.route('**/api/tokens/', route => {
     if (++tokenReads === 1) { oldRead = route; return }
@@ -4937,7 +5267,7 @@ for (const refreshedUserID of [1, 2]) {
 
     await pendingIdentity.fulfill({ json: {
       user_id: refreshedUserID, email: 'refreshed@example.test', display_name: 'Refreshed user',
-      role: 'member', capabilities: [], authn_by: 'local',
+      role: 'member', capabilities: [], authn_by: 'local-auth',
     } })
     await expect(dialog).toHaveCount(0)
     await expect(page.locator('#pairing-link')).toHaveCount(0)

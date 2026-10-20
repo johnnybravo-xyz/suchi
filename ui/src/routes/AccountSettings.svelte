@@ -13,6 +13,7 @@
   import EmailChangeDialog from '../lib/EmailChangeDialog.svelte'
   import Lazy from '../lib/Lazy.svelte'
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
+  import TwoFactorSettings from '../lib/TwoFactorSettings.svelte'
 
   const loadMailboxes = () => import('../lib/EmailAccounts.svelte')
   const loadMobilePairing = () => import('../lib/MobilePairing.svelte')
@@ -375,6 +376,10 @@
   {#if emailDialogOpen}
     <EmailChangeDialog currentEmail={session.user?.email || ''}
       onClose={closeEmailDialog} onChanged={emailChanged} />
+  {/if}
+
+  {#if !demoVisitor && session.user?.authn_by === 'local-auth'}
+    <TwoFactorSettings {notify} />
   {/if}
 
 

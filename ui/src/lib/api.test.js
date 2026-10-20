@@ -5,7 +5,7 @@ import test from 'node:test'
 // Transport-only tests run without Svelte compilation. Browser regressions
 // exercise the reactive account/system lifecycle with the real compiled module.
 globalThis.$state = value => value
-const { askArchive, changeMyEmail, login, logout, uploadDocument, uploadDocumentVersion, exportTaxonomy, cancelMobilePairing, getDemoMode, whoami } = await import('./api.js')
+const { askArchive, changeMyEmail, enableTwoFactor, login, logout, uploadDocument, uploadDocumentVersion, exportTaxonomy, cancelMobilePairing, getDemoMode, whoami } = await import('./api.js')
 const { systems, resetSystems } = await import('./systems.svelte.js')
 delete globalThis.$state
 
@@ -174,6 +174,32 @@ test('successful email rotation invalidates older account requests', async () =>
       path: '/api/users/me/email',
       method: 'POST',
       body: { email: 'changed@example.test', current_password: 'current secret' },
+    })
+    finishIdentity(new Response(JSON.stringify({ email: 'old@example.test' })))
+    await assert.rejects(staleIdentity, error => error.name === 'AbortError')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('successful two-factor enable rejects requests from the rotated browser session', async () => {
+  const originalFetch = globalThis.fetch
+  let finishIdentity
+  let enableRequest
+  globalThis.fetch = async (path, options = {}) => {
+    if (path === '/api/whoami') {
+      return new Promise(resolve => { finishIdentity = resolve })
+    }
+    enableRequest = { path, method: options.method, body: JSON.parse(options.body) }
+    return new Response(JSON.stringify({ recovery_codes: ['AAAA-BBBB'] }))
+  }
+  try {
+    const staleIdentity = whoami()
+    await enableTwoFactor('sealed enrollment', '123456')
+    assert.deepEqual(enableRequest, {
+      path: '/api/account/two-factor',
+      method: 'POST',
+      body: { enrollment_token: 'sealed enrollment', authenticator_code: '123456' },
     })
     finishIdentity(new Response(JSON.stringify({ email: 'old@example.test' })))
     await assert.rejects(staleIdentity, error => error.name === 'AbortError')

@@ -65,7 +65,11 @@ async function req(method, path, body, opts = {}) {
     }
   }
   if (r.status === 204) return null
-  if (!r.ok) throw new ApiError(r.status, data?.code, data)
+  if (!r.ok) {
+    const error = new ApiError(r.status, data?.code, data)
+    error.retryAfter = Number(r.headers?.get?.('Retry-After')) || 0
+    throw error
+  }
   return data
 }
 
@@ -131,9 +135,13 @@ export const createMobilePairing = (name, system = systems.code) =>
   req('POST', '/api/mobile/pairing', { name }, { system, keepScope: true, signal: AbortSignal.timeout(15000) })
 export const cancelMobilePairing = (code, system = systems.code) =>
   req('DELETE', '/api/mobile/pairing', { code }, { system, keepScope: true, signal: AbortSignal.timeout(10000) })
-export function login(email, password) {
+export function login(email, password, twoFactorCode = '') {
   resetSessionRequests()
-  return api.post('/api/login', { email, password })
+  return api.post('/api/login', {
+    email,
+    password,
+    ...(twoFactorCode ? { two_factor_code: twoFactorCode } : {}),
+  })
 }
 
 export const listDocuments = (params, signal) => api.get(`/api/documents/${qs(params)}`, { signal })
@@ -267,14 +275,48 @@ export const deleteSavedView = (id) => api.del(`/api/saved_views/${id}`)
 export const setupState = () => singleFlightGet('/api/admin/setup/state')
 
 export const patchMe = (b) => api.patch('/api/users/me', b)
-export async function changeMyEmail(email, currentPassword) {
+export async function changeMyEmail(email, currentPassword, twoFactorCode = '') {
   const result = await api.post('/api/users/me/email', {
     email,
     current_password: currentPassword,
+    ...(twoFactorCode ? { two_factor_code: twoFactorCode } : {}),
   })
   resetSessionRequests()
   return result
 }
+
+export const getTwoFactorStatus = () => api.get('/api/account/two-factor')
+export const startTwoFactorEnrollment = (currentPassword) =>
+  api.post('/api/account/two-factor/enrollment', { current_password: currentPassword })
+export async function enableTwoFactor(enrollmentToken, authenticatorCode) {
+  const result = await api.post('/api/account/two-factor', {
+    enrollment_token: enrollmentToken,
+    authenticator_code: authenticatorCode,
+  })
+  resetSessionRequests()
+  return result
+}
+export async function regenerateTwoFactorRecoveryCodes(currentPassword, twoFactorCode) {
+  const result = await api.post('/api/account/two-factor/recovery-codes', {
+    current_password: currentPassword,
+    two_factor_code: twoFactorCode,
+  })
+  resetSessionRequests()
+  return result
+}
+export async function disableTwoFactor(currentPassword, twoFactorCode) {
+  const result = await api.post('/api/account/two-factor/disable', {
+    current_password: currentPassword,
+    two_factor_code: twoFactorCode,
+  })
+  resetSessionRequests()
+  return result
+}
+export const adminResetTwoFactor = (userID, currentPassword, twoFactorCode) =>
+  api.post(`/api/admin/users/${userID}/two-factor/reset`, {
+    current_password: currentPassword,
+    two_factor_code: twoFactorCode,
+  })
 export const uploadAvatar = (file) => {
   const fd = new FormData()
   fd.append('avatar', file)

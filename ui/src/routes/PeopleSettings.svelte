@@ -1,5 +1,6 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
+  import { tick } from 'svelte'
   import { t as translate } from "../lib/i18n.svelte.js";
   import { customFieldLabel, plural } from '../lib/format.js'
   import { captureScope, scopeCurrent, systems } from '../lib/systems.svelte.js'
@@ -11,6 +12,7 @@
            createTaxon, patchTaxon, deleteTaxon, deleteTags } from '../lib/api.js'
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
   import UserCreateForm from '../lib/UserCreateForm.svelte'
+  import AdminTwoFactorResetDialog from '../lib/AdminTwoFactorResetDialog.svelte'
   import Icon from '../lib/Icon.svelte'
   import { USER_CAPABILITIES } from '../lib/capabilities.js'
   import { session } from '../lib/session.svelte.js'
@@ -40,6 +42,27 @@
   let usersError = $state('')
   let userBusy = $state(false)
   let usersLoadVersion = 0
+  let twoFactorResetUser = $state(null)
+  let twoFactorResetTrigger
+
+  function openTwoFactorReset(user, event) {
+    twoFactorResetUser = user
+    twoFactorResetTrigger = event.currentTarget
+  }
+
+  async function closeTwoFactorReset() {
+    const returnFocus = twoFactorResetTrigger
+    twoFactorResetUser = null
+    twoFactorResetTrigger = undefined
+    await tick()
+    returnFocus?.focus()
+  }
+
+  async function twoFactorReset(user) {
+    user.two_factor_enabled = false
+    notify?.(translate('peopleSettings.twoFactorResetValue', { email: user.email }))
+    await closeTwoFactorReset()
+  }
 
   async function loadUsers() {
     const version = ++usersLoadVersion
@@ -523,6 +546,11 @@
                 {#if u.display_name}<span class="quiet">{u.email}</span>{/if}
               </span>
               <span class="pill">{u.role}</span>
+              {#if u.two_factor_enabled}<span class="pill ok">{translate('peopleSettings.twoFactor')}</span>{/if}
+              {#if u.two_factor_enabled && !isCurrentUser}
+                <button class="btn sm" type="button" disabled={userBusy}
+                        onclick={(event) => openTwoFactorReset(u, event)}>{translate('peopleSettings.resetTwoFactor')}</button>
+              {/if}
               <span class="switch-control" title={isCurrentUser ? translate("peopleSettings.youCannotDisableYourOwnAccount") : undefined}>
                 <span>{u.disabled ? translate("peopleSettings.disabled") : translate("peopleSettings.active")}{isCurrentUser ? ' (you)' : ''}</span>
                 <button type="button" class="switch" role="switch" aria-checked={!u.disabled}
@@ -763,6 +791,11 @@
   </section>
 {/if}
 </div>
+
+{#if twoFactorResetUser}
+  <AdminTwoFactorResetDialog user={twoFactorResetUser}
+    onClose={closeTwoFactorReset} onReset={twoFactorReset} />
+{/if}
 
 {#if deleteRequest && deleteDialog}
   <ConfirmDialog
