@@ -8,8 +8,9 @@ Optional integrations must preserve useful local operation.
 - Read `README.md` and the relevant `docs/` guide. Code, contract tests, and
   `CHANGELOG.md` describe the shipped implementation; `../specs/` also contains
   future proposals and records for other branches.
-- Read `docs/architecture.mdx` for the product/backend map and
-  `docs/spa-architecture.mdx` for browser ownership before changing a boundary.
+- Read `docs/architecture.mdx` for the product map and its index of architecture
+  guides (runtime, document lifecycle, storage, security, filing, and the
+  frontend pages) before changing a boundary.
 - `core/` owns application behavior; `plugins/` contains compiled integrations;
   `plugin-api/` is the extension vocabulary; `distro/app/` assembles the server
   and `distro/cmd/suchi/` owns command parsing and process behavior.

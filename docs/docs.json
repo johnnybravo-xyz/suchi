@@ -68,7 +68,23 @@
           },
           {
             "group": "Development",
-            "pages": ["architecture", "spa-architecture", "release-process"]
+            "pages": [
+              {
+                "group": "Architecture",
+                "pages": [
+                  "architecture",
+                  "architecture-runtime",
+                  "architecture-documents",
+                  "architecture-storage",
+                  "architecture-security",
+                  "architecture-filing",
+                  "spa-architecture",
+                  "spa-document-screens",
+                  "spa-settings-screens"
+                ]
+              },
+              "release-process"
+            ]
           },
           {
             "group": "Alternatives",

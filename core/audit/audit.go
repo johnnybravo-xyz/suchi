@@ -192,7 +192,7 @@ func toMap(v any) (map[string]any, error) {
 
 // Log persists e. Failures are logged and swallowed on purpose — a failed
 // audit write must not fail the user's action, only be visible in logs
-// for operator response. See docs/architecture.mdx.
+// for operator response. See docs/architecture-storage.mdx.
 //
 // After the DB write, every registered AuditSink (see RegisterSink) is
 // fired with the same event. Sink failures don't roll back the row.

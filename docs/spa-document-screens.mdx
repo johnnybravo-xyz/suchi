@@ -1,0 +1,202 @@
+---
+title: "Frontend: document screens"
+description: "Documents, Trash, Document Detail, versions and links, Views, Calendar, the demo tour, upload, sharing, and approval cards."
+---
+
+Part of the [architecture guides](/architecture); see [Frontend architecture](/spa-architecture) for routing, request lifetimes, and conventions every screen follows.
+
+## Documents, Trash, and Document Detail
+
+Documents/Inbox derive filters, dates and pagination from the hash, without a page
+cache. Links preserve route/query; filter controls remove `page`. Documents owns
+a dedicated **Shared by me** button that toggles `share_link=active`; it means
+unexpired, unrevoked links created by the current user, not documents merely
+visible through ACLs. At narrow widths, the tag, correspondent, share,
+sensitivity and date controls sit behind one screen-local disclosure; URL-derived
+chips remain visible and **Clear all** removes only those controls.
+The correspondent selector keeps ID and no-correspondent modes mutually
+exclusive in the hash. `correspondents__isnull=true` becomes
+`correspondent_missing` in the published Ask scope instead of being dropped
+between the list and research requests.
+
+The route publishes that same normalized hash context to Ask your documents
+before issuing its list request. The shell clears a published context only when
+its route path no longer matches; same-path query updates replace it rather than
+briefly falling back to all documents.
+
+Document result containers are noninteractive. Each has one title-labelled
+document link plus sibling selection and quick-action controls; per-row filing
+controls include the document title in their accessible names. A bounded footer
+fits mobile. Invalid/out-of-range pages use `go(hash, { replace: true })` to sync
+route state without creating Back-button loops. Verify with:
+`cd ui && bun run e2e --grep 'document pagination|document controls|mobile document filters|active share links'`.
+
+Trash uses `#/doc/{id}` and the same detail owner. Server `trashed_at`, `deletes_at`
+and `owner_id` select read-only recovery; skip versions, similarity and access
+management reads. Restore reloads that document; confirmed deletion returns to
+Trash. Keep row links separate from recovery buttons, with actions below titles
+on mobile. Server authorization still governs blobs.
+
+Detail reloads only when its document ID changes or an explicit action requests
+refresh. Arrival of sidebar categories must not restart reads or discard edits.
+Metadata/language saves check that same document generation before updating local
+state, so an earlier save cannot change the next document's sensitivity or Reveal.
+Person-renamed titles show one lock with the protection explanation and a
+subtle **Let Suchi rename this** action. Rename completion updates local
+ownership to `human`; release sends only `title_owner: auto` and removes the
+lock without changing the title. Both paths use the same route-generation guard
+as other detail metadata writes.
+The Correspondents editor loads the existing system catalog on demand and uses
+the shared type-to-select picker before sending one
+`bulk_edit set_correspondent` operation for the open document. It promotes a
+selected primary sender or clears sender roles with ID `0`, preserves other role
+relations in local state, and rejects late responses through the same generation
+guard.
+
+Archive serial number editing is detail-owned state with the same route
+generation guard. The browser accepts only decimal safe positive integers or an
+empty value, then sends `archive_serial_number` in one PATCH. Server validation
+and retained-value conflicts stay inline without discarding the draft. List,
+ranked Search, Trash, detail, and version rows consume the server projection and
+render one canonical **ASN _n_** chip; the browser does not reconstruct values
+from QR payloads or folder paths.
+
+Verify the ASN editor, projection chips, and split-upload receipt with
+`cd ui && bun run e2e --grep 'archive serial numbers|split scan'`.
+
+`DocumentDetail.svelte` owns similar-document results, version history,
+replacement upload, attributed exact-revision notes, typed custom fields,
+outgoing references, and backlinks for one route generation. Those reads load
+concurrently and every late response checks the document/account/system
+generation. Notes use optimistic screen-local create/update/delete state only
+after server success. Similar documents, links, versions, and notes share one
+screen-local tab card, with Notes last; Trash skips the first three reads and
+shows Notes read-only. Opening another live document resets selection to the
+first tab. Outgoing custom-field values and the independently paged backlink
+projection remain separate state and operations. [Document detail, versions and
+links](/document-versions-and-links) owns their user-facing vocabulary and
+semantic contract. Populated ordinary custom fields remain in the metadata card;
+unset definitions stay behind its single add-field selector.
+
+`api.js:uploadDocumentVersion` uses private multipart assembly so `source_mtime`
+and the caller's idempotency key are preserved. The screen keeps the selected
+file/key after recoverable failures and clears them only after a successful
+response and navigation. The server rejects stale family heads; version history
+exposes upload only on the latest visible revision and an ID-free conflict tells
+the user to reload after a race. Versions and backlinks page independently; late
+responses check document, account, and system scope before changing state. Trash
+skips these reads.
+
+`lib/documentReferences.js` parses only exact numeric IDs or same-instance
+document URLs. It rejects another origin before any lookup. Target search,
+PUT/DELETE, and post-mutation detail/backlink refresh remain screen-owned; the
+browser never infers visibility, currentness, or reciprocal links.
+
+`Views.svelte` keeps a flat draft plus a separate list of currently visible
+builder filters. Its empty state derives up to three category starters from
+separate filing-tree areas, then fills any gaps with generic patterns; selecting
+one changes only the unsaved draft. **Add a filter** changes the same ordinary
+draft values. Helpers in `lib/documentFilters.js` extract one generated
+`has-field:` token when reopening the editor and serialize it back into the
+canonical rich query. The saved contract remains `filters.q`, so Documents
+navigation, copied hashes, and Back/Forward need no second state channel.
+Saved-view lists do not issue per-view document requests.
+Filter vocabularies load only after the editor opens; until then, list summaries
+use the saved query and generic filter labels. The editor debounces the
+visibility-scoped document list endpoint for its one live match count. A count
+failure stays local and never hides or broadens a saved view. Verify the surface
+with the saved-view cases in `ui/tests/setup.spec.js`.
+
+Above the single-column breakpoint, `DocumentDetail.svelte` consumes the
+available content height, fixes the preview and detail sidebar to the same
+bounds, and gives overflow ownership to the sidebar. Narrow layouts retain
+normal document flow.
+
+Calendar derives `month`, `start`, `days`, `date`, `view_id`, `role` and
+document scope from the hash. It defaults to the browser's current local month;
+`days=30` and `days=14` use rolling ranges beginning at `start` or today. Range
+navigation preserves View/role, and the current-month link resets the default.
+Calendar uses `RuleWorkspace.svelte` and the 1,240-pixel cap shared by Views and
+Automations. Grid selection is local UI state: it highlights a day and scrolls
+the adjacent grouped feed without a request.
+
+`document_ids` opens an all-dates agenda. Exact-day requests use equal bounds
+and `precision=day`; exact-day and all-dates agendas page by 500.
+`lib/intelligence.js` preserves precision, so partial dates never populate day
+cells. [Document dates](/document-dates) owns review/display behavior.
+
+Calendar exports use `lib/calendarExport.js` for explicitly requested, reviewed
+exact-day `.ics` files: escape text, fold UTF-8 lines, preserve stable event IDs
+and disclose the exported contents. This adds no subscription or authority.
+
+Demo eligibility comes from `whoami.kind` (`demo-anon`/`demo-scratch`). Calendar
+remains visible without mutation/research access; default demo Calendar opens
+all dates, while explicit month/day links work. Curated `demo-corpus` entries omit
+confidence/export controls. Public `/api/demo/mode` survives initial filing-state
+reset but obeys session revision cancellation, allowing cookie minting and the
+first-visit tour. The tour links real Search/Calendar and labels research as
+private-installation only.
+## Upload, sharing, and review
+
+`UploadBox.svelte` owns the full-page picker, drop, confirmed paste and visible
+queue. The shell routes top-bar, command and global-drop entry points there; no
+second modal owns upload state. A batch records every file synchronously in
+selection order and sends them sequentially to its captured system. Each entry
+keeps one idempotency key for retry and drops its `File` after acceptance.
+A single bounded scheduler checks processing tasks before fetching terminal
+document details, so active jobs do not cause repeated document reads. When the
+accepted row is retired by splitting, the queue requests its immutable
+`split_origin_id`, orders children by `split_index`, and replaces the parent
+success link with links to every child, including their ASN chips. Navigation
+stops receipt polling and releases paste URLs while already accepted transfers
+continue for the same account.
+
+`lib/ShareLinkForm.svelte` owns the Network/Public choice, expiry presets and
+dialog-local password state for detail and bulk creation. The screen passes only
+the server-projected `public_share_available` boolean; it never needs the Public
+listener address. Public always has a bounded expiry. Each owning screen captures
+document/account/system generation before creation and discards late feedback.
+Creation displays its URL before clipboard access; `lib/clipboard.js` reports
+failures so that URL stays manually selectable.
+
+`DocumentDetail.svelte` requests active links with `status=active`, while its
+collapsed History requests `status=inactive` in pages of five. Revocation uses a
+confirmation that distinguishes stopping future access from retracting an
+already-downloaded file. `LinkQR.svelte` lazily encodes private or existing
+shared links locally with escaped SVG matrix attributes; it issues no request,
+credential or new share. Document-detail full-text controls use
+already-authorized `content`, retaining Reveal for sensitive text and a
+selectable fallback when copying fails.
+
+Mailbox OAuth flow and `sealed_secret_b64` handoff
+state also die with the form. The latter is a server-sealed actor/system-bound
+creation handoff, not a copy of the at-rest credential.
+
+Vocabularies come from focused endpoints; local fallbacks keep forms usable without
+becoming authoritative. Reversible optimistic changes restore state on failure.
+Use semantic controls, visible focus, icon labels and stable responsive layouts.
+Account-email controls follow the same semantic rule: native labels and inputs,
+visible focus, a trapped modal, live error/status regions, and layouts with no
+horizontal overflow at desktop, Pixel 7 width, or enlarged root text.
+Approval cards show decision context, not internal IDs; rescan document links live
+under **Affected documents**. [Web app](/web-app) owns remaining interaction detail.
+
+`Tasks.svelte` and `lib/intelligence.js` consume bounded server projections:
+proposed/current values, reasons, source freshness and permitted known actions.
+Producer/score details are disclosures, not authority badges. Ask-derived
+metadata cards use the projected automation name and fixed effect, including
+typed custom fields; they never need the classifier question, answer, evidence
+quote, action mapping, or destination IDs. Hidden supporters are omitted
+server-side; sensitive quotes require local Reveal. Unknown actions stay
+read-only, stale dates cannot be accepted, and superseded metadata reviews are
+canceled server-side instead of becoming a special card state. Metadata
+resolution reports queued work rather than claiming the field changed. Date
+mutation results clear only successful rows; failures remain distinguishable
+and refreshable.
+
+`Calendar.svelte` preserves accepted facts and recognizes reviewed, automatic
+and previously accepted legacy values. Automatic dates are unlabeled; the other
+states retain distinct chips. Automatic acceptance still requires no human
+review and `policy_version=threshold-auto-v1`. Evidence and confidence remain
+behind **From the document**; local ICS export remains reviewed-only and
+exact-day. These screens reuse the tasks, intelligence and document APIs.

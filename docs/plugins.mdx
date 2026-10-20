@@ -100,8 +100,9 @@ manage transactions, write `user_version`, or alter the reserved `_suchi_` ledge
 namespace. Each step uses the sole writer and records its ledger row atomically.
 Rebuild migrations retain core's foreign-key checking/restoration convention.
 A failed step leaves earlier completed versions intact and rolls back its own
-schema, data and applied record. See [Backend architecture](/architecture) for
-storage and boot ownership.
+schema, data and applied record. See [Storage and transaction invariants](/architecture-storage)
+and [Runtime, jobs, and integrations](/architecture-runtime) for storage and boot
+ownership.
 
 Each extension owns the explicit tables declared by its migration set; there is
 no generic core `plugin_kv` store. During a core compatibility table rebuild,

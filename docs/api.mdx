@@ -1471,7 +1471,7 @@ deleted parents become roots, including when both parent and child are selected.
 
 Admin-only. Body: `{"parent_id": <int-or-null>}`. The parent must belong to the tag's
 system. Rejects self-parent (`400 self_parent`) and cycles (`400 cycle`). Tag
-ancestry does not imply document-search inheritance; see [Architecture](/architecture).
+ancestry does not imply document-search inheritance; see [Storage and transaction invariants](/architecture-storage).
 
 ### `GET /api/documents/{id}/correspondents/`
 

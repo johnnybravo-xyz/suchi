@@ -1,0 +1,154 @@
+---
+title: "Runtime, jobs, and integrations"
+description: "Boot and shutdown, process ownership of an archive, durable jobs, subprocess bounds, and optional model and subscription integrations."
+---
+
+Part of the [architecture guides](/architecture). This page covers how the server starts, stops, and runs background work. Confirm contracts against source and tests.
+
+## Boot and shutdown
+The command resolves configuration, configures logging/build identity and signal
+cancellation, loads the tagged pipeline-proposal policy, then calls
+`app.Run(ctx, app.Options{...})`. The importable package returns errors; it
+neither parses command arguments nor exits the process.
+Follow `distro/app.Run` to diagnose runtime wiring:
+
+1. Create `DATA_DIR`, acquire its process-level archive lock, open SQLite and
+   apply public core migrations.
+2. Apply supplied `MigrationSets` in declaration order, each with its own ledger.
+3. Construct one immutable automation registry from explicit `BuiltinActions()`
+   plus supplied `Actions`; duplicate or incomplete definitions stop startup.
+4. Establish Johnny.Decimal Inbox invariants; construct auth, CAS, rendering,
+   retention, keys and configured integrations. Report unavailable optional parsers.
+5. Construct the durable dispatcher, core subscribers, intake supervisors,
+   schedulers and API routes without starting their loops. Seed approval
+   definitions and reconcile only the positive tagged pipeline recommendations.
+6. Invoke `Options.Configure` once with the instance DB, mux, dispatcher,
+   approvals engine, action registry and logger. Callback failure closes startup
+   before any worker or listener starts.
+7. Build the main mux and optional share-only mux, then bind every configured
+   socket before starting runtime work. Binding failure closes every socket.
+8. Reclaim durable work; start dispatch, configured intake, backup and retention
+   loops; serve all bound listeners concurrently.
+9. On context cancellation, drain every HTTP server with one bounded grace
+   period and stop dispatch. Failure of either listener cancels and drains its
+   sibling. Subscribers and subprocesses honor cancellation; errors release the
+   database.
+
+`app.Options` contains resolved `config.Config`, logger, build identity, tagged
+`PipelineProposalVersions`, migration sets, additional action definitions and
+one optional `Configure` callback. Proposal values are recommendation thresholds:
+zero creates no new reminder, and a positive value cannot exceed the compiled
+pipeline revision. Its concrete `Services` value exposes only `DB`, `Mux`,
+`Jobs`, `Approvals`, `Actions` and `Log`, allowing a compiled distribution to
+register native HTTP routes and durable subscribers. Unlisted routes remain
+session-only under the shared token policy. Zero extension options preserve the
+community vocabulary and do not create extension ledger state. This is compiled
+composition, with no dynamic loader, service lookup, CAS/API exposure or
+registration framework.
+[Plugins](/plugins#application-assembly) documents the Go contract and example.
+
+Each assembled instance passes its approvals engine explicitly to
+`api.Server.Approvals` and the approval subscriber. State-machine handlers,
+review validation, audit and retry logic remain with `core/approvals`, while
+independently assembled instances remain isolated.
+
+One server process owns an archive; step 1 takes the archive lock described in
+[One process per archive](/architecture-storage#one-process-per-archive).
+
+Build version/revision resolve once at boot and enter authenticated `/api/whoami`
+metadata. Docker receives revision explicitly because its context excludes `.git`.
+Settings consumes that identity; no update service is involved.
+
+Startup and doctor egress inventories resolve subscription inference destinations
+through the shipped provider registry before redacting them to origins. This
+reports active ChatGPT inference even though its stored endpoint URL is empty.
+
+Production build entry points generate the Svelte bundle, verify its source and
+bundle hashes, and compile `core/ui` with the `embedded_ui` build tag. The
+generated directory is ignored by Git. Untagged development binaries load that
+directory from the checkout and stop during server assembly when it is missing
+or stale; `make ui` restores the required state. CI passes one target-SHA-bound
+bundle from its frontend job to Go test and cross-build jobs, while Docker uses
+a pinned Bun build stage and copies only generated files into the Go stage.
+
+## Durable work and optional integrations
+`core/jobs/jobs.go` owns claims/retries/dead letters for `post-ingest`,
+`post-classify`, `render`, `taxonomy_index`, `approval:advance` and
+`approval:timeout-sweep`. It drains serial ready batches; polling is idle fallback.
+A crash can replay completed side effects, so subscribers are idempotent,
+cancellation-aware and keep payload contracts with their owner. Register before
+`Run`; the registry is not dynamically synchronized. Unknown/terminal work becomes
+`dead`; other failures have bounded attempts/backoff. Processing-owner versions
+enable targeted rescans. Separately committed proposal thresholds decide which
+older successful results merit an automatic **Processing update** reminder;
+approval still enqueues the current processing implementation.
+
+Successful jobs are hidden from the default task list and counts but remain
+available through an explicit `state=done` query for seven days. The dispatcher
+prunes older successful rows at startup and once per day in its existing loop;
+this adds no cleanup goroutine, setting or schema. Pending, running, retry and
+dead work is never removed by this retention pass.
+
+Document/namespace jobs and audit retain system ownership even after a document
+disappears; instance-wide work uses NULL. Documentless `taxonomy_index` carries
+`{"system_id":N}`, enqueues with tree changes and once/system at startup, and reads
+current committed state on execution. Import reports queued work, not completed
+filesystem projection. Existing retry/dead-job handling owns failures; no extra
+scheduler, broker, provider or automation switch is needed.
+
+Local parsing remains useful without classification. Remote model calls require
+egress acknowledgment and reject redirects; intake/identity have explicit configured
+destinations, never a mandatory Suchi-operated service. MCP calls its configured
+Suchi origin without redirects, accepts bounded valid JSON and excludes queries,
+response bodies and transport diagnostics from tool errors. It uses ordinary
+scoped HTTP/object authorization.
+
+`core/sandbox` bounds subprocess duration/output, sets explicit environment/temp
+directories and kills Unix process groups on cancellation. It is **not OS-level
+isolation**: no filesystem/network denial or process-memory limit. Keep format
+bounds and deployment isolation explicit; stub tests prove neither parser safety
+nor real-tool availability.
+
+`core/pipeline/tessocr` shares one deadline/text cap across rasterization/pages;
+`core/pipeline/imgpdf` owns raster-to-PDF including HEIC/HEIF, validates PDF output
+before OCR/CAS and keeps temporary scratch local. Image barcode fallback preserves
+successful in-process results, validates dimensions and bounds native processing
+without logging decoded payloads/stderr or fetching decoded URLs. [Supported
+formats](/formats) owns sparse OCR, image density/orientation, encoder policies,
+barcode limits and dependencies. [Pipeline versions](/pipeline-versions) describes
+repair of older derivatives. Verify actual tools/output, not binary presence or
+an `archive_blob` field alone.
+
+Account subscription is a provider-neutral settings/API boundary.
+`core/settings/subscriptions.go` defines typed login, poll, model and masked
+status contracts. `plugins/llm-classifier/subscriptions.go` owns a private
+registry; `openai_chatgpt` is its first shipped adapter. `distro/app` injects
+provider lookup into the API and the registry into the classifier, and stops
+active inference on disconnect. Runtime selection uses the explicit provider ID,
+never an endpoint URL comparison. Endpoint models retain their existing path.
+
+Administrator browser-session routes under
+`/api/admin/settings/llm/subscriptions/{provider}/{action}` start, poll, cancel
+and disconnect; `GET /api/admin/settings/llm/subscriptions/{provider}/models`
+returns only provider model IDs/names. Unknown provider IDs are rejected.
+Settings store active `llm.subscription_provider` separately from the model
+preference `llm.subscriptions.{provider}.model`. Preference PATCH does not reload
+or enable inference. Local matching fields have a separate PATCH group; it writes
+only the archive classifier settings consumed by `core/automations` on each
+application, without validating account state or reloading the model. This keeps
+local matching configurable after disconnect. Boot endpoint overrides select
+endpoint mode.
+
+The OpenAI adapter in `plugins/llm-classifier/chatgpt.go` owns client ID, fixed
+hosts, token claims, credential format, catalog and streaming Responses parser.
+Pending device grants remain administrator-bound in memory; instance-wide
+credentials remain encrypted in SQLite with the existing AEAD key. Refresh is
+serialized outside write transactions, and redirects are refused. Finalized
+stream parts are accepted only after successful completion; incomplete, failed,
+empty and refused responses are rejected. Account connection/model selection
+never grants document egress consent or enables inference. Browser activation
+still requires acknowledgement and a successful synthetic model test. See
+[LLM classifier](/llm-classifier).
+Verify with `go test ./core/api ./core/settings ./distro/app`,
+`go test -race ./plugins/llm-classifier`,
+`cd ui && bun run e2e --grep 'Account subscription'`, and `make smoke`.

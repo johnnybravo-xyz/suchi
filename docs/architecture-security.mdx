@@ -1,0 +1,157 @@
+---
+title: "HTTP and security boundaries"
+description: "Middleware order, the share-only listener, authentication, token, role, identity, object and browser-origin gates, pairing, demo identities, and blob delivery."
+---
+
+Part of the [architecture guides](/architecture). This page owns request handling and the access gates every route passes through. Confirm contracts against source and tests.
+
+## Listeners and middleware
+
+`distro/app/serve_middleware.go: buildHTTPHandler` wraps main-listener requests,
+including rate-limit rejections, with request IDs, security headers, access logs
+and metrics. Limiters run before body limits, authentication, token policy,
+Fetch Metadata checks and the normalized mux. Credential/pairing, main-share and
+demo POST traffic use distinct limiter instances.
+
+An optional share listener is a separate socket and fresh mux, not a Host-header
+branch. `api.ShareSurface` captures `PublicOnly` and the configured origin at
+registration. The main mux uses `PUBLIC_URL` and serves Network and Public links;
+the share mux uses `SHARE_PUBLIC_URL`, serves only valid Public links, and
+registers only recipient metadata/password/download routes. Every other route is
+404. Its middleware is limited to request ID, security headers, body limit,
+Fetch Metadata, access log, metrics and an isolated share limiter—no session
+authentication or API-token resolution. Unknown, malformed, Network-only,
+expired and revoked bearers are indistinguishable on that socket. Request Host,
+source IP and forwarded headers never select visibility or origin.
+
+Credential/pairing and demo POST limiters classify the **decoded URL path**
+consistently with API trailing-slash normalization: ordinary, slash and escaped
+aliases receive the same policy without rewriting the request. Main share routes
+use matched mux patterns. Test the assembled handlers.
+Local password hashing and verification share a process-wide two-slot bound
+across account creation, shares, login, token exchange, and account-email
+reauthentication. Login takes a slot before the account lookup, so overload
+fails quickly and identically for known and unknown accounts while limiting
+Argon2 working memory. Email change returns the same retryable saturation
+contract without entering the writer.
+
+## Access gates
+
+These gates remain distinct:
+
+- **Authentication:** `core/auth` checks OIDC before local auth and anonymous
+  demo last. OIDC delegates Suchi's exact API-token shape to local auth; invalid
+  credentials cannot fall back to session cookies. Both OIDC paths require
+  signed verified-email claims, but returning users resolve only by exact issuer
+  and subject. Browser callbacks alone may provision an unused verified email;
+  direct Bearer authentication is resolution-only. Existing unbound rows require
+  an explicit live-session synchronization rather than email fallback.
+- **Token authority:** `distro/app/serve_token_policy.go` lists routes/scopes for local API
+  tokens and restricted demo scratch identities. Unlisted routes stay session-only,
+  including for admins. Public `documents:read`, `documents:write` and `events:read`
+  are separate grants; feed-only tokens cannot read documents. Token management
+  requires browser/OIDC identity; admin-token metrics is an explicit exception.
+  Catalog `DELETE /api/tags/` is deliberately absent from the token allowlist:
+  an admin-role write token cannot use it. The registered handler rechecks the
+  current writer principal and selected system before deleting. Verify the
+  assembled policy with `go test ./distro/app -run
+  TestTokenPolicyProtectsDocumentAndAccountHandlers`.
+- **Roles/capabilities:** scopes grant neither admin status nor feature capabilities.
+  User creation rechecks admin authority under the writer after password hashing.
+  Updates read current role/capabilities there, reject self-disable/last-admin loss,
+  store no hidden member grants on admins and derive revocations from effective
+  access. Promotion must not quarantine still-authorized resources, nor demotion
+  revive hidden grants. Local mailbox/share/view revocations and required
+  capability audit writes share the transaction; either cascade or audit failure
+  rolls back the transition. `core/audit.RecordInTx` captures outcomes without
+  logging/fan-out; `Record.Emit` logs failures or delivers committed events
+  afterward. Persisted rows retain writer order; post-commit sink delivery can
+  interleave.
+  Disable/membership OAuth invalidation occurs only after successful commit, with
+  the flow-store mutex spanning commit/invalidation in writer-to-flow lock order.
+  Rollback preserves flows; re-enable/readmission/start cannot overtake invalidation.
+  Logs, sink delivery and supervisor reload stay outside the writer. See
+  [Account safeguards](/permissions#account-safeguards).
+- **Account identity:** `distro/app` supplies one mode evaluator to self
+  responses and both mutation paths. Password verification, random replacement
+  session preparation, and OIDC network exchange happen before the writer.
+  Inside one write transaction the handler rechecks the canonical user, mode,
+  initiating session, and local password hash or OIDC binding; updates the same
+  user ID; queues rerenders for that user's folder layouts that use the exact
+  `owner` template variable; rotates browser sessions when identity
+  changed; and writes the retained audit event. Watched-folder ownership is a
+  numeric user ID, so an email change neither rewrites its setting nor reloads
+  the watcher. A no-change OIDC check performs no rotation or false audit write.
+  The replacement cookie and audit sinks run after commit. API/mobile tokens are
+  intentionally not rotated.
+- **Objects:** `core/authz` checks existence, explicit/token system boundary,
+  active-user system entry, then owner/admin/direct/group permission. Admins bypass
+  membership/ACL only. Lists/counts/search/similarity filter system and visibility
+  in SQL before pagination.
+- **Browser origin:** cookie mutations reject sibling-origin `same-site` and
+  `cross-site` Fetch Metadata requests. Headerless anonymous form logins require
+  a same-host `Origin`; headerless JSON credential routes require
+  `application/json`. Both account-email POSTs additionally require exact
+  same-origin provenance and a live browser session, with no bearer-header
+  exemption. CORS alone is insufficient.
+  The SPA CSP admits only the discovered OIDC authorization endpoint's HTTP(S)
+  origin beyond `self` for form submissions so that the same-origin
+  reauthentication POST can follow its provider redirect; non-SPA responses
+  remain `form-action 'self'`.
+
+## Filing-system scope and first-party clients
+
+Sessions select `?system=CODE`, defaulting to original system 1; token binding is
+its default and ceiling. Unqualified numeric objects resolve their actual system.
+There is no server last-selected context or accessible-system fallback. Unknown,
+inaccessible and mismatched targets return indistinguishable 404-style errors.
+Writer-held authorization refreshes actor/role, membership and token existence/
+binding before mutation or replay. Membership removal atomically revokes shares,
+tokens and pairings; re-addition does not revive them. See [Permissions](/permissions).
+
+First-party clients probe public `/api/handshake` before credentials. `/api/whoami`
+reports actual scopes/build identity and, for tokens, the bound filing-system ID,
+name, and possibly-empty code. It reports only whether public-share ingress is
+available, never either listener address. `/api/token/` creates tokens,
+`/api/login` creates sessions; mobile reads use existing ACL-filtered API
+projections. [HTTP API](/api) owns handshake, payload, scope and mobile-read
+details.
+
+## Mobile pairing
+
+`core/api/mobile_pairing.go` transfers a browser/OIDC identity to a device.
+Creation binds the short-lived code to configured `PUBLIC_URL`, never forwarded
+hosts. The server permits HTTPS or its narrow local-HTTP pairing boundary
+(localhost/loopback/private literal IPs, excluding broader local DNS/link-local
+egress allowances); Companion permits that HTTP subset only in debug builds.
+Origin validation runs before replacing pending state; storage keeps only the
+code digest, owner/system, fallback
+name and expiry. Exchange validates optional device naming before consumption,
+then consumes the code, rechecks enabled-user system entry and calls `TokenIssuer`
+in one writer transaction. Token digest, fixed read/write scopes and server-selected
+`mobile_pairing` provenance commit together. Failure restores consumability;
+a lost successful response needs a new pairing. Cancellation matches user/system/
+digest; no secret is logged or cacheable. [Pairing API](/api#post-apimobilepairing)
+owns timing, QR, names and connected-app projection contracts.
+
+## Demo identities, blob delivery, and secrets
+
+Demo anonymous cookies are signed/stateless; first write obtains a digest-backed
+session bounded by scratch TTL through CLI-injected local issuance. Local auth
+preserves restricted scratch scope on API and direct resources, without a separate
+credential store. Demo Calendar is a local intelligence-handler exception: only
+accepted `demo-corpus` dates with source/trash SQL filtering before pagination;
+no extraction/review/chat grant. The generic seeder validates manifest facts and
+inserts them with document/job; the sibling demo repository owns content. See
+[Demo instance](/demo-instance).
+
+Preview/download aliases share `core/ui` object checks, Reveal, ETags and CSP.
+Trashed bytes require owner/admin; ordinary ACL readers and public shares cannot
+fetch them. Thumbnails have a separate live-document handler. Sensitivity is a
+Reveal posture, not another access boundary: authorized API reads may contain
+text; untouched `raw=1` downloads require an admin session.
+
+Seal mailbox secrets, OAuth caches, PDF passwords and model keys; digest session
+IDs/API tokens. Exclude document bodies and credentials/share bearers from audit.
+Logs/metrics use matched route patterns, propagated outward through request copies.
+[Privacy](/privacy) owns the user-facing egress/data contract.

@@ -42,4 +42,7 @@ the only frontend lockfile and is checked by the root Make targets.
 - `vite.config.js` defines the development proxy and deterministic asset names.
 
 See [`docs/spa-architecture.mdx`](../docs/spa-architecture.mdx) for routing,
-state, API, accessibility, and security conventions.
+state, API, accessibility, and security conventions, and its
+[document](../docs/spa-document-screens.mdx) and
+[settings](../docs/spa-settings-screens.mdx) screen pages for screen-level
+behavior.

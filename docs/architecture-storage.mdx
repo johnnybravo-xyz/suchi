@@ -1,0 +1,251 @@
+---
+title: "Storage and transaction invariants"
+description: "The single writer, filing systems, CAS blobs, rendered paths and journals, schema migrations, and extension ledgers."
+---
+
+Part of the [architecture guides](/architecture). This page owns how state is stored and changed safely. Confirm contracts against source and tests.
+
+## One process per archive
+
+One Suchi process owns an archive at a time. `core/archivelock` holds an
+exclusive, nonblocking operating-system lock on a mode-0600 `.suchi.lock` file
+in `DATA_DIR`, and `core/db.Open` takes it before opening SQLite and keeps it
+for the database lifetime. A second `suchi serve`, or an offline command such
+as export or GC, against the same directory fails before touching the database
+with the stable error `archive_in_use`. The lock file must be a regular file;
+a symlink is refused. It is released after both pools close.
+
+The lock belongs to the process, not the file. If Suchi exits or crashes, the
+operating system releases it, so the `.suchi.lock` file left behind is harmless
+and never needs deleting. This process boundary protects the single writer
+pool, startup reclamation, jobs and intake loops; it does not make shared
+network filesystems supported storage.
+
+## The single writer
+
+`DB.Write` has one connection; `DB.Read` has a small pool. Both use the same WAL
+SQLite file with foreign keys, busy timeout and bounded mmap. Mutations use
+`WriteTx`; participating helpers receive its `*sql.Tx`. Re-entering the writer
+from its transaction deadlocks on the held connection. Deferred rollback releases
+it after errors or panics, including when callers recover.
+
+Keep network calls, subprocesses and long processing outside write transactions.
+Enqueue required work with the state change, never as a later best-effort write.
+Ordinary audit persistence/delivery remains best-effort and is not the
+transactional job outbox. Identity binding, account-email changes and capability
+transitions are narrow exceptions: `core/audit.RecordInTx` is required inside
+their state transaction. An insertion failure rolls back the identity or
+capability change, dependent resource revocations, queued render work and session
+rotation. Sink fan-out still happens only after commit and cannot undo it.
+
+## Filing systems, tags, and accounts
+
+`core/jd/systems` is the leaf owner of identity, membership, target resolution and
+address syntax. System 1 stays hidden until first prefixed import atomically names
+it or preserves it separately. Codes and document system ownership are immutable;
+names/tree/provenance belong to the system. [JD](/jd) owns presentation/import rules.
+
+The taxonomy upgrade retains surviving global document IDs and introduces
+AUTOINCREMENT. IDs purged before upgrade have no retained allocation history and
+may be reused; nonreuse starts at upgrade. Categories, metadata, views, automations,
+mailboxes, passwords, shares and approval definitions/runs are system-owned.
+Composite constraints/targeted guards reject foreign-system relationships.
+Authenticated custom-field document links are the exception described above;
+authorization is checked at both endpoints, while all projections and reverse
+lookups redact inaccessible rows before counts or pagination.
+
+`core/api/tags.go` owns tag catalog writes, independently of document
+assignment via `core/api/documents_bulk.go`. A document assignment uses an
+existing tag ID and document change permission; it neither creates catalog
+entries nor grants catalog administration. Catalog single/batch deletion
+requires an admin browser session in the selected system. The batch handler
+validates every ID inside one `DB.WriteTx`, detaches surviving children, then
+deletes the selected IDs in a bounded statement; missing/foreign IDs roll back
+without deleting document-tag links. Foreign keys remove only links to deleted
+tags. One post-commit batch audit records IDs/count; no background job, network
+egress, or plugin contract is involved. The current schema declares
+`ON DELETE SET NULL` for tag parents; the handlers still detach children
+explicitly so archives adopted from older schemas with a cascading foreign key
+behave the same.
+Verify database and wire behavior with `go test ./core/api -run
+TestDeleteTagsAtomicAndReroots` and `go test ./core/db -run
+TestTagParentDeleteReroots`; [API reference](/api) owns status/body details.
+
+SQLite/FTS/CAS remain shared. Document deduplication is system/owner scoped;
+user-global idempotency keys bind fingerprints to the system and never exempt
+receipt replay from authorization. Users/groups, roles/capabilities, sessions,
+built-in catalog, server/OCR/LLM settings and full backups are instance-wide.
+Admins and host/backup operators remain trusted; system codes do not create
+separate infrastructure or keys.
+
+Account identity also remains instance-wide. Numeric `users.id` is the durable
+owner/principal key; email is a mutable sign-in attribute, and OIDC returning
+identity is the unique non-null `(oidc_issuer, oidc_subject)` pair stored directly
+on that row. Email changes do not rewrite document owners, memberships, ACLs,
+tokens, or other numeric user references.
+
+## Blobs and rendered paths
+
+Original/derived bytes are SHA-256-addressed:
+
+```text
+$DATA_DIR/blobs/sha256/ab/cd/ef/<full-hash>
+```
+
+The hash identifies stored bytes, not a document, owner or permission boundary.
+Documents and versions can reference the same immutable object, which avoids
+duplicate storage and makes retries idempotent; SQLite retains document identity,
+provenance and authorization, while rendered filing paths remain rebuildable
+projections. CAS does not encrypt content. `suchi doctor --scrub-cas` explicitly
+rehashes stored objects when an operator wants an integrity check.
+
+`CAS.Put` streams to a temporary file at the CAS root, then renames on the same
+filesystem. A failed subsequent database transaction may leave an unreferenced
+blob. Never delete by hash on request failure: another document or in-flight
+publisher may use it. Online purge, including demo expiry, never deletes CAS;
+only offline `core/gc/` with **all archive writers stopped** reclaims bytes.
+Blob age cannot establish concurrency safety.
+
+Preserve `original_blob` and original MIME; decryption, normalization and OCR
+produce derived objects. Rendered paths are rebuildable. Trash/retention purge
+snapshots candidate paths plus document/journal hashes in the writer before
+removing rows. Post-commit cleanup pins real parent directories and removes only
+matching CAS symlinks; foreign artifacts remain and count as cleanup failures.
+
+Rendering prepares directories outside the writer, then shares a short liveness/
+ownership check and atomic link replacement with purge's snapshot transaction.
+A paused render cannot recreate a deleted document's link. `core/render/paths`
+owns CAS-link validation shared with Trash; targets come from
+validated `CAS.Path`, not duplicated shard logic. Same-path jobs repair missing/
+stale links to the selected archive/original blob. Startup does not rewrite the
+whole document projection; repair occurs on render/refile.
+
+`core/render/index` refreshes a current tree-only `core/taxonomy` snapshot at
+startup/tree changes. After introduction its path is
+`<SYS>/00-09 System index/00.00 archive.huml`; before introduction it uses the old
+root. `presetfile.Marshal` serializes it; a unique same-directory temporary file
+is written, flushed and closed before atomic replacement. Refuse symlinked
+parents/targets and unexpected files; failures preserve the previous complete
+index. It creates no area/category/document/blob rows. Reserve this namespace
+from document templates. View cannot import taxonomy because taxonomy depends
+on view.
+
+Index snapshot/publication and view journal/publication each use their owner's
+mutex. Initial renders, moves and same-path blob changes journal previous/intended
+path/blob pairs before publication. Keep superseded evidence until current
+publication and old-path cleanup finish transactionally. Recovery targets the
+**current** system destination and cleans only verified links to retained document
+blobs or that path's journaled blobs; same-path replacement also proves ownership.
+Never republish a superseded destination merely because it was once valid.
+
+View resolves system/mode per document, enforcing a code-only root outside explicit
+templates; display-name edits do not move roots. [Generated paths](/jd#generated-filing-index-and-paths)
+own filename/default-mode details. Only system 1 removes a proved-managed legacy
+index after its named replacement succeeds. Unknown files stay untouched. An old
+template link occupying a future index namespace may be relocated only when its
+journaled CAS target verifies through the pinned parent; new destinations still
+refuse that namespace. Index retry can then converge without deleting foreign
+files or deadlocking recovery.
+
+Pre-upgrade journal hashes may be unknown. Recovery reports and preserves a link
+to an unreferenced historical archive when ownership cannot be established.
+Restored absolute links with a known hash and the pre-v0.1.0 two-shard or
+current three-shard CAS layout may be repaired. Render-only refile changes projections
+without OCR/classifier/filing reruns. [Backup and restore](/backup-restore) requires
+all of `DATA_DIR`, including credential keys, with writers stopped or an atomic
+whole-directory snapshot; a database-only copy is incomplete.
+
+## Schema migrations
+
+The active catalog in `core/db/migrations/` starts from an immutable baseline
+for stable schema 1 (v0.1.0) and adds each release's migrations in order; the
+current checkout reaches schema version 4. The v0.2.0 migrations convert
+document types to namespaced tags, add version-family currentness, and add
+classifier-backed automation questions. The current unreleased migration adds
+title ownership, conservatively marks existing curated and imported titles as
+human-owned, and extends title revision tracking to owner changes. The one-row
+`schema_lineage = 'stable-v1'` identity is unchanged. Frozen pre-v0.1.0 SQL and
+the final account-identity rebuild live separately as compatibility migrations;
+the active catalog cannot discover them by path. Migration file names and
+grouping are implementation detail; the [release process compatibility
+table](/release-process#stable-v1-database-compatibility) records which schemas
+each release accepts.
+
+The v0.2.0 document-type migration removes the duplicate vocabulary after
+mapping each row and every live document, ACL, saved-view, automation, and
+template reference to a `type:<name>` tag. Unrepresentable tag-and-type
+automation conjunctions suspend rather than broadening. Source-archive types
+are translated at the importer boundary; no native type schema or API remains.
+
+`migrations.Prepare` delegates core admission to `db.PrepareStable`, which
+classifies the database before writing. Empty databases receive all active
+migrations. An exact current schema-4 database is a no-op. Exact stable schemas
+1, 2, and 3 first pass integrity and foreign-key checks, then apply only their
+remaining active migrations and must match the current manifest. Every accepted
+pre-stable state must match its complete canonical `sqlite_schema` fingerprint
+and lineage, not merely a `user_version`. Unknown, partial, spoofed, corrupt and
+future states fail without mutation. The exact pre-identity schema-4 fingerprint
+is a separate explicit compatibility boundary; a schema claiming stable lineage
+with an unrecognized fingerprint is deliberately rejected. The [release process
+compatibility table](/release-process#stable-v1-database-compatibility) is the
+sole authority for supported incoming states, frozen steps and the required
+release test matrix.
+
+Every admitted pre-stable archive passes integrity and foreign-key checks and
+gets an exclusive mode-0600 SQLite snapshot before adoption. Remaining
+compatibility steps, the remaining active migrations, stable lineage and the
+current schema version commit in one immediate transaction through the sole
+writer. The final compatibility step rebuilds `users`, `documents` and
+`audit_events`; adds
+provider identity, a durable development-account marker and retained-event
+metadata; moves the singular correspondent into the role-bearing junction; and
+preserves primary keys, revision values and dependent references. It also
+resolves watched-folder ownership to a numeric user ID, drops the empty obsolete
+`plugin_kv` table and redundant ACL index, and removes successful jobs older
+than seven days. The final integrity, foreign keys and canonical schema-4
+fingerprint must match a fresh archive; failures roll back while retaining the
+snapshot and restoring foreign-key enforcement.
+Extension objects created after `_suchi_extension_migrations` are outside the
+core fingerprint. Core objects rebuilt during adoption remain explicitly
+included even when SQLite places their replacement rows after that extension
+boundary.
+
+Core migration history is bounded at major-version schema epochs. The outgoing
+major's bridge validates its last canonical schema and writes an
+application-owned epoch/version marker; the incoming major creates one
+declarative baseline and carries only migrations from that epoch. Direct older
+conversion stays in the bridge or a separate offline command, not steady-state
+server startup. The current pre-1.0 admission machinery remains required until
+the v1 bridge ships; [Release process](/release-process#major-version-schema-epochs)
+owns the cutover policy.
+
+## Extension migrations
+
+Compiled extensions use `core/db.MigrationSet` and `MigrateSet`, independently of
+`PRAGMA user_version`. Each component supplies its complete ordered history from
+version 1. The reserved `_suchi_extension_migrations` table stores
+`(component, version)` as its primary key, a SHA-256 checksum of exact SQL plus
+rebuild mode, and Unix-second `applied_at`. Component names are bound data, never
+SQL identifiers. Invalid names, duplicates/gaps/out-of-order versions, empty SQL,
+missing applied history and checksum drift fail explicitly. Unchanged reruns do
+not rewrite ledger rows. Each migration and its ledger record commit together
+through the sole writer; SQL and foreign-key failures roll back DDL/data as well
+as the record. `RebuildTables` uses the same foreign-key restoration/checking
+boundary as core migrations. Extension SQL is trusted compiled code and must not
+control transactions, core `user_version`, or the reserved `_suchi_` namespace.
+Core migrations and published SQL retain their existing versioning and behavior.
+
+Extension tables remain owned by the component that declared them; core provides
+no generic plugin key/value table. Before a compatibility migration rebuilds a
+core table, adoption temporarily removes extension-created indexes and triggers
+from after the extension-ledger boundary, then replays their exact DDL. A
+dependency on a retired object such as `plugin_kv`, or an incompatible object
+recreated by core, aborts the migration atomically instead of silently discarding
+extension state.
+
+Device OCR provenance, split origins, idempotency, pairing/token provenance precede
+taxonomy rebuilds. Existing credential hashes remain; unknown pairing provenance
+stays empty; default memberships/token bindings move to system 1 without issuing
+credentials. Tests pin published SQL, populated adoption behavior, rollback and
+writer enforcement; release acceptance remains owned by the linked compatibility
+matrix.

@@ -84,6 +84,14 @@ tar -czf suchi-backup-$(date -u +%F).tar.gz -C /var/lib suchi
 systemctl start suchi
 ```
 
+Only one Suchi process can open an archive at a time. The server, and offline
+commands such as `suchi export`, `suchi gc` and `suchi doctor`, take an
+operating-system lock on `DATA_DIR/.suchi.lock`; a second process fails with
+`archive_in_use` instead of opening the database. The lock is released when
+the process exits, including after a crash, so the leftover `.suchi.lock` file
+is harmless: leave it in place and include it in backups like any other file.
+Shared network filesystems are not supported storage, even with the lock.
+
 ### Atomic filesystem snapshot
 
 Filesystem snapshots such as ZFS, btrfs, or LVM are suitable when they capture
