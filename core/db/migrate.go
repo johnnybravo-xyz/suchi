@@ -103,6 +103,8 @@ var coreAfterExtensionObjects = []string{
 	"documents_system_replace",
 	"documents_title_revision",
 	"fs_watch_observations",
+	"local_auth_recovery_codes",
+	"local_auth_totp",
 	"idx_automation_actions_aid",
 	"object_acls",
 	"share_links_visibility_immutable",
