@@ -14,8 +14,8 @@
   let loading = $state(true)
   let err = $state('')
   let intelligence = $state([])
-  let intelligenceSelection = $state(new Set())
   let intelligenceBusy = $state(false)
+  const addableDates = $derived(intelligence.filter(candidate => canReviewDate(candidate) && !dateErrors[candidate.id]))
   let busyJobs = $state(new Set())
   let busyTasks = $state(new Set())
   let taskErrors = $state({})
@@ -39,7 +39,6 @@
       tasks = wf?.approval_tasks || []
       jobs = jb?.results || jb || []
       intelligence = facts?.results || []
-      intelligenceSelection = new Set()
       taskErrors = {}
       dateErrors = {}
       onCount?.(tasks.length + jobs.length + intelligence.length)
@@ -47,7 +46,6 @@
       tasks = []
       jobs = []
       intelligence = []
-      intelligenceSelection = new Set()
       err = reviewFailure(ex)
     }
     finally { loading = false }
@@ -247,35 +245,12 @@
     return [...groups.values()]
   }
 
-  function selectionState(items) {
-    const available = items.filter(candidate => canReviewDate(candidate) && !dateErrors[candidate.id])
-    const selected = available.filter(item => intelligenceSelection.has(item.id)).length
-    return { all: selected === available.length && available.length > 0, some: selected > 0 && selected < available.length, available: available.length }
+  // Stale dates can still be rejected; only current, reviewable dates can be added.
+  function canRejectDate(candidate) {
+    return candidate?.type === 'date' && DATE_ROLES.includes(candidate.role) && candidate.status === 'pending'
   }
 
-  function indeterminate(node, value) {
-    node.indeterminate = value
-    return { update(next) { node.indeterminate = next } }
-  }
-
-  function setCandidateSelection(ids, checked) {
-    if (intelligenceBusy) return
-    const next = new Set(intelligenceSelection)
-    const allowed = new Set(intelligence.filter(candidate => canReviewDate(candidate) && !dateErrors[candidate.id]).map(candidate => candidate.id))
-    for (const id of ids) {
-      if (checked && allowed.has(id)) next.add(id)
-      else next.delete(id)
-    }
-    intelligenceSelection = next
-  }
-
-  function toggleAllIntelligence(checked) {
-    setCandidateSelection(intelligence.map(candidate => candidate.id), checked)
-  }
-
-
-  async function resolveSelectedIntelligence(decision, candidateIDs = null) {
-    const ids = candidateIDs || intelligence.filter(candidate => intelligenceSelection.has(candidate.id) && canReviewDate(candidate) && !dateErrors[candidate.id]).map(candidate => candidate.id)
+  async function resolveDates(decision, ids) {
     if (!ids.length || intelligenceBusy) return
     intelligenceBusy = true
     try {
@@ -288,7 +263,6 @@
       }
       dateErrors = failures
       intelligence = intelligence.filter(candidate => !resolved.has(candidate.id))
-      intelligenceSelection = new Set()
       onCount?.(tasks.length + jobs.length + intelligence.length)
       reviewNotice = resolved.size
         ? (decision === 'accepted'
@@ -301,7 +275,6 @@
       const failures = { ...dateErrors }
       for (const id of ids) failures[id] = reviewFailure(ex)
       dateErrors = failures
-      intelligenceSelection = new Set()
     } finally {
       intelligenceBusy = false
     }
@@ -350,6 +323,11 @@
     <Icon name="refresh" size={13} /> {translate("tasks.refresh")}
   </button>
   {#if !loading}<span class="pill">{translate("tasks.valuePending", { "length": tasks.length + jobs.length + intelligence.length })}</span>{/if}
+  {#if addableDates.length > 1}
+    <button class="btn sm" disabled={intelligenceBusy} onclick={() => resolveDates('accepted', addableDates.map(candidate => candidate.id))}>
+      <Icon name="check" size={13} /> {plural("tasks.addAllDatesToCalendar", addableDates.length)}
+    </button>
+  {/if}
   <p role="status">{reviewNotice}</p>
 </div>
 
@@ -357,99 +335,77 @@
   <div class="index">{#each Array(3) as _}<div class="irow"><div class="skel" style="width:55%"></div></div>{/each}</div>
 {:else}
   {#if intelligence.length > 0}
-    {@const allIntelligence = selectionState(intelligence)}
     {@const reviewGroups = intelligenceGroups()}
-    <section class="intelligence-review" aria-labelledby="intelligence-review-title">
-      <header class="intelligence-head">
-        <div>
-          <span class="eyebrow">{translate("tasks.datesNeedingReview")}</span>
-          <h2 id="intelligence-review-title">{translate("tasks.checkDatesBeforeTheyReachCalendar")}</h2>
-          <p>{translate("tasks.dateReviewSummary", { dates: plural("tasks.dateCount", intelligence.length), documents: plural("tasks.documentCount", reviewGroups.length) })}</p>
-        </div>
-        <label class="select-all">
-          <input type="checkbox" disabled={intelligenceBusy || !allIntelligence.available} checked={allIntelligence.all} use:indeterminate={allIntelligence.some}
-                 onchange={(event) => toggleAllIntelligence(event.currentTarget.checked)} />
-          {translate("tasks.selectAllDates")}
-        </label>
-      </header>
-
-      <div class="intelligence-actions" role="group" aria-label={translate("tasks.reviewSelectedDates")}>
-        <span><b>{formatNumber(intelligenceSelection.size)}</b> {translate("tasks.ofDateCountSelected", { dates: plural("tasks.dateCount", intelligence.length) })}</span>
-        <button class="btn sm" disabled={!intelligenceSelection.size || intelligenceBusy}
-                onclick={() => resolveSelectedIntelligence('rejected')}>{translate("tasks.rejectValue", { "size": intelligenceSelection.size })}</button>
-        <button class="btn primary sm" disabled={!intelligenceSelection.size || intelligenceBusy}
-                onclick={() => resolveSelectedIntelligence('accepted')}>
-          <Icon name="check" size={13} /> {intelligenceBusy ? translate("common.saving") : translate("tasks.addValueToCalendar", { "size": intelligenceSelection.size })}
-        </button>
-      </div>
-
+    <section aria-labelledby="dates-title">
+      <h3 id="dates-title" class="approval-section-title">{translate("tasks.datesForCalendar")}</h3>
       <div class="approval-grid" class:approval-grid-many={reviewGroups.length > 2} data-approval-kind="date">
         {#each reviewGroups as group (group.documentID)}
-          {@const groupSelection = selectionState(group.candidates)}
-          <article class="approval-card intelligence-card">
-            <header class="approval-card-header intelligence-document">
-              <input type="checkbox" aria-label={translate("tasks.selectEverySuggestedDateFromValue", { "documentID": group.title || `document ${group.documentID}` })}
-                     disabled={intelligenceBusy || !groupSelection.available} checked={groupSelection.all} use:indeterminate={groupSelection.some}
-                     onchange={(event) => setCandidateSelection(group.candidates.map(candidate => candidate.id), event.currentTarget.checked)} />
-              <a class="task-thumb intelligence-thumb" class:placeholder={!group.thumbnail} class:blurred={isHighSensitivity(group.sensitivity)}
+          <article class="approval-card">
+            <header class="approval-card-header document-header">
+              <a class="task-thumb" class:placeholder={!group.thumbnail} class:blurred={isHighSensitivity(group.sensitivity)}
                  href={filingHref(`#/doc/${group.documentID}`)} aria-label={translate("tasks.openValue", { "documentID": group.title || `document ${group.documentID}` })}>
                 {#if group.thumbnail}
                   <img src={thumbPath(group.documentID, isHighSensitivity(group.sensitivity))} alt="" loading="lazy" />
                 {:else}
-                  <Icon name="docs" size={20} />
+                  <Icon name="docs" size={22} />
                 {/if}
               </a>
-              <div>
+              <div class="document-identity">
                 <a href={filingHref(`#/doc/${group.documentID}`)}>{group.title || translate("tasks.documentValue2", { "documentID": group.documentID })}</a>
-                <small>{plural("tasks.dateCountToCheck", group.candidates.length)}</small>
+                <div class="document-meta">
+                  <span>#{group.documentID}</span>
+                  {#if group.candidates.length > 1}<span>{plural("tasks.dateCount", group.candidates.length)}</span>{/if}
+                </div>
               </div>
             </header>
-            <div class="approval-card-body intelligence-candidates">
+            <div class="approval-card-body decision-list">
               {#each group.candidates as candidate (candidate.id)}
-                <div class="intelligence-candidate">
-                  <input type="checkbox" aria-label={translate("tasks.selectSuggestedValue", { "candidate": formatIntelligenceValue(candidate) })}
-                         checked={intelligenceSelection.has(candidate.id)}
-                         disabled={intelligenceBusy || !canReviewDate(candidate) || !!dateErrors[candidate.id]}
-                         onchange={(event) => setCandidateSelection([candidate.id], event.currentTarget.checked)} />
-                  <div class="intelligence-copy">
-                    <div class="intelligence-value">
-                      <strong>{translate("tasks.suggestedValue", { "candidate": formatIntelligenceValue(candidate) })}</strong>
-                      <span class="pill">{candidate.type === 'date' ? translate("tasks.date") : translate("tasks.readOnly")}</span>
-                    </div>
+                <section class="decision-row intelligence-candidate">
+                  <div class="decision date-value">
+                    {formatIntelligenceValue(candidate)}
+                    {#if candidate.type !== 'date'}<span class="pill">{translate("tasks.readOnly")}</span>{/if}
                     {#if candidate.source_current === false}<span class="pill warn">{translate("tasks.documentChanged")}</span>{/if}
-                    {#if candidate.evidence_text}
-                      <blockquote class="intelligence-evidence">“{candidate.evidence_text}”</blockquote>
-                      <small>{candidate.source_current === true ? translate("tasks.exactTextFromTheLinkedDocument") : translate("tasks.thisSavedQuoteNoLongerMatchesTheDocument")}</small>
-                    {:else}
-                      <small>{translate("tasks.theMatchingTextIsNotShownHere")}</small>
-                    {/if}
-                    {#if typeof candidate.confidence === 'number'}
-                      <details class="task-details">
-                        <summary>{translate("tasks.howThisWasSuggested")}</summary>
-                        <p>{translate("tasks.modelConfidenceValue", { "confidence": Math.round(candidate.confidence * 100) })}</p>
-                        {#if candidate.extractor}<p>{translate("tasks.suggestedByValue", { "extractor": producerLabel(candidate.extractor) })}</p>{/if}
-                      </details>
-                    {/if}
-                    {#if dateErrors[candidate.id]}<p class="review-error" role="alert">{dateErrors[candidate.id]}</p>{/if}
-                    {#if candidate.type === 'date' && DATE_ROLES.includes(candidate.role) && candidate.status === 'pending' && candidate.source_current === false}
-                      <button class="btn sm" disabled={intelligenceBusy}
-                              onclick={() => resolveSelectedIntelligence('rejected', [candidate.id])}>{translate("tasks.rejectThisSuggestion")}</button>
-                    {/if}
                   </div>
-                </div>
+                  {#if candidate.evidence_text}
+                    <blockquote class="intelligence-evidence">“{candidate.evidence_text}”</blockquote>
+                    {#if candidate.source_current !== true}<p class="evidence-note">{translate("tasks.thisSavedQuoteNoLongerMatchesTheDocument")}</p>{/if}
+                  {:else}
+                    <p class="evidence-note">{translate("tasks.theMatchingTextIsNotShownHere")}</p>
+                  {/if}
+                  {#if dateErrors[candidate.id]}<p class="review-error" role="alert">{dateErrors[candidate.id]}</p>{/if}
+                  {#if canRejectDate(candidate)}
+                    <div class="choices">
+                      {#if canReviewDate(candidate)}
+                        <button class="btn sm primary" disabled={intelligenceBusy || !!dateErrors[candidate.id]}
+                                onclick={() => resolveDates('accepted', [candidate.id])}>
+                          <Icon name="check" size={13} />{translate("tasks.addToCalendar")}
+                        </button>
+                      {/if}
+                      <button class="btn sm danger" disabled={intelligenceBusy || !!dateErrors[candidate.id]}
+                              onclick={() => resolveDates('rejected', [candidate.id])}>{translate("tasks.reject")}</button>
+                    </div>
+                  {/if}
+                  {#if typeof candidate.confidence === 'number'}
+                    <details class="task-details">
+                      <summary>{translate("tasks.howThisWasSuggested")}</summary>
+                      <p>{translate("tasks.modelConfidenceValue", { "confidence": Math.round(candidate.confidence * 100) })}</p>
+                      {#if candidate.extractor}<p>{translate("tasks.suggestedByValue", { "extractor": producerLabel(candidate.extractor) })}</p>{/if}
+                    </details>
+                  {/if}
+                </section>
               {/each}
             </div>
           </article>
         {/each}
       </div>
-
     </section>
   {/if}
   {#if tasks.length === 0 && jobs.length === 0 && intelligence.length === 0}
     <div class="empty"><Icon name="tasks" size={56} /><b>{translate("tasks.nothingNeedsYou")}</b><span>{translate("tasks.theArchiveIsRunningItself")}</span></div>
   {:else if tasks.length > 0}
     {@const workflowGroups = approvalGroups(tasks)}
-    <div class="approval-grid workflow-approval-grid" class:approval-grid-many={workflowGroups.length > 2} data-approval-kind="workflow">
+    <h3 class="approval-section-title">{translate("tasks.decisions")}</h3>
+    <div class="approval-grid" class:approval-grid-many={workflowGroups.length > 2} data-approval-kind="workflow">
       {#each workflowGroups as group (group.key)}
         <article class="approval-card workflow-approval-card">
           {#if group.document}
@@ -553,7 +509,7 @@
   {/if}
 
   {#if canManageJobs && jobs.length}
-    <h3 style="font-size:.9rem;color:var(--muted);margin:0 0 8px">{translate("tasks.processingIssues")}</h3>
+    <h3 class="approval-section-title">{translate("tasks.processingIssues")}</h3>
     <div class="index">
       {#each jobs as j (j.id)}
         <div class="irow processing-issue">
@@ -583,37 +539,15 @@
 {/if}
 
 <style>
-  .intelligence-review { margin: 10px 0 28px; border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--surface); }
-  .intelligence-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 20px; border-bottom: 1px solid var(--line); border-radius: var(--r) var(--r) 0 0; background: linear-gradient(135deg, var(--tint), var(--surface)); }
-  .intelligence-head .eyebrow { display: block; margin-bottom: 5px; color: var(--accent); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .63rem; font-weight: 700; }
-  .intelligence-head h2 { font-size: 1.22rem; }
-  .intelligence-head p { max-width: 780px; margin: 5px 0 0; color: var(--muted); font-size: .8rem; line-height: 1.45; }
-  .select-all { display: flex; align-items: center; gap: 7px; flex: none; font-size: .75rem; font-weight: 650; cursor: pointer; }
-  .approval-grid { display: grid; max-width: 820px; gap: 12px; align-items: start; }
-  .intelligence-review .approval-grid { padding: 14px; }
+  .approval-section-title { font-size:.9rem;color:var(--muted);margin:0 0 8px }
+  .approval-grid { display: grid; max-width: 820px; gap: 12px; align-items: start; margin-bottom: 22px; }
   .approval-grid.approval-grid-many { max-width: none; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .approval-card { min-width: 0; border: 1px solid var(--line); border-radius: 11px; overflow: hidden; background: var(--bg); }
   .approval-card-header { border-bottom: 1px solid var(--line); background: var(--surface-2); }
   .approval-card-body { background: var(--bg); }
-  .intelligence-document { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: center; gap: 11px; padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--surface-2); }
-  .intelligence-document > div { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
-  .intelligence-document a { overflow: hidden; color: var(--ink); font-size: .84rem; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
-  .intelligence-document small { color: var(--muted); font-size: .68rem; }
-  .intelligence-thumb { width: 38px; flex-basis: 38px; }
-  .intelligence-candidates { display: flex; flex-direction: column; }
-  .intelligence-candidate { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 11px; padding: 13px 14px; border-bottom: 1px solid var(--line); }
-  .intelligence-candidate:last-child { border-bottom: 0; }
-  .intelligence-candidate:hover { background: var(--tint); }
-  .intelligence-candidate > input { margin-top: 3px; }
-  .intelligence-copy { display: flex; min-width: 0; flex-direction: column; gap: 5px; }
-  .intelligence-value { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
-  .intelligence-value strong { font-size: .87rem; text-transform: capitalize; }
+  .date-value { display:flex;align-items:center;gap:7px;flex-wrap:wrap }
   .intelligence-evidence { color: var(--muted); font-size: .78rem; line-height: 1.5; }
-  .intelligence-copy > small { color: var(--faint); font-size: .67rem; }
-  .intelligence-actions { position: sticky; top: 0; z-index: 12; display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line-strong); background: color-mix(in srgb, var(--surface) 96%, transparent); box-shadow: 0 8px 18px color-mix(in srgb, var(--ink) 7%, transparent); backdrop-filter: blur(8px); }
-  .intelligence-actions > span { margin-right: auto; color: var(--muted); font-size: .72rem; }
-  .intelligence-actions > span b { color: var(--ink); }
-  .workflow-approval-grid { margin-bottom:22px }
+  .evidence-note { margin:0;color:var(--faint);font-size:.7rem }
   .document-header { display:flex;gap:11px;align-items:center;padding:11px 13px }
   .document-identity { flex:1;min-width:0 }
   .document-identity > a { color:var(--ink);font-weight:650;overflow-wrap:anywhere }
@@ -667,9 +601,5 @@
   }
   @media (max-width: 560px) {
     .task-thumb { flex-basis:42px;width:42px }
-    .intelligence-head { align-items: flex-start; flex-direction: column; }
-    .intelligence-actions { flex-wrap: wrap; }
-    .intelligence-actions > span { width: 100%; }
-    .intelligence-actions .btn { flex: 1; justify-content: center; }
   }
 </style>

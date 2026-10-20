@@ -5683,7 +5683,7 @@ test('opens the upload page from the top bar', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Add files', exact: true })).toBeVisible()
 })
 
-test('reviews dates in a responsive grid with visible actions', async ({ page }, testInfo) => {
+test('reviews dates with per-date actions and one bulk add', async ({ page }, testInfo) => {
   const intelligenceRequests = []
   await mockAPI(page, {
     intelligenceRequests,
@@ -5723,30 +5723,27 @@ test('reviews dates in a responsive grid with visible actions', async ({ page },
   })
   await page.goto('/#/tasks')
 
-  await expect(page.getByRole('heading', { name: 'Check dates before they reach Calendar' })).toBeVisible()
-  await expect(page.getByText('0 of 4 dates selected')).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Add 0 to Calendar' })).toBeDisabled()
+  await expect(page.getByRole('heading', { name: 'Dates for Calendar' })).toBeVisible()
   const reviewGrid = page.locator('.approval-grid[data-approval-kind="date"]')
   await expect(reviewGrid).toHaveClass(/approval-grid-many/)
   const columnCount = await reviewGrid.evaluate(element => getComputedStyle(element).gridTemplateColumns.split(' ').length)
   expect(columnCount).toBe((page.viewportSize()?.width || 0) > 1050 ? 2 : 1)
-  const actions = page.getByRole('group', { name: 'Review selected dates' })
-  await expect(actions).toBeInViewport()
-  expect(await actions.evaluate(element => getComputedStyle(element).position)).toBe('sticky')
+  await expect(reviewGrid.getByRole('button', { name: 'Add to Calendar' })).toHaveCount(4)
   await page.screenshot({ path: `/tmp/suchi-date-review-${testInfo.project.name}.png`, fullPage: true })
-  await page.getByText('“Date: 3/1/25, 2:48 PM”', { exact: true }).scrollIntoViewIfNeeded()
-  await expect(actions).toBeInViewport()
-  await page.getByLabel('Select all dates').check()
-  await expect(page.getByText('4 of 4 dates selected')).toBeVisible()
-  await page.getByRole('button', { name: 'Add 4 to Calendar' }).click()
 
+  const signed = page.locator('.intelligence-candidate').filter({ hasText: 'Signed on 12 August 2025.' })
+  await signed.getByRole('button', { name: 'Reject' }).click()
+  await expect(page.locator('.intelligence-candidate')).toHaveCount(3)
+  expect(intelligenceRequests).toContainEqual({ action: 'resolve', candidate_ids: [72], decision: 'rejected' })
+
+  await page.getByRole('button', { name: 'Add all 3 dates to Calendar' }).click()
+  await expect(page.getByRole('heading', { name: 'Dates for Calendar' })).toHaveCount(0)
   expect(intelligenceRequests).toContainEqual({
-    action: 'resolve', candidate_ids: [71, 72, 73, 74], decision: 'accepted',
+    action: 'resolve', candidate_ids: [71, 73, 74], decision: 'accepted',
   })
-  await expect(page.getByRole('heading', { name: 'Check dates before they reach Calendar' })).toHaveCount(0)
 })
 
-test('does not select stale or unknown facts and preserves failed date decisions for review', async ({ page }) => {
+test('offers only safe date actions and preserves failed date decisions for review', async ({ page }) => {
   const candidate = {
     id: 81, document_id: 17, document_title: 'Renewal notice',
     type: 'date', role: 'renewal', status: 'pending', value: { date: '2026-09-20' },
@@ -5766,14 +5763,14 @@ test('does not select stale or unknown facts and preserves failed date decisions
   }))
   await page.goto('/#/tasks')
   const candidates = page.locator('.intelligence-candidate')
-  await expect(candidates.nth(1).getByRole('checkbox')).toBeDisabled()
-  await expect(candidates.nth(2).getByRole('checkbox')).toBeDisabled()
-  await page.getByLabel('Select all dates').check()
-  await expect(page.getByText('1 of 3 dates selected')).toBeVisible()
-  await page.getByRole('button', { name: 'Add 1 to Calendar' }).click()
+  await expect(page.getByRole('button', { name: /^Add all/ })).toHaveCount(0)
+  await expect(candidates.nth(1).getByRole('button', { name: 'Add to Calendar' })).toHaveCount(0)
+  await expect(candidates.nth(1).getByRole('button', { name: 'Reject' })).toBeEnabled()
+  await expect(candidates.nth(2).getByRole('button')).toHaveCount(0)
+  await candidates.nth(0).getByRole('button', { name: 'Add to Calendar' }).click()
   await expect(candidates.nth(0).getByRole('alert')).toContainText('Nothing was applied')
   await expect(candidates).toHaveCount(3)
-  await expect(candidates.nth(0).getByRole('checkbox')).toBeDisabled()
+  await expect(candidates.nth(0).getByRole('button', { name: 'Add to Calendar' })).toBeDisabled()
   await expect(page.locator('.review-toolbar [role="status"]')).toContainText('No dates were changed')
 })
 

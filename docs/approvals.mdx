@@ -214,13 +214,15 @@ state-machine runs.
 
 Start with [Document dates](/document-dates) for the complete user workflow.
 
-The Approvals screen hosts pending `document_intelligence` suggestions. Selection
-works per date, document, or visible result set.
+The Approvals screen hosts pending `document_intelligence` suggestions under
+**Dates for Calendar**; workflow approvals follow under **Decisions** and dead
+jobs under **Processing issues**. Each date is added or rejected with its own
+buttons, and **Add all N dates to Calendar** in the toolbar accepts every
+addable date. Each action is one bounded API call over the affected IDs.
 
 Dates and workflow approvals share the same card grid. More than two groups use
 two desktop columns and one mobile column; one or two groups stay in a compact
-single column. The selected-date action bar stays above the list while
-scrolling. One bounded API call adds or rejects the selected IDs.
+single column.
 
 This review does not create approval definitions, runs, transitions, or one
 task row per date. See [Document dates: Automatic and reviewed
