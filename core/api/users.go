@@ -214,12 +214,13 @@ func (s *Server) PatchSelf(w http.ResponseWriter, r *http.Request) {
 // off the wire. Capabilities is always present (empty array when
 // unset) so the SPA can trust the shape.
 type AdminUser struct {
-	ID           int64    `json:"id"`
-	Email        string   `json:"email"`
-	DisplayName  string   `json:"display_name,omitempty"`
-	Role         string   `json:"role"`
-	Disabled     bool     `json:"disabled"`
-	Capabilities []string `json:"capabilities"`
+	ID               int64    `json:"id"`
+	Email            string   `json:"email"`
+	DisplayName      string   `json:"display_name,omitempty"`
+	Role             string   `json:"role"`
+	Disabled         bool     `json:"disabled"`
+	TwoFactorEnabled bool     `json:"two_factor_enabled"`
+	Capabilities     []string `json:"capabilities"`
 }
 
 // ListUsers serves GET /api/admin/users. Admin-only. Returns every
@@ -231,6 +232,7 @@ func (s *Server) ListUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := s.DB.Read.QueryContext(r.Context(),
 		`SELECT id, email, COALESCE(display_name, ''), role, COALESCE(disabled, 0),
+		        EXISTS(SELECT 1 FROM local_auth_totp t WHERE t.user_id = users.id),
 		        COALESCE(capabilities, '[]')
 		 FROM users ORDER BY id`)
 	if err != nil {
@@ -241,13 +243,14 @@ func (s *Server) ListUsers(w http.ResponseWriter, r *http.Request) {
 	out := make([]AdminUser, 0, 8)
 	for rows.Next() {
 		var u AdminUser
-		var disabled int
+		var disabled, twoFactorEnabled int
 		var capsRaw string
-		if err := rows.Scan(&u.ID, &u.Email, &u.DisplayName, &u.Role, &disabled, &capsRaw); err != nil {
+		if err := rows.Scan(&u.ID, &u.Email, &u.DisplayName, &u.Role, &disabled, &twoFactorEnabled, &capsRaw); err != nil {
 			s.serverErr(w, "users.list.scan", err)
 			return
 		}
 		u.Disabled = disabled == 1
+		u.TwoFactorEnabled = twoFactorEnabled == 1
 		set, err := authz.ParseJSON([]byte(capsRaw))
 		if err != nil {
 			s.serverErr(w, "users.list.caps", err)
@@ -517,19 +520,21 @@ func (s *Server) PatchUser(w http.ResponseWriter, r *http.Request) {
 // Called by PatchUser to return the post-write shape.
 func (s *Server) readAdminUser(ctx context.Context, id int64) (AdminUser, error) {
 	var (
-		u        AdminUser
-		disabled int
-		capsRaw  string
+		u                          AdminUser
+		disabled, twoFactorEnabled int
+		capsRaw                    string
 	)
 	err := s.DB.Read.QueryRowContext(ctx,
 		`SELECT id, email, COALESCE(display_name, ''), role, COALESCE(disabled, 0),
+		        EXISTS(SELECT 1 FROM local_auth_totp t WHERE t.user_id = users.id),
 		        COALESCE(capabilities, '[]')
 		 FROM users WHERE id = ?`, id,
-	).Scan(&u.ID, &u.Email, &u.DisplayName, &u.Role, &disabled, &capsRaw)
+	).Scan(&u.ID, &u.Email, &u.DisplayName, &u.Role, &disabled, &twoFactorEnabled, &capsRaw)
 	if err != nil {
 		return AdminUser{}, err
 	}
 	u.Disabled = disabled == 1
+	u.TwoFactorEnabled = twoFactorEnabled == 1
 	set, err := authz.ParseJSON([]byte(capsRaw))
 	if err != nil {
 		return AdminUser{}, err

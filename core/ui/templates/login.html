@@ -17,7 +17,7 @@
     <span class="brand-hero" role="img" aria-label="suchi"></span>
     <h1 class="brand">{{msg "auth.login.title"}}</h1>
     <p class="muted">{{msg "auth.login.subtitle"}}</p>
-    {{ if .Error }}<p class="error">{{ .Error }}</p>{{ end }}
+    {{ if .ErrorKey }}<p class="error" role="alert">{{ msg .ErrorKey }}</p>{{ end }}
     <form method="post" action="/login">
       <label>
         <span>{{msg "auth.login.email"}}</span>
@@ -27,6 +27,13 @@
         <span>{{msg "auth.login.password"}}</span>
         <input name="password" type="password" autocomplete="current-password" required>
       </label>
+      {{ if .ShowTwoFactor }}
+      <label>
+        <span>{{msg "auth.login.two_factor_code"}}</span>
+        <input name="two_factor_code" type="text" autocomplete="one-time-code"
+               autocapitalize="characters" spellcheck="false" required>
+      </label>
+      {{ end }}
       <button type="submit">{{msg "auth.login.submit"}}</button>
     </form>
   </main>

@@ -33,6 +33,7 @@ import (
 	"golang.org/x/crypto/argon2"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
+	suchicrypto "github.com/johnnybravo-xyz/suchi/core/crypto"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
@@ -61,6 +62,8 @@ func PasswordWorkBusy(err error) bool {
 type Plugin struct {
 	db           *db.DB
 	log          *slog.Logger
+	secretKey    *suchicrypto.AEADKey
+	publicURL    string
 	cookieSecure bool
 	demoMode     bool
 	setupMu      sync.Mutex
@@ -79,6 +82,11 @@ type Options struct {
 	// DisableSetup prevents the local password bootstrap path from being
 	// minted. OIDC deployments use their configured admin identity instead.
 	DisableSetup bool
+	// SecretKey seals TOTP seeds and enrollment state with DATA_DIR/.decrypt-key.
+	// Session-only uses such as OIDC may leave it nil.
+	SecretKey *suchicrypto.AEADKey
+	// PublicURL is the trusted origin for factor-management reauthentication.
+	PublicURL string
 }
 
 // New wires the plugin with local password bootstrap enabled.
@@ -90,7 +98,8 @@ func New(ctx context.Context, d *db.DB, log *slog.Logger, cookieSecure, demoMode
 // a setup token is generated and logged for the operator.
 func NewWithOptions(ctx context.Context, d *db.DB, log *slog.Logger, cookieSecure, demoMode bool, opts Options) (*Plugin, error) {
 	p := &Plugin{
-		db: d, log: log.With("plugin", Name),
+		db: d, log: log.With("plugin", Name), secretKey: opts.SecretKey,
+		publicURL:    opts.PublicURL,
 		cookieSecure: cookieSecure, demoMode: demoMode,
 	}
 	if err := p.deleteExpiredSessions(ctx, time.Now()); err != nil {

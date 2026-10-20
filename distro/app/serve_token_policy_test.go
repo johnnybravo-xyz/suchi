@@ -61,6 +61,8 @@ func TestTokenPolicyProtectsDocumentAndAccountHandlers(t *testing.T) {
 	mux.HandleFunc("POST /oidc/email-change", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
+	mux.HandleFunc("GET /api/account/two-factor", local.GetTwoFactorStatus)
+	mux.HandleFunc("POST /api/admin/users/{id}/two-factor/reset", local.AdminResetTwoFactor)
 	handler := buildHTTPHandler(mux, &config.Config{BodyLimit: 1024}, &auth.Chain{}, "", nil, httpx.NewMetrics(), log)
 	for _, tc := range []struct {
 		name, method, path, body, scope, role, kind string
@@ -80,6 +82,8 @@ func TestTokenPolicyProtectsDocumentAndAccountHandlers(t *testing.T) {
 		{name: "admin token cannot revoke member credential", method: "DELETE", path: "/api/tokens/2", scope: auth.ScopeDocumentsRead, role: "admin", kind: "token", userID: 1, want: 403},
 		{name: "token cannot delegate itself", method: "POST", path: "/api/tokens/", body: `{"name":"blocked-token","scopes":"documents:read"}`, scope: auth.ScopeDocumentsRead, role: "member", kind: "token", userID: 2, want: 403},
 		{name: "token cannot change account email", method: "POST", path: "/api/users/me/email", body: `{"email":"changed@example.test","current_password":"secret"}`, scope: auth.ScopeDocumentsWrite, role: "member", kind: "token", userID: 2, want: 403},
+		{name: "token cannot inspect two-factor state", method: "GET", path: "/api/account/two-factor", scope: auth.ScopeDocumentsRead, role: "member", kind: "token", userID: 2, want: 403},
+		{name: "admin token cannot reset two-factor", method: "POST", path: "/api/admin/users/2/two-factor/reset", body: `{}`, scope: auth.ScopeDocumentsWrite, role: "admin", kind: "token", userID: 1, want: 403},
 		{name: "token cannot start OIDC email synchronization", method: "POST", path: "/oidc/email-change", scope: auth.ScopeDocumentsWrite, role: "member", kind: "token", userID: 2, want: 403},
 		{name: "member session can start OIDC email synchronization", method: "POST", path: "/oidc/email-change", role: "member", kind: "user", userID: 2, want: 204},
 		{name: "scratch cannot mint credentials", method: "POST", path: "/api/tokens/", body: `{"name":"blocked-token","scopes":"documents:read"}`, scope: auth.ScopeDocumentsRead, role: "member", kind: "demo-scratch", userID: 2, want: 403},

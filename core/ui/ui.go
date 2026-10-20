@@ -210,10 +210,27 @@ func (s *Server) LoginPage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/bootstrap", http.StatusFound)
 		return
 	}
+	code := r.URL.Query().Get("error")
+	errorKey := loginErrorKeys[code]
+	if code != "" && errorKey == "" {
+		errorKey = "auth.login.error.unknown"
+	}
 	s.render(w, r, "login", map[string]any{
-		"Error":    r.URL.Query().Get("error"),
-		"DemoMode": s.DemoMode,
+		"ErrorKey":      errorKey,
+		"ShowTwoFactor": code == "two_factor_required" || code == "two_factor_invalid",
+		"DemoMode":      s.DemoMode,
 	})
+}
+
+// loginErrorKeys maps the error codes LoginFormHandler redirects with to
+// catalog keys, so the page never echoes query text.
+var loginErrorKeys = map[string]string{
+	"missing":             "auth.login.error.missing",
+	"invalid_credentials": "auth.login.error.invalid_credentials",
+	"two_factor_required": "auth.login.error.two_factor_required",
+	"two_factor_invalid":  "auth.login.error.two_factor_invalid",
+	"too_many_attempts":   "auth.login.error.too_many_attempts",
+	"two_factor_locked":   "auth.login.error.two_factor_locked",
 }
 
 // BootstrapPage renders the first-boot admin-creation form.

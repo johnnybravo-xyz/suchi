@@ -5,7 +5,15 @@ auth.login.title: Anmelden
 auth.login.subtitle: um mit suchi fortzufahren.
 auth.login.email: E-Mail
 auth.login.password: Passwort
+auth.login.two_factor_code: Authentifikator- oder Wiederherstellungscode
 auth.login.submit: Anmelden
+auth.login.error.missing: Geben Sie E-Mail und Passwort ein.
+auth.login.error.invalid_credentials: E-Mail oder Passwort stimmt nicht.
+auth.login.error.two_factor_required: Geben Sie E-Mail und Passwort erneut ein, zusammen mit dem Code aus Ihrer Authentifikator-App oder einem Wiederherstellungscode.
+auth.login.error.two_factor_invalid: Passwort oder Code stimmt nicht. Versuchen Sie es mit einem neuen Code.
+auth.login.error.too_many_attempts: Zu viele falsche Codes. Warten Sie einige Minuten und versuchen Sie es erneut.
+auth.login.error.two_factor_locked: Die Zwei-Faktor-Anmeldung ist nach zu vielen falschen Codes gesperrt. Bitten Sie einen Administrator, sie zurückzusetzen.
+auth.login.error.unknown: Anmeldung fehlgeschlagen. Versuchen Sie es erneut.
 auth.demo: Demo
 
 auth.setup.title: suchi einrichten

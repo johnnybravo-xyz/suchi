@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -202,32 +203,47 @@ func setupErrStatus(err error) int {
 
 // LoginRequest is shared by POST /api/login and /api/token/.
 type LoginRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	Email         string `json:"email"`
+	Password      string `json:"password"`
+	TwoFactorCode string `json:"two_factor_code,omitempty"`
 }
 
 // LoginHandler validates credentials and creates a browser session. API
 // clients use TokenHandler instead; keeping the two credential exchanges
 // separate prevents headless clients from accumulating unused session rows.
 func (p *Plugin) LoginHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := p.authenticateCredentials(w, r)
+	w.Header().Set("Cache-Control", "no-store")
+	credentials, ok := p.authenticateCredentials(w, r)
 	if !ok {
 		return
 	}
-
-	cookie, err := p.IssueSession(r.Context(), userID, r)
+	prepared, err := p.PrepareSession(r)
 	if err != nil {
 		http.Error(w, "session failed", http.StatusInternalServerError)
 		return
 	}
-	http.SetCookie(w, cookie)
+	err = p.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		if err := credentials.factor.consume(r.Context(), tx, credentials.userID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(r.Context(),
+			"DELETE FROM sessions WHERE expires_at <= ?", prepared.createdAt); err != nil {
+			return err
+		}
+		return prepared.insert(r.Context(), tx, credentials.userID)
+	})
+	if p.handleCredentialCommitError(w, r, credentials.userID, err) {
+		return
+	}
+	http.SetCookie(w, prepared.Cookie())
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // TokenHandler validates credentials and returns a scoped API token. It never
 // creates a browser session or sets a cookie.
 func (p *Plugin) TokenHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := p.authenticateCredentials(w, r)
+	w.Header().Set("Cache-Control", "no-store")
+	credentials, ok := p.authenticateCredentials(w, r)
 	if !ok {
 		return
 	}
@@ -244,99 +260,198 @@ func (p *Plugin) TokenHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		systemID = system.ID
 	}
-	var token string
-	err := p.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
-		var err error
-		token, err = p.IssueAPIToken(r.Context(), tx, userID, systemID, "login",
-			auth.ScopeDocumentsRead+","+auth.ScopeDocumentsWrite, "")
-		return err
+	prepared, err := prepareAPIToken("login",
+		auth.ScopeDocumentsRead+","+auth.ScopeDocumentsWrite, "")
+	if err != nil {
+		http.Error(w, "token failed", http.StatusInternalServerError)
+		return
+	}
+	err = p.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		if err := credentials.factor.consume(r.Context(), tx, credentials.userID); err != nil {
+			return err
+		}
+		return prepared.insert(r.Context(), tx, credentials.userID, systemID)
 	})
 	if errors.Is(err, errTokenSystemUnavailable) {
 		http.Error(w, "system unavailable", http.StatusNotFound)
 		return
 	}
-	if err != nil {
-		http.Error(w, "token failed", http.StatusInternalServerError)
+	if p.handleCredentialCommitError(w, r, credentials.userID, err) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"token": token})
+	_ = json.NewEncoder(w).Encode(map[string]string{"token": prepared.token})
 }
 
-func (p *Plugin) authenticateCredentials(w http.ResponseWriter, r *http.Request) (int64, bool) {
+type verifiedCredentials struct {
+	userID int64
+	factor factorUse
+}
+
+func (p *Plugin) authenticateCredentials(w http.ResponseWriter, r *http.Request) (verifiedCredentials, bool) {
 	var req LoginRequest
 	if err := decodeJSONRequest(w, r, &req); err != nil {
 		http.Error(w, "bad body", http.StatusBadRequest)
-		return 0, false
+		return verifiedCredentials{}, false
 	}
 	if req.Email == "" || req.Password == "" {
 		http.Error(w, "email and password required", http.StatusBadRequest)
-		return 0, false
+		return verifiedCredentials{}, false
 	}
 
-	userID, err := p.verifyCredentials(r.Context(), req.Email, req.Password)
-	if errors.Is(err, errPasswordWorkBusy) {
-		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Retry-After", "1")
-		http.Error(w, "authentication temporarily busy", http.StatusServiceUnavailable)
-		return 0, false
-	}
-	if errors.Is(err, errInvalidCredentials) {
-		http.Error(w, "invalid credentials", http.StatusUnauthorized)
-		return 0, false
-	}
+	credentials, err := p.prepareCredentials(r.Context(), req)
 	if err != nil {
-		http.Error(w, "server error", http.StatusInternalServerError)
-		return 0, false
+		p.writeAuthenticationError(w, err)
+		return verifiedCredentials{}, false
 	}
-	return userID, true
+	return credentials, true
 }
 
-// LoginFormHandler is the sibling of LoginHandler for browser HTML
-// forms (Content-Type: application/x-www-form-urlencoded). Returns a
-// 302 back to the login page with ?error=... on failure, or plants a
-// session cookie and 302s to / on success. Cookie-only — never issues
-// tokens on this path.
+func (p *Plugin) prepareCredentials(ctx context.Context, req LoginRequest) (verifiedCredentials, error) {
+	account, err := p.verifyCredentials(ctx, req.Email, req.Password)
+	if err != nil {
+		return verifiedCredentials{}, err
+	}
+	factor, err := p.prepareFactor(ctx, account.userID, account.factor, req.TwoFactorCode, time.Now())
+	if err != nil {
+		return verifiedCredentials{}, err
+	}
+	return verifiedCredentials{userID: account.userID, factor: factor}, nil
+}
+
+func (p *Plugin) writeAuthenticationError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errPasswordWorkBusy) {
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "authentication temporarily busy", http.StatusServiceUnavailable)
+		return
+	}
+	status, code, retryAfter := factorErrorResponse(err)
+	if status == http.StatusInternalServerError {
+		http.Error(w, "server error", status)
+		return
+	}
+	if retryAfter > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+	}
+	writeJSONErrorCode(w, status, code)
+}
+
+// factorErrorResponse maps credential and factor errors to an HTTP status, a
+// JSON error code, and Retry-After seconds (zero when not limited).
+func factorErrorResponse(err error) (int, string, int) {
+	var rateLimit *factorRateLimitError
+	switch {
+	case errors.As(err, &rateLimit):
+		return http.StatusTooManyRequests, "too_many_attempts", rateLimit.retryAfter
+	case errors.Is(err, errFactorLocked):
+		return http.StatusForbidden, "two_factor_locked", 0
+	case errors.Is(err, errTwoFactorRequired):
+		return http.StatusUnauthorized, "two_factor_required", 0
+	case errors.Is(err, errInvalidCredentials):
+		return http.StatusUnauthorized, "invalid_credentials", 0
+	default:
+		return http.StatusInternalServerError, "server_error", 0
+	}
+}
+
+func (p *Plugin) handleCredentialCommitError(w http.ResponseWriter, r *http.Request, userID int64, err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, errFactorRejected) {
+		err = p.rejectFactor(r.Context(), userID, time.Now())
+	}
+	p.writeAuthenticationError(w, err)
+	return true
+}
+
+func writeJSONErrorCode(w http.ResponseWriter, status int, code string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"code": code})
+}
+
+// LoginFormHandler is the sibling of LoginHandler for browser HTML forms.
+// Cookie-only — never issues tokens on this path.
 func (p *Plugin) LoginFormHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "bad form", http.StatusBadRequest)
 		return
 	}
-	email := r.PostForm.Get("email")
-	password := r.PostForm.Get("password")
-	if email == "" || password == "" {
+	req := LoginRequest{
+		Email:         r.PostForm.Get("email"),
+		Password:      r.PostForm.Get("password"),
+		TwoFactorCode: r.PostForm.Get("two_factor_code"),
+	}
+	if req.Email == "" || req.Password == "" {
 		http.Redirect(w, r, "/login?error=missing", http.StatusFound)
 		return
 	}
 
-	userID, err := p.verifyCredentials(r.Context(), email, password)
-	if errors.Is(err, errPasswordWorkBusy) {
-		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Retry-After", "1")
-		http.Error(w, "authentication temporarily busy", http.StatusServiceUnavailable)
-		return
-	}
-	if errors.Is(err, errInvalidCredentials) {
-		http.Redirect(w, r, "/login?error=invalid+credentials", http.StatusFound)
-		return
-	}
+	credentials, err := p.prepareCredentials(r.Context(), req)
 	if err != nil {
-		http.Error(w, "server error", http.StatusInternalServerError)
+		p.writeLoginFormError(w, r, req, err)
 		return
 	}
 
-	cookie, err := p.IssueSession(r.Context(), userID, r)
+	prepared, err := p.PrepareSession(r)
 	if err != nil {
 		http.Error(w, "session failed", http.StatusInternalServerError)
 		return
 	}
-	http.SetCookie(w, cookie)
+	err = p.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		if err := credentials.factor.consume(r.Context(), tx, credentials.userID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(r.Context(),
+			"DELETE FROM sessions WHERE expires_at <= ?", prepared.createdAt); err != nil {
+			return err
+		}
+		return prepared.insert(r.Context(), tx, credentials.userID)
+	})
+	if errors.Is(err, errFactorRejected) {
+		err = p.rejectFactor(r.Context(), credentials.userID, time.Now())
+	}
+	if err != nil {
+		p.writeLoginFormError(w, r, req, err)
+		return
+	}
+	http.SetCookie(w, prepared.Cookie())
 	next := r.URL.Query().Get("next")
 	if !safeLocalRedirect(next) {
 		next = "/"
 	}
 	http.Redirect(w, r, next, http.StatusFound)
+}
+
+// writeLoginFormError redirects back to the HTML login page with a stable error
+// code that core/ui maps to a translated message.
+func (p *Plugin) writeLoginFormError(w http.ResponseWriter, r *http.Request, req LoginRequest, err error) {
+	var rateLimit *factorRateLimitError
+	code := ""
+	switch {
+	case errors.Is(err, errPasswordWorkBusy):
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "authentication temporarily busy", http.StatusServiceUnavailable)
+		return
+	case errors.As(err, &rateLimit):
+		code = "too_many_attempts"
+	case errors.Is(err, errFactorLocked):
+		code = "two_factor_locked"
+	case errors.Is(err, errTwoFactorRequired):
+		code = "two_factor_required"
+	case errors.Is(err, errInvalidCredentials) && req.TwoFactorCode != "":
+		code = "two_factor_invalid"
+	case errors.Is(err, errInvalidCredentials):
+		code = "invalid_credentials"
+	default:
+		p.log.Error("localauth.login_form.failed", "err", err.Error())
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/login?error="+code, http.StatusFound)
 }
 
 func decodeJSONRequest(w http.ResponseWriter, r *http.Request, into any) error {
@@ -369,37 +484,57 @@ var errInvalidCredentials = errors.New("local-auth: invalid credentials")
 // the same expensive verification path as a wrong password.
 const dummyPasswordHash = "$argon2id$v=19$m=65536,t=2,p=2$00000000000000000000000000000000$0000000000000000000000000000000000000000000000000000000000000000"
 
-func (p *Plugin) verifyCredentials(ctx context.Context, email, password string) (int64, error) {
+type credentialAccount struct {
+	userID int64
+	factor factorState
+}
+
+func (p *Plugin) verifyCredentials(ctx context.Context, email, password string) (credentialAccount, error) {
 	// Take capacity before looking up the account so overload behavior and timing
 	// do not reveal whether the submitted email exists.
 	if !startPasswordWork() {
-		return 0, errPasswordWorkBusy
+		return credentialAccount{}, errPasswordWorkBusy
 	}
 	defer finishPasswordWork()
 
 	email = strings.ToLower(strings.TrimSpace(email))
 	var (
-		userID int64
-		hash   sql.NullString
+		userID       int64
+		hash         sql.NullString
+		factorUserID sql.NullInt64
+		ciphertext   []byte
+		lastUsedStep sql.NullInt64
+		failures     sql.NullInt64
+		blockedUntil sql.NullInt64
 	)
-	err := p.db.Read.QueryRowContext(ctx,
-		"SELECT id, password_hash FROM users WHERE email = ? AND disabled = 0",
-		email).Scan(&userID, &hash)
+	err := p.db.Read.QueryRowContext(ctx, `
+		SELECT u.id, u.password_hash, t.user_id, t.secret_ciphertext, t.last_used_step,
+		       t.failed_attempts, t.blocked_until
+		FROM users u
+		LEFT JOIN local_auth_totp t ON t.user_id = u.id
+		WHERE u.email = ? AND u.disabled = 0`, email).
+		Scan(&userID, &hash, &factorUserID, &ciphertext, &lastUsedStep, &failures, &blockedUntil)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return 0, err
+		return credentialAccount{}, err
 	}
 	encoded := dummyPasswordHash
 	found := err == nil && hash.Valid
 	if found {
 		encoded = hash.String
 	}
-	if err := verifyPassword(encoded, password); err != nil {
-		return 0, errInvalidCredentials
+	if err := verifyPassword(encoded, password); err != nil || !found {
+		return credentialAccount{}, errInvalidCredentials
 	}
-	if !found {
-		return 0, errInvalidCredentials
+	if factorUserID.Valid != lastUsedStep.Valid {
+		return credentialAccount{}, errors.New("local-auth: incomplete two-factor state")
 	}
-	return userID, nil
+	return credentialAccount{
+		userID: userID,
+		factor: factorState{
+			enabled: factorUserID.Valid, ciphertext: ciphertext, lastUsedStep: lastUsedStep.Int64,
+			failedAttempts: int(failures.Int64), blockedUntil: blockedUntil.Int64,
+		},
+	}, nil
 }
 
 // PreparedSession holds a fresh opaque browser credential and the request
@@ -564,34 +699,53 @@ func (p *Plugin) LogoutHandler(w http.ResponseWriter, r *http.Request) {
 
 var errTokenSystemUnavailable = errors.New("token system unavailable")
 
+type preparedAPIToken struct {
+	token, hashHex, name, scopes, source string
+	createdAt                            int64
+}
+
+func prepareAPIToken(name, scopes, source string) (*preparedAPIToken, error) {
+	var raw [32]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return nil, err
+	}
+	token := hex.EncodeToString(raw[:])
+	sum := sha256.Sum256([]byte(token))
+	return &preparedAPIToken{
+		token: token, hashHex: hex.EncodeToString(sum[:]),
+		name: name, scopes: scopes, source: source, createdAt: time.Now().Unix(),
+	}, nil
+}
+
+func (token *preparedAPIToken) insert(ctx context.Context, tx *sql.Tx, userID, systemID int64) error {
+	allowed, err := systems.CanEnter(ctx, tx, userID, systemID)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return errTokenSystemUnavailable
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO api_tokens(system_id, user_id, name, token_hash, scopes, created_at, source)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, systemID, userID, token.name, token.hashHex, token.scopes, token.createdAt, token.source)
+	return err
+}
+
 // IssueAPIToken inserts one system-bound credential into the caller's writer
 // transaction. Only the digest reaches disk; plaintext is returned once.
 func (p *Plugin) IssueAPIToken(ctx context.Context, tx *sql.Tx, userID, systemID int64, name, scopes, source string) (string, error) {
 	if tx == nil {
 		return "", errors.New("token issuance requires a caller-owned transaction")
 	}
-	allowed, err := systems.CanEnter(ctx, tx, userID, systemID)
+	prepared, err := prepareAPIToken(name, scopes, source)
 	if err != nil {
 		return "", err
 	}
-	if !allowed {
-		return "", errTokenSystemUnavailable
-	}
-	var raw [32]byte
-	if _, err := rand.Read(raw[:]); err != nil {
+	if err := prepared.insert(ctx, tx, userID, systemID); err != nil {
 		return "", err
 	}
-	token := hex.EncodeToString(raw[:])
-	sum := sha256.Sum256([]byte(token))
-	hashHex := hex.EncodeToString(sum[:])
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO api_tokens(system_id, user_id, name, token_hash, scopes, created_at, source)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, systemID, userID, name, hashHex, scopes, time.Now().Unix(), source)
-	if err != nil {
-		return "", err
-	}
-	return token, nil
+	return prepared.token, nil
 }
 
 func constantTimeEq(a, b string) bool {

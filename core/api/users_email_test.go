@@ -477,3 +477,47 @@ func TestPostSelfEmailRollsBackOnRequiredAuditFailure(t *testing.T) {
 			email, ownerID, sessions, auditRows, rec.Header(), rig.reloadCalls)
 	}
 }
+
+func TestPostSelfEmailRequiresSecondFactorWhenEnrolled(t *testing.T) {
+	rig := newEmailChangeTestRig(t)
+	var codes []string
+	rig.s.VerifySecondFactor = func(_ context.Context, userID int64, code string) (int, string, int) {
+		codes = append(codes, code)
+		switch code {
+		case "":
+			return http.StatusUnauthorized, "two_factor_required", 0
+		case "123456":
+			return 0, "", 0
+		default:
+			return http.StatusTooManyRequests, "too_many_attempts", 30
+		}
+	}
+
+	rec := rig.request(validEmailChangeBody(emailTestNew))
+	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), `"code":"two_factor_required"`) {
+		t.Fatalf("missing code: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	rec = rig.request(`{"email":"` + emailTestNew + `","current_password":"` + emailTestPassword + `","two_factor_code":"999999"}`)
+	if rec.Code != http.StatusTooManyRequests || rec.Header().Get("Retry-After") != "30" {
+		t.Fatalf("limited code: status=%d headers=%v", rec.Code, rec.Header())
+	}
+	var email string
+	if err := rig.d.Read.QueryRow(`SELECT email FROM users WHERE id=1`).Scan(&email); err != nil || email != emailTestOld {
+		t.Fatalf("email=%q err=%v, want unchanged", email, err)
+	}
+
+	// A taken address is reported before the code is spent.
+	seedUser(t, rig.d, 2)
+	if _, err := rig.d.Write.Exec(`UPDATE users SET email='taken@example.test' WHERE id=2`); err != nil {
+		t.Fatal(err)
+	}
+	rec = rig.request(`{"email":"taken@example.test","current_password":"` + emailTestPassword + `","two_factor_code":"123456"}`)
+	if rec.Code != http.StatusConflict || len(codes) != 2 {
+		t.Fatalf("taken email: status=%d hook calls=%d", rec.Code, len(codes))
+	}
+
+	rec = rig.request(`{"email":"` + emailTestNew + `","current_password":"` + emailTestPassword + `","two_factor_code":"123456"}`)
+	if rec.Code != http.StatusOK && rec.Code != http.StatusNoContent {
+		t.Fatalf("accepted code: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}

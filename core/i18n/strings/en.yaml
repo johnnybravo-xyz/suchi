@@ -8,7 +8,15 @@ auth.login.title: Sign in
 auth.login.subtitle: to continue to suchi.
 auth.login.email: Email
 auth.login.password: Password
+auth.login.two_factor_code: Authenticator or recovery code
 auth.login.submit: Sign in
+auth.login.error.missing: Enter your email and password.
+auth.login.error.invalid_credentials: Email or password did not match.
+auth.login.error.two_factor_required: Enter your email and password again, with the code from your authenticator app or a recovery code.
+auth.login.error.two_factor_invalid: The password or code did not match. Try again with a fresh code.
+auth.login.error.too_many_attempts: Too many incorrect codes. Wait a few minutes, then try again.
+auth.login.error.two_factor_locked: Two-factor sign-in is locked after too many incorrect codes. Ask an administrator to reset it.
+auth.login.error.unknown: Could not sign in. Try again.
 auth.demo: Demo
 
 

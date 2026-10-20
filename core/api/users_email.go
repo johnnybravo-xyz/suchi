@@ -11,6 +11,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/logx"
 	"github.com/johnnybravo-xyz/suchi/core/render/view"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -78,6 +79,7 @@ func (s *Server) PostSelfEmail(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Email           string `json:"email"`
 		CurrentPassword string `json:"current_password"`
+		TwoFactorCode   string `json:"two_factor_code"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
@@ -107,6 +109,26 @@ func (s *Server) PostSelfEmail(w http.ResponseWriter, r *http.Request) {
 		}
 		s.writeError(w, http.StatusUnauthorized, "reauthentication_failed", "current password was not accepted")
 		return
+	}
+	// Check the common failure before spending a one-time code on it.
+	var taken bool
+	if err := s.DB.Read.QueryRowContext(r.Context(),
+		`SELECT EXISTS(SELECT 1 FROM users WHERE email = ?)`, targetEmail).Scan(&taken); err != nil {
+		s.serverErr(w, "users.email.taken", err)
+		return
+	}
+	if taken {
+		s.writeError(w, http.StatusConflict, "email_taken", "email is already in use")
+		return
+	}
+	if s.VerifySecondFactor != nil {
+		if status, code, retryAfter := s.VerifySecondFactor(r.Context(), p.UserID, body.TwoFactorCode); status != 0 {
+			if retryAfter > 0 {
+				w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+			}
+			s.writeError(w, status, code, "two-factor verification was not accepted")
+			return
+		}
 	}
 	if s.PrepareBrowserSession == nil {
 		s.serverErr(w, "users.email.session_preparer", errors.New("browser session rotation is not configured"))

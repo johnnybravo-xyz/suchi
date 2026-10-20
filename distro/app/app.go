@@ -174,6 +174,12 @@ func Run(ctx context.Context, opts Options) error {
 	// Missing optional tools degrade formats without blocking startup.
 	reportToolAvailability(log)
 
+	// Losing this key makes stored document and mailbox passwords unusable.
+	decryptKey, err := suchicrypto.LoadOrCreateKey(cfg.DecryptKeyPath)
+	if err != nil {
+		log.Error("main.decrypt_key.load", "path", cfg.DecryptKeyPath, "err", err.Error())
+		return fmt.Errorf("main.decrypt_key.load: %w", err)
+	}
 	cookieSecure := strings.HasPrefix(strings.ToLower(cfg.PublicURL), "https://")
 	var reloadFSWatch func(context.Context) error
 	emailChangeModeFor := func(p *pluginapi.Principal) string {
@@ -181,6 +187,8 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	la, err := localauth.NewWithOptions(ctx, d, log, cookieSecure, cfg.DemoMode, localauth.Options{
 		DisableSetup: cfg.OIDCIssuerURL != "",
+		SecretKey:    decryptKey,
+		PublicURL:    cfg.PublicURL,
 	})
 	if err != nil {
 		log.Error("main.localauth.new", "err", err.Error())
@@ -307,13 +315,6 @@ func Run(ctx context.Context, opts Options) error {
 	if err != nil {
 		log.Error("main.trash.new", "err", err.Error())
 		return fmt.Errorf("main.trash.new: %w", err)
-	}
-
-	// Losing this key makes stored document and mailbox passwords unusable.
-	decryptKey, err := suchicrypto.LoadOrCreateKey(cfg.DecryptKeyPath)
-	if err != nil {
-		log.Error("main.decrypt_key.load", "path", cfg.DecryptKeyPath, "err", err.Error())
-		return fmt.Errorf("main.decrypt_key.load: %w", err)
 	}
 
 	// Stored LLM settings fill fields not pinned by file or environment.
@@ -569,6 +570,7 @@ func Run(ctx context.Context, opts Options) error {
 	apiSrv.PasswordHasher = localauth.HashPassword
 	apiSrv.PasswordVerifier = localauth.VerifyPassword
 	apiSrv.PasswordWorkBusy = localauth.PasswordWorkBusy
+	apiSrv.VerifySecondFactor = la.VerifySecondFactor
 	apiSrv.PrepareBrowserSession = func(r *http.Request) (api.PreparedBrowserSession, error) {
 		return la.PrepareSession(r)
 	}

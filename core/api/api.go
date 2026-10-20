@@ -148,6 +148,11 @@ type Server struct {
 	// PasswordWorkBusy classifies bounded password-worker saturation without
 	// exposing the local-auth implementation to core/api.
 	PasswordWorkBusy func(error) bool
+	// VerifySecondFactor is set at boot by distro/app from the local-auth
+	// plugin. After password reauthentication it checks and spends the
+	// account's optional two-factor code; status 0 means accepted or not
+	// enrolled, otherwise it names the HTTP status, error code and Retry-After.
+	VerifySecondFactor func(ctx context.Context, userID int64, code string) (status int, errorCode string, retryAfter int)
 	// PrepareBrowserSession generates a replacement before the API enters the
 	// single writer. Rotation itself remains atomic with the account mutation.
 	PrepareBrowserSession func(*http.Request) (PreparedBrowserSession, error)

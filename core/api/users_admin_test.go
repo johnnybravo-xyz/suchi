@@ -75,6 +75,11 @@ func TestListUsers_admin_only(t *testing.T) {
 	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
 	seedUser(t, d, 1)                    // admin
 	seedMember(t, s, 2, `["mailboxes"]`) // member with mailboxes cap
+	if _, err := d.ExecWrite(t.Context(), `
+		INSERT INTO local_auth_totp(user_id,secret_ciphertext,last_used_step,enabled_at)
+		VALUES(2,x'01',1,1)`); err != nil {
+		t.Fatal(err)
+	}
 
 	// Anonymous → 401.
 	rec := doAdmin(t, s, "GET", "/api/admin/users", "", nil)
@@ -114,6 +119,9 @@ func TestListUsers_admin_only(t *testing.T) {
 	}
 	if len(m.Capabilities) != 1 || m.Capabilities[0] != "mailboxes" {
 		t.Errorf("uid=2 caps = %v, want [mailboxes]", m.Capabilities)
+	}
+	if !m.TwoFactorEnabled {
+		t.Error("uid=2 two_factor_enabled=false, want true")
 	}
 }
 

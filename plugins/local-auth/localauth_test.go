@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
+	suchicrypto "github.com/johnnybravo-xyz/suchi/core/crypto"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
 )
@@ -30,7 +31,8 @@ func openTestPlugin(t *testing.T) *Plugin {
 func openTestPluginWithOptions(t *testing.T, opts Options) *Plugin {
 	t.Helper()
 	ctx := context.Background()
-	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "t.db"))
+	tempDir := t.TempDir()
+	d, err := db.Open(ctx, filepath.Join(tempDir, "t.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,6 +45,11 @@ func openTestPluginWithOptions(t *testing.T, opts Options) *Plugin {
 	if err := db.Migrate(ctx, d, migs, log); err != nil {
 		t.Fatal(err)
 	}
+	opts.SecretKey, err = suchicrypto.LoadOrCreateKey(filepath.Join(tempDir, ".decrypt-key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts.PublicURL = "https://archive.example.test"
 	p, err := NewWithOptions(ctx, d, log, false, false, opts)
 	if err != nil {
 		t.Fatal(err)

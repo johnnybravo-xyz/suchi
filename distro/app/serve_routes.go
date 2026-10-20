@@ -34,6 +34,12 @@ func registerBaseRoutes(mux *http.ServeMux, cfg *config.Config, d *db.DB, cas *b
 		mux.HandleFunc("POST /bootstrap", la.SetupFormHandler)
 		mux.HandleFunc("POST /api/login", la.LoginHandler)
 		mux.HandleFunc("POST /api/token/", la.TokenHandler)
+		mux.HandleFunc("GET /api/account/two-factor", la.GetTwoFactorStatus)
+		mux.HandleFunc("POST /api/account/two-factor/enrollment", la.StartTwoFactorEnrollment)
+		mux.HandleFunc("POST /api/account/two-factor", la.EnableTwoFactor)
+		mux.HandleFunc("POST /api/account/two-factor/recovery-codes", la.RegenerateRecoveryCodes)
+		mux.HandleFunc("POST /api/account/two-factor/disable", la.DisableTwoFactor)
+		mux.HandleFunc("POST /api/admin/users/{id}/two-factor/reset", la.AdminResetTwoFactor)
 	}
 
 	if !cfg.UIDisabled {

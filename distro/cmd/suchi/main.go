@@ -75,6 +75,8 @@ func main() {
 		os.Exit(runImport(os.Args[2:]))
 	case "gc":
 		os.Exit(runGC(os.Args[2:]))
+	case "auth":
+		os.Exit(runAuth(os.Args[2:]))
 	case "taxonomy":
 		os.Exit(runTaxonomy(os.Args[2:]))
 	case "doctor":
@@ -131,6 +133,7 @@ Usage:
   suchi healthcheck               probe /readyz on LISTEN_ADDR (for Docker HEALTHCHECK)
   suchi import [flags]            point --from at your existing DMS's export bundle
   suchi gc [flags]                reclaim unreferenced blobs (dry-run default)
+  suchi auth reset-two-factor   disable local 2FA for one account while the server is stopped
   suchi taxonomy <command>        validate, import, export, or merge taxonomy
   suchi doctor [flags]            diagnostic report; optionally scrub CAS integrity
   suchi mcp [--http :port]        start an MCP server (stdio by default, Streamable HTTP with --http)
