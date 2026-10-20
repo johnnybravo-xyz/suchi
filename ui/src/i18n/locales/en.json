@@ -133,6 +133,8 @@
   "app.pageNotFound2": "Page not found",
   "app.people": "People",
   "app.profileSettings": "Profile & settings",
+  "app.processingDetail": "Reading {reading} · classifying {classifying}",
+  "app.processingProgress": "Processing {done} of {total}",
   "app.questionOpen": "Question open",
   "app.resetsDailyAt0000UtcDon": "Resets daily at 00:00 UTC — don't upload confidential documents.",
   "app.returnToYourDocumentQuestion": "Return to your document question",

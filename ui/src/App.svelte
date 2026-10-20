@@ -62,6 +62,29 @@
   let recentError = $state('')
   let st = $state(null)                 // /api/stats/ snapshot
   let statsError = $state('')
+  // Documents whose reading or model step has not finished. The peak is the
+  // size of the current run, so the pill can say how far it has got; it
+  // resets once the queue drains. Stats poll often enough to catch a watched
+  // folder's run, and faster while one is in progress. Hidden tabs do not
+  // poll; returning to the tab refreshes at once.
+  const processing = $derived((st?.processing_reading ?? 0) + (st?.processing_classifying ?? 0))
+  const processingActive = $derived(processing > 0)
+  let processingPeak = $state(0)
+  let statsPolling = $state(false)
+  let tabVisible = $state(document.visibilityState === 'visible')
+  $effect(() => {
+    const update = () => {
+      tabVisible = document.visibilityState === 'visible'
+      if (tabVisible && statsPolling) pollStats()
+    }
+    document.addEventListener('visibilitychange', update)
+    return () => document.removeEventListener('visibilitychange', update)
+  })
+  $effect(() => {
+    if (!statsPolling || !tabVisible) return
+    const timer = setInterval(pollStats, processingActive ? 5_000 : 15_000)
+    return () => clearInterval(timer)
+  })
   const filingTree = $derived(jdTree
     .map((area) => ({ ...area, categories: area.categories.filter((category) => !category.system) }))
     .filter((area) => area.categories.length))
@@ -188,7 +211,8 @@
     const chat = pollChatStatus()
     await Promise.all([pollStats(), categories, setup, chat])
     if (!scopeCurrent(scope)) return
-    pollTimer = setInterval(() => { pollStats(); pollChatStatus() }, 60_000)
+    statsPolling = true
+    pollTimer = setInterval(pollChatStatus, 60_000)
   }
 
   async function loadTaxonomy() {
@@ -233,6 +257,8 @@
       if (!scopeCurrent(scope)) return
       st = result
       statsError = ''
+      const remaining = (st?.processing_reading ?? 0) + (st?.processing_classifying ?? 0)
+      processingPeak = remaining ? Math.max(processingPeak, remaining) : 0
       inboxCount = st?.inbox_count ?? 0
       revealPendingInbox()
     } catch (ex) {
@@ -365,6 +391,7 @@
 
   function clearScopedState() {
     clearInterval(pollTimer)
+    statsPolling = false
     clearTimeout(toastTimer)
     jdTree = []
     inboxCategory = null
@@ -373,6 +400,7 @@
     inboxCount = 0
     st = null
     statsError = ''
+    processingPeak = 0
     recentDocs = undefined
     recentError = ''
     setupNeeded = false
@@ -604,6 +632,15 @@
             <Icon name="ask" size={14} />
             <span class="research-ribbon-label">{translate("app.questionOpen")}</span>
           </button>
+        {/if}
+        {#if processingActive}
+          <span class="processing-ribbon" role="status"
+                aria-label={translate("app.processingProgress", { done: processingPeak - processing, total: processingPeak })}
+                title={translate("app.processingDetail", { reading: st.processing_reading ?? 0, classifying: st.processing_classifying ?? 0 })}>
+            <span class="processing-ribbon-dot" aria-hidden="true"></span>
+            <span class="processing-ribbon-label">{translate("app.processingProgress", { done: processingPeak - processing, total: processingPeak })}</span>
+            <span class="processing-ribbon-count" aria-hidden="true">{processing}</span>
+          </span>
         {/if}
         <button class="btn primary topbar-upload" disabled={!scopeReady} onclick={openUpload} aria-label={translate("app.uploadDocuments")}>
           <Icon name="upload" size={15} /><span>{translate("app.upload")}</span>

@@ -142,6 +142,11 @@ limits, permissions, and Trash/purge behavior.
 
 **Total documents**, **Inbox**, **Approvals** and **Failed jobs** share one status
 request. Loading or unavailable counts show `—`, not zero or a healthy status.
+While documents are still being read or classified, a pulsing **Processing N of M**
+marker sits in the top bar on every page. M is the size of the current run, so it
+starts at the number waiting when you first see the marker and resets once the
+queue is empty; hover for the reading and classifying counts. Narrow screens show
+the remaining count.
 **Recently added** shows six newest visible documents. **Views** shows up to four
 shortcuts with filter summaries, including at least one shared view when available.
 **New view** starts creation; the empty message is **No saved views yet.** Read

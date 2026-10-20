@@ -22,6 +22,10 @@ Notable user-visible changes to Suchi are recorded here.
   custom-field values, so an agent can record an odometer reading or link a
   service invoice to its purchase invoice. Writes use the existing API checks
   for type, permission, Trash, self-links and version history.
+- A **Processing N of M** marker in the top bar shows that documents you can see
+  are still being read or classified, and how far the current run has got. It
+  updates every 5 seconds while work remains. `/api/stats/` now returns
+  `processing_reading` and `processing_classifying`.
 
 ### Changed
 

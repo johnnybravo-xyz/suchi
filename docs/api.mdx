@@ -1836,8 +1836,9 @@ useful for a sparkline; not a filing-date metric.
 `processing_reading` counts visible live documents whose extraction or OCR
 (`post-ingest`) is pending or running, including retries; `processing_classifying`
 counts those waiting on the optional model step (`post-classify`). Both drop to `0`
-once that work finishes or is dead-lettered. The browser polls this endpoint every
-15 seconds, and every 5 seconds while either is non-zero.
+once that work finishes or is dead-lettered. A visible browser tab polls this
+endpoint every 15 seconds, and every 5 seconds while either is non-zero; hidden
+tabs stop polling and refresh when shown again.
 
 ### `GET /api/events/`
 
