@@ -57,9 +57,9 @@ v0.1.0 embeds frozen compatibility SQL in
 `core/db/compatibility/0002`–`0005`; its declarative baseline is active migration
 `0001_baseline.sql`, `user_version = 1`, lineage `stable-v1`. v0.2.0 adds active
 `0002_metadata_cleanup.sql` and `0003_automation_asks.sql` and targets
-`user_version = 3`. The current unreleased catalog adds
-`0004_product_foundations.sql` and targets `user_version = 4` without changing
-that lineage.
+`user_version = 3`. v0.3.0 adds `0004_product_foundations.sql` and targets
+`user_version = 4`. The current unreleased catalog adds `0005_two_factor.sql`
+and targets `user_version = 5` without changing that lineage.
 
 The exact stable schema-1 fingerprint is
 `9d2a6320eae1582b0f294caa6ed518b5a73ab3dbe6597c9ca1a36cc563e03240`.
@@ -67,24 +67,27 @@ The development schema-2 fingerprint is
 `645e7798d663fff83d120182f661e7148fbd68d263517de9d44783d80aaebae3`.
 The v0.2.0 schema-3 fingerprint is
 `cfbdda9e3e80f35be33f763ad14c1c0d83a22ead62e91d04f6dc900331742a82`.
-The current schema-4 fingerprint is
-`1bd4decea4c9acf74859753e0d248045191113cdb777e6e6e70dc7aa38f10094`.
+The v0.3.0 schema-4 fingerprint is
+`360611dcca51a4ce23d0114e58c82b5208ce72e7575afa25e0c350be7d3100b4`.
+The current schema-5 fingerprint is
+`59dac29d9d3bfe4cde4227a46ea1c743fefef3d076a529f88bd0b099f43e2d8a`.
 The one admitted pre-identity schema-4 boundary remains
 `5d6ac98308eb644b030092178792a46f36e6f8f5041411f020ed2dcf216f46c2`.
 Startup admits only these exact states:
 
 | Source database | Required identity | Current startup action |
 | --- | --- | --- |
-| Empty | `user_version = 0`, no core objects or lineage | Apply active migrations 0001–0004 |
-| v0.1.0-beta.1 | Canonical beta.1 schema 1, no lineage table | Snapshot, apply frozen 0002–0005 plus active 0002–0004, adopt stable lineage/schema 4 |
-| v0.1.0-beta.2 | Canonical beta.2 schema 2, no lineage table | Snapshot, apply frozen 0003–0005 plus active 0002–0004, adopt stable lineage/schema 4 |
-| v0.1.0-beta.3 | Canonical schema 3 with `final-beta-schema-3` | Snapshot, apply frozen 0004–0005 plus active 0002–0004, adopt stable lineage/schema 4 |
-| Historical schema 3 | Known pre-beta mutable-baseline fingerprint with `final-beta-schema-3`; obsolete `agent_webhooks` table must be empty | Snapshot, remove the empty obsolete table, apply frozen 0004–0005 plus active 0002–0004, adopt stable lineage/schema 4 |
-| Pre-identity schema 4 | Exact pre-identity fingerprint above with `final-beta-schema-3` | Snapshot, apply frozen 0005 plus active 0002–0004, adopt stable lineage/schema 4 |
-| Stable schema 1 | Exact stable schema-1 fingerprint above with `stable-v1` | Check integrity/foreign keys, apply active 0002–0004, require schema-4 manifest |
-| Stable schema 2 | Exact development schema-2 fingerprint above with `stable-v1` | Check integrity/foreign keys, apply active 0003–0004, require schema-4 manifest |
-| Stable schema 3 | Exact v0.2.0 schema-3 fingerprint above with `stable-v1` | Check integrity/foreign keys, apply active 0004, require schema-4 manifest |
-| Stable schema 4 | Exact current fingerprint above with `stable-v1` | No-op |
+| Empty | `user_version = 0`, no core objects or lineage | Apply active migrations 0001–0005 |
+| v0.1.0-beta.1 | Canonical beta.1 schema 1, no lineage table | Snapshot, apply frozen 0002–0005 plus active 0002–0005, adopt stable lineage/schema 5 |
+| v0.1.0-beta.2 | Canonical beta.2 schema 2, no lineage table | Snapshot, apply frozen 0003–0005 plus active 0002–0005, adopt stable lineage/schema 5 |
+| v0.1.0-beta.3 | Canonical schema 3 with `final-beta-schema-3` | Snapshot, apply frozen 0004–0005 plus active 0002–0005, adopt stable lineage/schema 5 |
+| Historical schema 3 | Known pre-beta mutable-baseline fingerprint with `final-beta-schema-3`; obsolete `agent_webhooks` table must be empty | Snapshot, remove the empty obsolete table, apply frozen 0004–0005 plus active 0002–0005, adopt stable lineage/schema 5 |
+| Pre-identity schema 4 | Exact pre-identity fingerprint above with `final-beta-schema-3` | Snapshot, apply frozen 0005 plus active 0002–0005, adopt stable lineage/schema 5 |
+| Stable schema 1 | Exact stable schema-1 fingerprint above with `stable-v1` | Check integrity/foreign keys, apply active 0002–0005, require schema-5 manifest |
+| Stable schema 2 | Exact development schema-2 fingerprint above with `stable-v1` | Check integrity/foreign keys, apply active 0003–0005, require schema-5 manifest |
+| Stable schema 3 | Exact v0.2.0 schema-3 fingerprint above with `stable-v1` | Check integrity/foreign keys, apply active 0004–0005, require schema-5 manifest |
+| Stable schema 4 | Exact v0.3.0 schema-4 fingerprint above with `stable-v1` | Check integrity/foreign keys, apply active 0005, require schema-5 manifest |
+| Stable schema 5 | Exact current fingerprint above with `stable-v1` | No-op |
 
 “Canonical” means the complete normalized core `sqlite_schema` fingerprint, not
 only the integer version or a claimed lineage row. Intermediate, partial,
@@ -101,13 +104,14 @@ references stay stable. Active migration 0002 adds version-family storage and
 indexes, validates the predecessor graph, assigns deterministic family keys only
 to existing multi-row histories, and leaves standalone documents without a
 family key. Active migration 0004 adds title ownership and its revision guard.
-All accepted paths reach the same fresh schema-4 fingerprint.
+Active migration 0005 adds sealed local-auth TOTP seeds and digested recovery
+codes. All accepted paths reach the same fresh schema-5 fingerprint.
 
 Every admitted pre-stable database passes integrity and foreign-key checks, gets
 an exclusive mode-0600 SQLite snapshot beside the live database, and applies
-the remaining compatibility steps, active migrations 0002–0004, stable lineage
-and schema version 4 in one immediate writer transaction. Startup then checks
-integrity, foreign keys and equality with the fresh schema-4 manifest. Failure
+the remaining compatibility steps, active migrations 0002–0005, stable lineage
+and schema version 5 in one immediate writer transaction. Startup then checks
+integrity, foreign keys and equality with the fresh schema-5 manifest. Failure
 rolls back the transaction and retains the snapshot. Fresh and already-current
 databases do not create adoption snapshots. Stable-lineage forward upgrades also
 do not create an adoption snapshot; keep the operator's complete backup before
@@ -169,7 +173,7 @@ Use only the reviewed manual path:
    fingerprint, integrity, foreign keys, stable user IDs, and expected counts
    before starting any writer.
 5. Start the current binary. It admits that exact schema-1 state, applies active
-   migrations 0002–0004, and requires the schema-4 manifest. From the preserved
+   migrations 0002–0005, and requires the schema-5 manifest. From the preserved
    session, use **Sync from identity provider** and verify the same user ID gains
    issuer/subject, a retained `user.oidc_bound` row, a replacement cookie, and
    unchanged ownership.

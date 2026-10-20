@@ -103,6 +103,12 @@ must complete forced provider reauthentication from the current live session.
 Administrators cannot change another user's email, bind a provider identity,
 merge colliding accounts, or transfer ownership through an email edit.
 
+Administrators may reset another user's local two-factor authentication only
+after re-entering their own password and second factor. They cannot reset
+themselves through the administrator route. A successful reset removes the
+target factor and browser sessions but preserves API/mobile tokens; use ordinary
+token revocation separately when compromise is suspected.
+
 OIDC browser sign-in may self-provision a new member only when its verified
 email is unused. `ADMIN_EMAIL` grants the administrator role only to the first
 matching provisioned identity when no administrator exists. OIDC Bearer tokens

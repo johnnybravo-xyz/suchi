@@ -26,6 +26,14 @@ Notable user-visible changes to Suchi are recorded here.
   are still being read or classified, and how far the current run has got. It
   updates every 5 seconds while work remains. `/api/stats/` now returns
   `processing_reading` and `processing_classifying`.
+- Local-password accounts can enable authenticator-based two-factor
+  authentication, use one-time recovery codes, regenerate or disable the factor,
+  and complete browser or API-token credential exchange with the same second
+  factor. Administrators can reset another user's factor after reauthentication;
+  host operators have a stopped-server `suchi auth reset-two-factor` recovery
+  command. Wrong codes back off from 30 seconds to an hour and lock after 100
+  in a row; changing the sign-in email also asks for the code; six-digit codes
+  sign in on their own; and Security warns when recovery codes run low.
 
 ### Changed
 

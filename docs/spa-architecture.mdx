@@ -220,14 +220,22 @@ profile selector and document root attributes.
 
 ## Security
 
-Login/demo authentication uses HttpOnly cookies. The SPA does not persist
-session, mailbox, provider, or account-password credentials; freshly issued
-tokens/pairing secrets remain in memory for their explicit handoff. The email
-dialog's password exists only in component memory for one attempt and is erased
-across every exit and failure path. Concurrent demo writes share one upgrade;
-login/logout and successful email rotation invalidate reads/retries and abort
-unfinished work. Scratch identity remains restricted for API and direct
-resources. Cookie mutations pass server same-origin/Fetch Metadata checks.
+Login/demo authentication uses HttpOnly cookies. Local-password sign-in keeps
+the password only while a staged `two_factor_required` exchange reveals the
+authenticator/recovery-code field; account changes, success, navigation, and
+destroy clear both credentials. The SPA does not persist session, mailbox,
+provider, account-password, authenticator, enrollment, recovery-code, token, or
+pairing secrets. `TwoFactorSettings.svelte` keeps enrollment material and
+one-time recovery codes in component memory, clears them across failure/exit/
+account change, and requires explicit acknowledgement before closing the
+one-time recovery-code display. `LinkQR.svelte` keeps HTTP(S) as its default
+allowlist; authenticator setup explicitly admits only `otpauth`.
+
+Successful email or two-factor session rotation advances the request generation,
+invalidating unfinished reads/retries. `AdminTwoFactorResetDialog.svelte` clears
+the acting administrator's password and factor on every outcome. Concurrent
+demo writes share one upgrade; scratch identity remains restricted for API and
+direct resources. Cookie mutations pass server same-origin/Fetch Metadata checks.
 
 Serve previews through dedicated endpoints with restrictive CSP. Render ordinary
 text through Svelte escaping; sanitize marked-up search snippets
@@ -251,7 +259,7 @@ Additional verification:
 cd ui
 bun run check
 bun test src
-bun run e2e --grep 'password-managed|email-change secret|provider reauthentication|disabled account email|enlarged mobile viewport'
+bun run e2e --grep 'local sign-in|sets up, regenerates|reset another users|password-managed|email-change secret|provider reauthentication|disabled account email|enlarged mobile viewport'
 PLAYWRIGHT_PRODUCTION=1 bun run e2e
 ```
 

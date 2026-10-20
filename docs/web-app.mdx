@@ -331,9 +331,9 @@ modified source; missing details are labelled **build details unavailable**.
 Tagged releases show only their version. Include this offline status in bug
 reports; it performs no update check.
 
-**Settings > My account** contains Profile, Mobile app, API tokens, Saved
-decryption passwords, and Mailboxes for capable members. **Profile** saves the
-display name/photo and shows the canonical sign-in email and method.
+**Settings > My account** contains Profile, Security, Mobile app, API tokens,
+Saved decryption passwords, and Mailboxes for capable members. **Profile** saves
+the display name/photo and shows the canonical sign-in email and method.
 
 Saved decryption passwords show a user-editable label separately from the last
 use date and the most recent document unlocked with that password. Select the
@@ -360,6 +360,30 @@ provider email for an already bound issuer/subject, or confirm that nothing
 changed. A successful binding or email change rotates browser sessions just
 like the local flow. Identity/email conflicts fail closed instead of merging
 accounts.
+
+Local-password accounts use **Security > Set up authenticator** to scan an
+`otpauth` QR code or enter its setup secret manually, then confirm one current
+six-digit code. Suchi shows ten recovery codes once. Copy or download them and
+confirm they are saved before closing; each code replaces the authenticator for
+one sign-in and is consumed on use. Regenerating recovery codes invalidates every
+older unused code.
+
+After two-factor authentication is enabled, browser sign-in, direct
+password-to-API-token exchange, and changing the sign-in email require either a
+current authenticator code or one recovery code. A six-digit code signs in as
+soon as it is typed or pasted. After repeated wrong codes, sign-in shows how
+long to wait; after 100 in a row it stays locked until an administrator resets
+it. **Security** warns when two or fewer recovery codes remain. Enable, regenerate, and disable sign out every other browser
+session and replace the current session. Existing API tokens and paired mobile
+apps remain valid, and the recovery-code screen says how many there are so you
+can review them under **API tokens**. OIDC accounts use their provider's authentication policy and
+do not show local two-factor controls.
+
+An administrator sees a **2FA** badge in **Archive configuration > People >
+Users** and can reset another user's factor after entering the administrator's
+own password and, when enabled, second factor. The reset signs out the target's
+browsers but preserves API/mobile tokens. If no administrator can sign in, stop
+the server and use the [offline reset command](/cli#suchi-auth-reset-two-factor-email).
 
 Demo visitors and the fixed development account have a read-only email with no
 mutation control. Profile fields sit side by side on wide screens and stack on

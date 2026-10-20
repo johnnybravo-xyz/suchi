@@ -1,6 +1,6 @@
 ---
 title: "HTTP and security boundaries"
-description: "Middleware order, the share-only listener, authentication, token, role, identity, object and browser-origin gates, pairing, demo identities, and blob delivery."
+description: "Middleware order, authentication and local two-factor boundaries, the share-only listener, token, role, identity, object and browser-origin gates, pairing, demo identities, and blob delivery."
 ---
 
 Part of the [architecture guides](/architecture). This page owns request handling and the access gates every route passes through. Confirm contracts against source and tests.
@@ -34,6 +34,60 @@ reauthentication. Login takes a slot before the account lookup, so overload
 fails quickly and identically for known and unknown accounts while limiting
 Argon2 working memory. Email change returns the same retryable saturation
 contract without entering the writer.
+
+## Local two-factor authentication
+
+`plugins/local-auth` owns the complete local-password second-factor contract.
+`distro/app` supplies the existing `.decrypt-key` sealer and registers the
+management routes only when local auth owns sign-in; OIDC and demo assembly do
+not expose them. `local_auth_totp` stores only an AEAD-sealed 20-byte TOTP seed,
+the exact last accepted counter, the consecutive-failure count, the block
+deadline, and enable time. Ten 120-bit recovery codes are
+shown once; `local_auth_recovery_codes` stores only their SHA-256 digests.
+
+Local JSON login, the server-rendered login form, and password-to-token exchange
+all accept `two_factor_code`. Password verification happens first. For JSON
+only, a correct password with no factor returns `two_factor_required`; wrong
+passwords, wrong/replayed TOTP values, and wrong recovery codes share
+`invalid_credentials`. TOTP follows RFC 6238 with HMAC-SHA1, six digits, a
+30-second period, and a ±1-step window. Accepting a TOTP advances its exact
+counter; accepting a recovery code deletes its digest. Factor consumption and
+session/token issuance share the writer transaction, so a failed issuance does
+not burn a credential.
+
+Factor failures are counted on the account row, so restarts do not reset them.
+Only a request with the correct password reaches the factor check, so strangers
+cannot lock an account. The first five failures are free; each later failure
+blocks the factor for 30 seconds, doubling up to one hour, and a blocked request
+is rejected with `Retry-After` before any code is compared or counted. At 100
+consecutive failures (NIST SP 800-63B §5.2.2) the factor locks with
+`two_factor_locked` until an administrator or offline reset removes it. Any
+accepted code clears the count. The bounded Argon2 worker still limits password
+attempts separately.
+
+`POST /api/users/me/email` asks for the same factor after its password check
+through `api.Server.VerifySecondFactor`, which `distro/app` wires to local auth.
+The route reports a taken address first, then spends the code in its own
+transaction; a later email-change failure leaves that code spent.
+
+`GET /api/account/two-factor` and all lifecycle POSTs require a live local
+browser session, reject bearer tokens and demo identities, use
+`Cache-Control: no-store`, and require exact same-origin provenance for writes.
+Enrollment rechecks the password and returns a ten-minute AEAD-sealed,
+user-and-session-bound enrollment token plus the Base32 seed and `otpauth` URI;
+the seed is not stored until a valid current TOTP enables it. Enable,
+recovery-code regeneration, and disable rotate every browser session while
+planting one replacement cookie. API/mobile tokens remain valid; enable returns
+`active_api_tokens` so the user can review tokens minted before the factor
+existed. Each operation and its retained audit event commit together.
+
+An administrator can reset another user's factor only by reauthenticating with
+the administrator's own password and factor. Reset deletes the target's factor,
+recovery codes, and browser sessions in one audited transaction while preserving
+API/mobile tokens. Host recovery uses `suchi auth reset-two-factor --email
+EMAIL` with the server stopped. It takes the normal archive lock, does not
+decrypt the seed or require `.decrypt-key`, and writes a retained system-actor
+audit event.
 
 ## Access gates
 
@@ -91,9 +145,9 @@ These gates remain distinct:
 - **Browser origin:** cookie mutations reject sibling-origin `same-site` and
   `cross-site` Fetch Metadata requests. Headerless anonymous form logins require
   a same-host `Origin`; headerless JSON credential routes require
-  `application/json`. Both account-email POSTs additionally require exact
-  same-origin provenance and a live browser session, with no bearer-header
-  exemption. CORS alone is insufficient.
+  `application/json`. Account-email and two-factor management POSTs additionally
+  require exact same-origin provenance and a live browser session, with no
+  bearer-header exemption. CORS alone is insufficient.
   The SPA CSP admits only the discovered OIDC authorization endpoint's HTTP(S)
   origin beyond `self` for form submissions so that the same-origin
   reauthentication POST can follow its provider redirect; non-SPA responses
@@ -151,7 +205,8 @@ fetch them. Thumbnails have a separate live-document handler. Sensitivity is a
 Reveal posture, not another access boundary: authorized API reads may contain
 text; untouched `raw=1` downloads require an admin session.
 
-Seal mailbox secrets, OAuth caches, PDF passwords and model keys; digest session
-IDs/API tokens. Exclude document bodies and credentials/share bearers from audit.
+Seal mailbox secrets, OAuth caches, PDF passwords, model keys, and TOTP seeds;
+digest session IDs, API tokens, and recovery codes. Exclude document bodies and
+credentials/share bearers from audit.
 Logs/metrics use matched route patterns, propagated outward through request copies.
 [Privacy](/privacy) owns the user-facing egress/data contract.

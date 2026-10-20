@@ -84,6 +84,15 @@ identity is the unique non-null `(oidc_issuer, oidc_subject)` pair stored direct
 on that row. Email changes do not rewrite document owners, memberships, ACLs,
 tokens, or other numeric user references.
 
+Local two-factor state is also instance-wide and keyed directly to `users.id`.
+`local_auth_totp` stores one sealed seed, its exact last accepted time step, the
+consecutive-failure count and block deadline, and enable time; `local_auth_recovery_codes` stores only SHA-256 digests of unused
+codes. Both cascade with the user. The `.decrypt-key` opens the seed during
+online authentication, while recovery-code comparison and offline factor reset
+never require plaintext seed access. The [security architecture
+guide](/architecture-security#local-two-factor-authentication) owns
+authentication, rotation, replay, and recovery transactions.
+
 ## Blobs and rendered paths
 
 Original/derived bytes are SHA-256-addressed:
@@ -179,8 +188,8 @@ are translated at the importer boundary; no native type schema or API remains.
 
 `migrations.Prepare` delegates core admission to `db.PrepareStable`, which
 classifies the database before writing. Empty databases receive all active
-migrations. An exact current schema-4 database is a no-op. Exact stable schemas
-1, 2, and 3 first pass integrity and foreign-key checks, then apply only their
+migrations. An exact current schema-5 database is a no-op. Exact stable schemas
+1, 2, 3, and 4 first pass integrity and foreign-key checks, then apply only their
 remaining active migrations and must match the current manifest. Every accepted
 pre-stable state must match its complete canonical `sqlite_schema` fingerprint
 and lineage, not merely a `user_version`. Unknown, partial, spoofed, corrupt and
@@ -202,7 +211,7 @@ metadata; moves the singular correspondent into the role-bearing junction; and
 preserves primary keys, revision values and dependent references. It also
 resolves watched-folder ownership to a numeric user ID, drops the empty obsolete
 `plugin_kv` table and redundant ACL index, and removes successful jobs older
-than seven days. The final integrity, foreign keys and canonical schema-4
+than seven days. The final integrity, foreign keys and canonical schema-5
 fingerprint must match a fresh archive; failures roll back while retaining the
 snapshot and restoring foreign-key enforcement.
 Extension objects created after `_suchi_extension_migrations` are outside the

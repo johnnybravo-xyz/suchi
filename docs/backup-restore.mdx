@@ -23,7 +23,8 @@ Back up a consistent `suchi.db` snapshot together with `blobs/`,
 `.decrypt-key`, and any operator configuration stored in the
 directory. The database without `blobs/` has metadata but no document bytes.
 The database without `.decrypt-key` cannot open sealed mailbox, OAuth,
-PDF-password, or LLM credentials.
+PDF-password, LLM, or authenticator TOTP credentials. Recovery-code storage is
+one-way digested and cannot recreate the codes shown during setup.
 
 `rendered/` is generated state and can be rebuilt. A cleanly stopped database
 does not need its WAL or shared-memory files. An atomic snapshot of a live

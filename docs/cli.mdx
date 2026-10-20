@@ -34,6 +34,26 @@ Probes `LISTEN_ADDR`'s `/readyz` over loopback. Exit `0` if the server
 answers `200`, non-zero otherwise. Wired as the Docker `HEALTHCHECK`, so the
 image does not depend on `wget` or `curl` for readiness checks.
 
+## `suchi auth reset-two-factor --email EMAIL`
+
+Offline recovery for a local-password account that has lost both its
+authenticator and recovery codes. Stop the Suchi server and every other archive
+writer first:
+
+```bash
+suchi auth reset-two-factor --email owner@example.com
+```
+
+The command takes the normal `DATA_DIR/.suchi.lock`, finds the normalized email,
+and removes its TOTP row, recovery-code digests, and browser sessions in one
+transaction. It preserves the password, account, documents, permissions, API
+tokens, and paired mobile apps. The reset is idempotent and writes retained
+`operator.user_two_factor_reset` audit history with a system actor.
+
+The command does not open the encrypted seed and does not need `.decrypt-key`.
+Run it only on the intended stopped archive. A missing account or a live process
+returns non-zero without changing account state.
+
 ## `suchi import [flags]`
 
 Point `--from` at your existing DMS's export bundle. See

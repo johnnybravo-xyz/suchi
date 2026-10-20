@@ -21,7 +21,7 @@ carry it into bug reports. See [Errors](#errors) for the JSON error contract.
 | Client compatibility     | `GET /api/handshake` (public; no credentials)                                                                                                                                         |
 | Mobile pairing           | `POST/DELETE /api/mobile/pairing` (session), `POST /api/mobile/pairing/exchange` (one-time code)                                                                                         |
 | Auth (browser)          | `/login`, `/bootstrap`, `/setup`, OIDC `GET /oidc/login`, `GET /oidc/callback`, and `POST /oidc/email-change`                                                                            |
-| Auth and account JSON   | `POST /api/login`, `POST /api/logout`, `POST /api/token/`, `GET/POST/DELETE /api/tokens/`, `GET /api/whoami`, `PATCH /api/users/me`, `POST /api/users/me/email`                          |
+| Auth and account JSON   | `POST /api/login`, `POST /api/logout`, `POST /api/token/`, `GET/POST/DELETE /api/tokens/`, `GET /api/whoami`, `PATCH /api/users/me`, `POST /api/users/me/email`, `/api/account/two-factor…`                         |
 | Documents               | `POST /api/documents/`, `GET/PATCH/DELETE /api/documents/{id}`, `POST /api/documents/{id}/restore`, `GET/DELETE /api/trash/`, `DELETE /api/trash/{id}`                                      |
 | Doc extras              | `/correspondents/`, `/versions/`, `/referenced-by/`, `/notes/`, `/custom_fields/{field}`, `/decrypt`, `/decrypt-batch`, `/pending-decryption`                                          |
 | Metadata and filing     | `/api/correspondents/`, `/api/rendered_layouts/`, `/api/tags/`, `/api/tags/{id}/parent`, `/api/custom_fields/`, `/api/jd/categories/`                                                  |
@@ -35,7 +35,7 @@ carry it into bug reports. See [Errors](#errors) for the JSON error contract.
 | Approvals               | `/api/approvals/…` ([guide](/approvals))                                                                                                                                              |
 | Groups + ACLs           | `/api/groups/…`, `/api/acls/{kind}/{id}` ([guide](/permissions))                                                                                                                      |
 | Share links             | `/api/share_links/…`, public `/s/{token}` + `/s/{token}/{doc_id}/download`. Multi-doc bundles: pass 1–200 `doc_ids` on POST, one token covers all of them.                            |
-| Admin                   | `/api/admin/users`, `GET /api/admin/setup/state`, `POST /api/admin/setup/preset/{preview,apply}`, `/api/admin/settings/{llm,preferences,scan,ingest}`, `/api/admin/taxonomy/{import,export}` |
+| Admin                   | `/api/admin/users`, `POST /api/admin/users/{id}/two-factor/reset`, `GET /api/admin/setup/state`, `POST /api/admin/setup/preset/{preview,apply}`, `/api/admin/settings/{llm,preferences,scan,ingest}`, `/api/admin/taxonomy/{import,export}` |
 
 ## Auth
 
@@ -221,14 +221,41 @@ Managing the mobile wire contract:
 ### `POST /api/login`
 
 Local-password browser login. Send a JSON body; success plants a session cookie
-and returns 204. API clients should exchange the same credentials at
-`POST /api/token/`, which returns `{"token":"<hex>"}` without creating a
-browser session or setting a cookie.
+and returns 204:
 
-The separate `POST /login` browser form accepts URL-encoded fields and redirects
-after setting the same kind of session cookie.
+```json
+{
+  "email": "you@example.com",
+  "password": "correct horse battery staple",
+  "two_factor_code": "123456"
+}
+```
 
-**401** on bad credentials. One error path covers every failure mode.
+`two_factor_code` is optional for accounts without two-factor authentication.
+For an enabled account it accepts either the current six-digit authenticator
+code or one unused recovery code. A correct password with an omitted factor
+returns **401** `two_factor_required`; every wrong password, factor, replayed
+authenticator step, and used recovery code returns **401**
+`invalid_credentials`. After five consecutive wrong codes the factor is blocked
+for 30 seconds, doubling with each further failure up to one hour; blocked
+requests return **429** `too_many_attempts` with `Retry-After`. After 100
+consecutive failures the factor returns **403** `two_factor_locked` until an
+administrator or the offline command resets it. Any accepted code clears the
+count.
+
+API clients exchange the same JSON fields at `POST /api/token/`, which returns
+`{"token":"<hex>"}` without creating a browser session or setting a cookie.
+The separate `POST /login` browser form accepts URL-encoded `email`, `password`,
+and optional `two_factor_code`, then redirects after setting the same kind of
+session cookie. Failures redirect to `/login?error=CODE` with one of `missing`,
+`invalid_credentials`, `two_factor_required`, `two_factor_invalid`,
+`too_many_attempts`, or `two_factor_locked`; the page shows the code field only
+for the two factor codes.
+
+Authenticator-step advancement or recovery-code consumption and session/token
+issuance use one transaction. An issuance failure does not consume the factor;
+a successful recovery-code exchange cannot be replayed.
+
 When the bounded Argon2 worker is already at capacity, local-password login and
 token exchange fail quickly with **503**, `Retry-After: 1`, and the same response
 for known and unknown accounts. Password hashing for account and protected-share
@@ -430,8 +457,17 @@ body returns **400** `no_fields`. Successful writes emit
 Change a local-password account's sign-in email:
 
 ```json
-{ "email": "new@example.com", "current_password": "correct horse battery staple" }
+{
+  "email": "new@example.com",
+  "current_password": "correct horse battery staple",
+  "two_factor_code": "123456"
+}
 ```
+
+`two_factor_code` is needed only when the account has two-factor
+authentication. After the password matches and the address is free, a missing
+code returns **401** `two_factor_required`, and the factor errors above apply.
+The accepted code is spent even if the change later fails.
 
 This route requires `email_change_mode: "password"`, a live browser session,
 strict same-origin provenance, and no `Authorization` header. It is unavailable
@@ -456,9 +492,79 @@ Expected failures include:
 | Status | Codes |
 | --- | --- |
 | 400 | `bad_json`, `bad_email` |
-| 401 | `session_required`, `reauthentication_failed` |
+| 401 | `session_required`, `reauthentication_failed`, `two_factor_required`, `invalid_credentials` |
+| 403 | `two_factor_locked` |
 | 409 | `email_unchanged`, `email_taken`, `oidc_managed`, `email_change_disabled`, `dev_seeded_account`, `password_hash_unavailable` |
 | 503 | `password_hash_unavailable` |
+
+### Local two-factor account routes
+
+These routes exist only when local auth owns sign-in. They require a live
+browser session, reject `Authorization` credentials and demo identities, return
+`Cache-Control: no-store`, and require exact same-origin provenance for every
+POST. OIDC assemblies do not register them.
+
+`GET /api/account/two-factor` returns:
+
+```json
+{ "enabled": true, "recovery_codes_remaining": 7 }
+```
+
+Start setup by reauthenticating:
+
+```http
+POST /api/account/two-factor/enrollment
+```
+
+```json
+{ "current_password": "correct horse battery staple" }
+```
+
+The response carries a Base32 `secret`, an `otpauth://` `provisioning_uri`, an
+opaque `enrollment_token`, and `expires_at`. The token is AEAD-sealed for ten
+minutes and bound to the current user and browser session. The seed is not
+stored yet. Do not log or persist any of these values.
+
+Enable the factor with a code generated from that exact seed:
+
+```http
+POST /api/account/two-factor
+```
+
+```json
+{ "enrollment_token": "<opaque>", "authenticator_code": "123456" }
+```
+
+Success returns `{"recovery_codes":["…"],"active_api_tokens":2}` with ten
+one-time codes and the number of the user's unrevoked API and mobile tokens,
+which keep working. This is the only response that reveals the codes. The seed, recovery-code digests, current
+session replacement, revocation of other browser sessions, and retained
+`user.two_factor_enabled` audit event commit together. API/mobile tokens remain
+valid.
+
+An enabled account can replace every unused recovery code:
+
+```http
+POST /api/account/two-factor/recovery-codes
+```
+
+```json
+{
+  "current_password": "correct horse battery staple",
+  "two_factor_code": "123456"
+}
+```
+
+Success returns a fresh ten-code `recovery_codes` array and rotates browser
+sessions. Disable uses the same body at
+`POST /api/account/two-factor/disable`, returns **204**, deletes the seed and
+recovery codes, and rotates browser sessions. Both changes preserve API/mobile
+tokens and require their retained audit event in the transaction.
+
+Expected lifecycle failures include **401** `session_required`,
+`two_factor_required`, `invalid_credentials`, or `invalid_enrollment`; **409**
+`two_factor_enabled` or `two_factor_disabled`; **403** `two_factor_locked`; and
+**429** `too_many_attempts`.
 
 ### `POST /api/users/me/avatar`
 
@@ -518,6 +624,30 @@ Later promotions or regrants cannot be overtaken by older revocations. OAuth
 flows are invalidated only after a disable commits; rejected disables preserve
 them. Resource logs, external audit delivery and runtime reloads happen after
 commit.
+
+`GET /api/admin/users` includes `two_factor_enabled` for each row. A live local
+administrator session may reset another enabled user:
+
+```http
+POST /api/admin/users/{id}/two-factor/reset
+```
+
+```json
+{
+  "current_password": "the administrator password",
+  "two_factor_code": "the administrator authenticator or recovery code"
+}
+```
+
+The factor is optional only when the acting administrator has not enabled one.
+The route refuses self-reset, rechecks the actor's administrator role and live
+session in the writer, consumes the actor's recovery code or authenticator step
+when applicable, and atomically removes the target factor, target recovery
+codes, and target browser sessions. It preserves the target's API/mobile tokens
+and writes retained `admin.user_two_factor_reset`. Success returns **204**.
+Expected failures include **401** `session_required`,
+`two_factor_required`, or `invalid_credentials`; **403** `forbidden`; **404**
+`not_found`; and **409** `cannot_reset_self` or `two_factor_disabled`.
 
 ### Public-demo surface: `/api/demo/*`
 

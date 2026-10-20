@@ -80,8 +80,9 @@ access.
 - Automations, approvals, selective rescans, optional model classification, Ask
   your documents, and suggested dates. Model use is optional and hosted egress
   requires acknowledgement.
-- Groups, object ACLs, OIDC, scoped tokens, Network-only and Public share links,
-  audit events, MCP, and the Android/iOS Suchi Companion.
+- Groups, object ACLs, OIDC, local authenticator/recovery-code 2FA, scoped
+  tokens, Network-only and Public share links, audit events, MCP, and the
+  Android/iOS Suchi Companion.
 
 Reproducible binary-size and startup measurements live under
 [`hack/bench/latest-published/`](hack/bench/latest-published/). See the
