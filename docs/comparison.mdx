@@ -6,8 +6,9 @@ description: "A sourced comparison with Paperless-ngx, Papra, and Docspell."
 The self-hosted document-management space has mature alternatives. This page
 focuses on operational shape and documented features, not a universal ranking.
 
-**Snapshot date:** 2026-09-28. Read each project's current documentation before
-choosing; all four projects are active.
+**Snapshot date:** 2026-10-20. Read each project's current documentation before
+choosing; all four projects are active, though Docspell's last release was
+v0.43.0 in March 2025.
 
 <Warning>
   This comparison is maintained by the suchi project. It is not an independent
@@ -19,9 +20,9 @@ choosing; all four projects are active.
 | Project           | Default operational shape                                                                                              | License  |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------- | -------- |
 | **suchi**         | One Go server process, SQLite, filesystem CAS; converters and the Android/iOS Companion app are optional              | AGPL-3.0 |
-| **Paperless-ngx** | Web, consumer, task worker, and scheduler processes; SQLite plus a required Redis-compatible broker                    | GPL-3.0  |
+| **Paperless-ngx** | Web, consumer, task worker, and scheduler processes; SQLite by default (PostgreSQL or MariaDB optional) plus a required Redis-compatible broker | GPL-3.0  |
 | **Papra**         | Packaged Node application with SQLite and filesystem storage by default                                                | AGPL-3.0 |
-| **Docspell**      | Separate REST and joex processes; embedded H2 by default; full-text search is optional                                 | AGPL-3.0 |
+| **Docspell**      | Separate REST and joex processes; embedded H2 by default (PostgreSQL recommended); full-text search is optional        | AGPL-3.0 |
 
 Sources: [Paperless-ngx configuration](https://docs.paperless-ngx.com/configuration/),
 [Papra configuration](https://docs.papra.app/self-hosting/configuration/), and
@@ -30,61 +31,106 @@ Sources: [Paperless-ngx configuration](https://docs.paperless-ngx.com/configurat
 ## Feature snapshot
 
 Legend: ✅ documented as shipped · ◐ partial or different shape · ➖ not
-documented as shipped
+documented as shipped. Checked against Paperless-ngx 3.3.3, Papra v26.7.0 and
+Docspell v0.43.0.
 
 ### Ingest and extraction
 
-| Feature                               |   suchi   |   Paperless-ngx    |          Papra           |     Docspell     |
-| ------------------------------------- | :-------: | :----------------: | :----------------------: | :--------------: |
-| Upload API                            |    ✅     |         ✅         |            ✅            |        ✅        |
-| Watched folder                        |    ✅     |         ✅         |            ✅            | ✅ (CLI watcher) |
-| Mail intake                           | ✅ (IMAP) |     ✅ (IMAP)      | ◐ (intake address/relay) |    ✅ (IMAP)     |
-| OCR                                   |    ✅     |         ✅         |            ✅            |        ✅        |
-| Office-document extraction            |    ✅     | ✅ (optional Tika) |            ✅            |        ✅        |
-| Pre-consume script hook               |    ✅     |         ✅         |            ➖            |        ➖        |
-| Scan splitting and blank-page removal |    ✅     |         ✅         |            ➖            |        ➖        |
+| Feature                    |   suchi   |            Paperless-ngx            |                Papra                 |          Docspell           |
+| -------------------------- | :-------: | :---------------------------------: | :----------------------------------: | :-------------------------: |
+| Upload API                 |    ✅     |                 ✅                  |                  ✅                  |             ✅              |
+| Watched folder             |    ✅     |                 ✅                  |                  ✅                  |      ✅ (CLI watcher)       |
+| Mail intake                | ✅ (IMAP) |      ✅ (IMAP; Gmail/Outlook OAuth)      | ◐ (generated address via a relay; no IMAP) |  ✅ (IMAP; SMTP gateway)   |
+| OCR                        |    ✅     |   ✅ (Tesseract; optional Azure)    |   ✅ (Tesseract; optional remote services) |             ✅              |
+| Office-document extraction |    ✅     |  ✅ (optional Tika and Gotenberg)   |                  ✅                  |             ✅              |
+| Pre-consume script hook    |    ✅     |                 ✅                  |                  ➖                  | ➖ (addons run after processing) |
+| Scan splitting             |    ✅     |        ✅ (separator barcodes)        |                  ➖                  |             ➖              |
+| Blank-page removal         |    ✅     |                 ➖                  |                  ➖                  |             ➖              |
 
 Sources: [Paperless-ngx usage](https://docs.paperless-ngx.com/usage/),
-[Papra features](https://docs.papra.app/),
-[Papra folder ingestion](https://docs.papra.app/guides/setup-ingestion-folder/), and
-[Docspell features](https://docspell.org/docs/features/).
+[Paperless-ngx document splitting](https://docs.paperless-ngx.com/advanced_usage/#document-splitting),
+[Papra content extraction](https://docs.papra.app/guides/content-extraction/),
+[Papra email intake](https://docs.papra.app/guides/intake-emails-with-owlrelay/),
+[Docspell features](https://docspell.org/docs/features/), and
+[Docspell addons](https://docspell.org/docs/addons/basics/).
 
 ### Organization and automation
 
-| Feature                        |           suchi           |     Paperless-ngx     |       Papra       |          Docspell          |
-| ------------------------------ | :-----------------------: | :-------------------: | :---------------: | :------------------------: |
-| Tags                           |            ✅             |          ✅           |        ✅         |             ✅             |
-| Correspondent metadata         |    ✅ (multiple roles)    | ✅ (one per document) |        ➖         |             ✅             |
-| Document types                 |      ➖ (use tags)       |          ✅           |        ➖         | ◐ (tag categories/folders) |
-| Typed custom fields/properties |            ✅             |          ✅           |        ✅         |             ✅             |
-| Deterministic classification   |            ✅             |          ✅           |        ✅         |   ◐ (metadata analysis)    |
-| Optional LLM assistance        | ✅ (fixed classification) | ✅ (suggestions/chat) | ✅ (auto-tagging) |             ➖             |
-| Human approval tasks           |            ✅             |          ➖           |        ➖         |             ➖             |
+| Feature                        |           suchi            |              Paperless-ngx               |          Papra           |                  Docspell                  |
+| ------------------------------ | :------------------------: | :--------------------------------------: | :----------------------: | :----------------------------------------: |
+| Tags                           |             ✅             |              ✅ (nested)               |            ✅            |                     ✅                     |
+| Correspondent metadata         |     ✅ (multiple roles)     |           ✅ (one per document)           |            ➖            |                     ✅                     |
+| Document types                 |        ➖ (use tags)         |                    ✅                    |            ➖            |             ◐ (tag categories)             |
+| Typed custom fields/properties |             ✅             |                    ✅                    |            ✅            |                     ✅                     |
+| Deterministic classification   |             ✅             |      ✅ (matching rules, ML classifier)      |   ✅ (tagging rules)    | ◐ (matching against known metadata; ML tags) |
+| Optional LLM assistance        | ✅ (classification, questions) | ✅ (suggestions, chat, auto-apply workflow) |    ✅ (auto-tagging)    |                     ➖                     |
+| Human review of suggestions    |   ✅ (Approvals queue)    |  ◐ (accept or reject on the document page)  |            ➖            |  ◐ (confirm suggestions on new items)  |
 
-Paperless and Papra have broader AI surfaces than earlier versions of this
-page stated. See the [Paperless-ngx FAQ](https://docs.paperless-ngx.com/faq/)
-and [Papra auto-tagging guide](https://docs.papra.app/guides/auto-tagging/).
+Sources: [Paperless-ngx document suggestions](https://docs.paperless-ngx.com/usage/#document-suggestions),
+[Paperless-ngx AI features](https://docs.paperless-ngx.com/advanced_usage/#ai-features),
+[Papra tagging rules](https://docs.papra.app/guides/tagging-rules/),
+[Papra auto-tagging](https://docs.papra.app/guides/auto-tagging/),
+[Docspell metadata](https://docspell.org/docs/webapp/metadata/), and
+[Docspell curation](https://docspell.org/docs/webapp/curate/).
+
+### Filing on disk and document history
+
+| Feature                      |                    suchi                     |              Paperless-ngx              |                    Papra                     |               Docspell                |
+| ---------------------------- | :------------------------------------------: | :-------------------------------------: | :------------------------------------------: | :-----------------------------------: |
+| Readable folder tree on disk | ✅ (templated layouts; links to stored files) |    ✅ (storage paths rename originals)    | ◐ (opt-in storage key patterns, v26.3+)  |  ➖ (fixed internal layout)  |
+| Watched-folder source files  |         Kept (read-only watcher)         |          Removed after import           |        Deleted by default; can move        | Kept by default; can delete or move |
+| Document version history     |                      ✅                      |                ✅ (3.0+)                |                      ➖                      |         ➖ (stated limitation)         |
+| Links between documents      |         ✅ (named; both ends show it)         | ✅ (Document Link field, reverse link added) |   ◐ (document-relation custom property)    |          ➖ (merge items only)          |
+| Archive serial numbers       |      ✅ (QR labels; feeder-scan splitting)      |              ✅ (barcodes)              |                      ➖                      |    ➖ (custom-field convention only)    |
+
+Sources: [Paperless-ngx usage](https://docs.paperless-ngx.com/usage/) (consumption,
+document file versions, custom fields),
+[Paperless-ngx file name handling](https://docs.paperless-ngx.com/advanced_usage/#file-name-handling),
+[Papra storage key patterns](https://docs.papra.app/guides/storage-key-patterns/),
+[Papra ingestion folder](https://docs.papra.app/guides/setup-ingestion-folder/),
+[Papra changelog](https://docs.papra.app/changelog/),
+[Docspell file backends](https://docspell.org/docs/configure/file-backends/),
+[Docspell CLI](https://docspell.org/docs/tools/cli/), and
+[Docspell features](https://docspell.org/docs/features/). Suchi:
+[folder layouts](/web-app#settings), [versions and links](/document-versions-and-links),
+and [archive serial numbers](/formats#barcode-assisted-physical-filing-with-archive-serial-numbers).
+
+The watched-folder row is a real workflow difference. Paperless-ngx and Papra
+treat the drop folder as a temporary inbox and empty it by default. Suchi never
+moves, renames or deletes files there, and its organised tree is a separate
+folder of links that Suchi keeps current. Docspell's CLI watcher also leaves
+files in place unless told to delete or move them.
 
 ### API and access
 
-| Feature                         |                 suchi                 |       Paperless-ngx        |          Papra           |             Docspell             |
-| ------------------------------- | :-----------------------------------: | :------------------------: | :----------------------: | :------------------------------: |
-| Documented REST API             |                  ✅                   |             ✅             |            ✅            |                ✅                |
-| Public share links              |         ✅ (expiry/password)          |        ✅ (expiry)         |  ✅ (expiry/password)   |      ✅ (optional password)      |
-| Multi-user ownership            |                  ✅                   |             ✅             |    ✅ (organizations)    |       ✅ (collectives)          |
-| Fine-grained object permissions |                  ✅                   |             ✅             |  ◐ (organization roles) |                ➖                |
-| Mobile access                   | ✅ (first-party Android/iOS Companion) | ◐ (web + community clients) |  ✅ (responsive web)    | ◐ (web + Android upload client) |
-| MCP server                      |                  ✅                   |             ➖             |            ➖            |                ➖                |
+| Feature                         |                 suchi                  |          Paperless-ngx           |                Papra                 |              Docspell              |
+| ------------------------------- | :------------------------------------: | :------------------------------: | :----------------------------------: | :--------------------------------: |
+| Documented REST API             |                   ✅                   |                ✅                |                  ✅                  |                 ✅                 |
+| Public share links              |          ✅ (expiry/password)          |    ✅ (expiry; ZIP bundles)    |          ✅ (expiry/password)          | ✅ (required expiry; optional password) |
+| Multi-user ownership            |                   ✅                   |                ✅                |          ✅ (organizations)           |          ✅ (collectives)          |
+| Fine-grained object permissions |                   ✅                   |                ✅                |   ◐ (organization roles only)   |    ➖ (documented limitation)    |
+| Single sign-on (OIDC)           |                   ✅                   |                ✅                |       ✅ (custom OAuth2/OIDC)        |                 ✅                 |
+| Built-in two-factor login       |       ➖ (use your OIDC provider)       |                ✅                |                  ✅                  |              ✅ (TOTP)              |
+| Audit log                       |                   ✅                   |                ✅                |          ✅ (activity log)           |                 ➖                 |
+| Mobile access                   | ✅ (first-party Android/iOS Companion) | ◐ (web + community clients) | ✅ (responsive web; Android app) | ◐ (web + Android upload client) |
+| MCP server                      |                   ✅                   |                ➖                |                  ➖                  |                 ➖                 |
 
 Sources: [Suchi Companion](/companion),
-[Paperless-ngx usage](https://docs.paperless-ngx.com/usage/),
-[Papra features](https://docs.papra.app/),
-[Docspell Android client](https://docspell.org/docs/tools/android/),
+[Paperless-ngx usage](https://docs.paperless-ngx.com/usage/) (share links,
+permissions, document history, two-factor authentication),
+[Paperless-ngx OpenID Connect](https://docs.paperless-ngx.com/advanced_usage/#openid-connect-and-social-authentication),
 [Paperless-ngx API](https://docs.paperless-ngx.com/api/),
+[Papra roles](https://docs.papra.app/guides/roles-administration/),
+[Papra custom OAuth2](https://docs.papra.app/guides/setup-custom-oauth2/),
+[Papra changelog](https://docs.papra.app/changelog/),
+[Papra Android release](https://github.com/papra-hq/papra/releases/tag/@papra/mobile@1.1.0),
 [Papra API reference](https://docs.papra.app/resources/api-endpoints/),
-[Papra v26.5.0 changelog](https://docs.papra.app/changelog/), and
-[Docspell API](https://docspell.org/docs/api/intro/). Docspell explicitly lists
-fine-grained permissions as a limitation.
+[Docspell features](https://docspell.org/docs/features/),
+[Docspell sharing](https://docspell.org/docs/webapp/share/),
+[Docspell Android client](https://docspell.org/docs/tools/android/), and
+[Docspell API](https://docspell.org/docs/api/intro/). Docspell lists
+fine-grained permissions as a limitation. Suchi has no built-in second factor;
+with OIDC enabled, the identity provider enforces it.
 
 ## Resource profile
 
@@ -106,35 +152,46 @@ operational cost.
 
 Choose Paperless-ngx when ecosystem maturity, community mobile clients,
 extensive documentation, PDF editing, and a broad workflow surface matter more
-than minimizing process count. SQLite is available by default; PostgreSQL is
-recommended for larger or multi-user installations. A Redis-compatible broker
-is required.
+than minimizing process count. Its 3.x releases added document version history,
+optional AI suggestions, chat and auto-apply workflows, and a new search
+backend. SQLite is the default; PostgreSQL is recommended for new or multi-user
+installations. A Redis-compatible broker is required.
 
 ### Papra
 
 Choose Papra for a focused responsive web UI, organizations, SQLite-first
 deployment, folder and email-relay ingestion, configurable extraction backends,
-built-in LLM auto-tagging, and expiring or password-protected share links.
-Papra's feature landing page lagged its v26.5.0 changelog at this snapshot, so
-the shipped changelog takes precedence here.
+built-in LLM auto-tagging, typed custom properties, advanced search, and
+expiring or password-protected share links. An Android app is released as an
+APK on GitHub. Papra's README lagged its changelog at this snapshot, so the
+shipped changelog takes precedence here.
 
 ### Docspell
 
 Choose Docspell for multi-file items, strong query capabilities, scalable REST
-and joex processes, IMAP integration, an Android upload client, and optional
-Solr or PostgreSQL full-text search. Its embedded H2 setup avoids an external
-database, but fine-grained permissions and document versioning are documented
-limitations.
+and joex processes, IMAP and SMTP-gateway intake, an Android upload client, and
+optional Solr or PostgreSQL full-text search. Its embedded H2 setup avoids an
+external database, but fine-grained permissions and document versioning are
+documented limitations. Releases are infrequent: v0.43.0 shipped in March 2025,
+and later work is on the main branch.
 
 ### suchi
 
 Choose suchi when one server process, a filesystem CAS, low measured idle
-memory, Johnny.Decimal presets, multi-party correspondents, approval tasks, an
-audit feed, MCP tools, and a first-party Android/iOS app fit the problem.
-Companion pairs by QR code and provides capture, foreground uploads, Inbox
-filing, browsing, search, privacy-gated previews, offline saves, sharing, and
-Trash recovery. Do not choose suchi for ecosystem maturity or proven
-compatibility with Paperless mobile clients; v0.1 is an early release.
+memory, filing trees based on the Johnny.Decimal concept, multi-party
+correspondents, approval tasks, an audit feed, MCP tools, and a first-party
+Android/iOS app fit the problem. Companion pairs by QR code and provides
+capture, foreground uploads, Inbox filing, browsing, search, privacy-gated
+previews, offline saves, sharing, and Trash recovery. Choose it too when you
+want a folder tree you can browse without Suchi, a drop folder that is never
+emptied, or version history and named document links. Do not choose suchi for
+ecosystem maturity or proven compatibility with Paperless mobile clients; it is
+a younger project than the alternatives.
+
+<Note>
+  Johnny.Decimal is a trademark of Coruscade Pty Ltd. Suchi is independent and
+  is not affiliated with or endorsed by them.
+</Note>
 
 ## Portability
 
@@ -155,6 +212,12 @@ compatibility with Paperless mobile clients; v0.1 is an early release.
 
 ## Update history
 
+- **2026-10-20:** Rechecked every row against Paperless-ngx 3.3.3, Papra
+  v26.7.0 and Docspell v0.43.0. Added the filing-on-disk and document-history
+  table, blank-page removal, single sign-on, two-factor login and audit log
+  rows. Corrected Paperless-ngx blank-page removal, human review, AI and share
+  links; Papra mobile, document relations and storage paths; and Docspell
+  document types, review, intake and share-link expiry.
 - **2026-09-28:** Added the Android/iOS Suchi Companion and clarified
   the mobile access available from each project.
 - **2026-08-22:** Re-ran the release benchmark and rechecked the linked feature
