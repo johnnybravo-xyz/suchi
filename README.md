@@ -85,7 +85,7 @@ access.
 
 Reproducible binary-size and startup measurements live under
 [`hack/bench/latest-published/`](hack/bench/latest-published/). See the
-[feature comparison](docs/comparison.mdx) and
+[comparison](docs/comparison.mdx) and
 [architecture](docs/architecture.mdx) for scope and tradeoffs.
 
 [Container images](https://github.com/johnnybravo-xyz/suchi/pkgs/container/suchi) ·

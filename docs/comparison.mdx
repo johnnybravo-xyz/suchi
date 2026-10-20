@@ -1,226 +1,181 @@
 ---
-title: "Comparison"
-description: "A sourced comparison with Paperless-ngx, Papra, and Docspell."
+title: "Choosing Suchi"
+description: "The choices behind Suchi's design, what they cost, where it falls short, and how to move an existing archive over."
 ---
 
-The self-hosted document-management space has mature alternatives. This page
-focuses on operational shape and documented features, not a universal ranking.
-
-**Snapshot date:** 2026-10-20. Read each project's current documentation before
-choosing; all four projects are active, though Docspell's last release was
-v0.43.0 in March 2025.
-
-<Warning>
-  This comparison is maintained by the suchi project. It is not an independent
-  review, and only suchi's performance numbers were measured here.
-</Warning>
+There are several mature, actively developed self-hosted document archives.
+This page describes the choices built into Suchi's design, what each one costs,
+and the needs another tool may meet better. Read it with the other projects'
+own documentation open.
 
 ## At a glance
 
-| Project           | Default operational shape                                                                                              | License  |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------- | -------- |
-| **suchi**         | One Go server process, SQLite, filesystem CAS; converters and the Android/iOS Companion app are optional              | AGPL-3.0 |
-| **Paperless-ngx** | Web, consumer, task worker, and scheduler processes; SQLite by default (PostgreSQL or MariaDB optional) plus a required Redis-compatible broker | GPL-3.0  |
-| **Papra**         | Packaged Node application with SQLite and filesystem storage by default                                                | AGPL-3.0 |
-| **Docspell**      | Separate REST and joex processes; embedded H2 by default (PostgreSQL recommended); full-text search is optional        | AGPL-3.0 |
+- One Go binary with SQLite and a content-addressed file store; no broker or
+  separate workers.
+- Watched folder, IMAP mailboxes, upload API, and a first-party iOS/Android
+  capture app.
+- OCR, office-document and e-invoice extraction, scan splitting at archive
+  serial number labels, and blank-page removal.
+- Filing trees based on the Johnny.Decimal concept, with tags, correspondents,
+  and typed custom fields.
+- Deterministic rules, local similar-document matching, and an optional model,
+  with uncertain changes waiting in a review queue.
+- A readable folder tree on disk, kept current from templated layouts.
+- Version history, named links between documents, and archive serial numbers
+  for retained originals.
+- Per-document permissions, OIDC sign-in, an audit log, and share links with
+  expiry and passwords.
+- A documented REST API and an MCP server for AI agents.
 
-Sources: [Paperless-ngx configuration](https://docs.paperless-ngx.com/configuration/),
-[Papra configuration](https://docs.papra.app/self-hosting/configuration/), and
-[Docspell prerequisites](https://docspell.org/docs/install/prereq/).
+## How Suchi works differently
 
-## Feature snapshot
+### One process to run
 
-Legend: ✅ documented as shipped · ◐ partial or different shape · ➖ not
-documented as shipped. Checked against Paperless-ngx 3.3.3, Papra v26.7.0 and
-Docspell v0.43.0.
+Suchi is one Go binary with SQLite and a content-addressed file store on disk.
+There is no broker, worker, or separate database server to operate; optional
+converters such as `anydoc` and OCR tools are ordinary programs on `PATH`.
 
-### Ingest and extraction
+**Trade-off:** one process scales up rather than out. Suchi cannot spread
+processing across machines.
 
-| Feature                    |   suchi   |            Paperless-ngx            |                Papra                 |          Docspell           |
-| -------------------------- | :-------: | :---------------------------------: | :----------------------------------: | :-------------------------: |
-| Upload API                 |    ✅     |                 ✅                  |                  ✅                  |             ✅              |
-| Watched folder             |    ✅     |                 ✅                  |                  ✅                  |      ✅ (CLI watcher)       |
-| Mail intake                | ✅ (IMAP) |      ✅ (IMAP; Gmail/Outlook OAuth)      | ◐ (generated address via a relay; no IMAP) |  ✅ (IMAP; SMTP gateway)   |
-| OCR                        |    ✅     |   ✅ (Tesseract; optional Azure)    |   ✅ (Tesseract; optional remote services) |             ✅              |
-| Office-document extraction |    ✅     |  ✅ (optional Tika and Gotenberg)   |                  ✅                  |             ✅              |
-| Pre-consume script hook    |    ✅     |                 ✅                  |                  ➖                  | ➖ (addons run after processing) |
-| Scan splitting             |    ✅     |        ✅ (separator barcodes)        |                  ➖                  |             ➖              |
-| Blank-page removal         |    ✅     |                 ➖                  |                  ➖                  |             ➖              |
+### Your folders stay readable, and your drop folder stays yours
 
-Sources: [Paperless-ngx usage](https://docs.paperless-ngx.com/usage/),
-[Paperless-ngx document splitting](https://docs.paperless-ngx.com/advanced_usage/#document-splitting),
-[Papra content extraction](https://docs.papra.app/guides/content-extraction/),
-[Papra email intake](https://docs.papra.app/guides/intake-emails-with-owlrelay/),
-[Docspell features](https://docspell.org/docs/features/), and
-[Docspell addons](https://docspell.org/docs/addons/basics/).
+[Folder layouts](/web-app#settings) keep a browsable tree on disk, built from
+each document's category, sender, dates, and title. The files in that tree are
+links to the stored documents, so the tree takes no extra space and still opens
+without Suchi. Separately, the watched folder is read-only: Suchi never moves,
+renames, or deletes what you drop in.
 
-### Organization and automation
+**Trade-off:** the drop folder is never emptied for you. If you want it cleaned
+up, a script or sync tool has to do it.
 
-| Feature                        |           suchi            |              Paperless-ngx               |          Papra           |                  Docspell                  |
-| ------------------------------ | :------------------------: | :--------------------------------------: | :----------------------: | :----------------------------------------: |
-| Tags                           |             ✅             |              ✅ (nested)               |            ✅            |                     ✅                     |
-| Correspondent metadata         |     ✅ (multiple roles)     |           ✅ (one per document)           |            ➖            |                     ✅                     |
-| Document types                 |        ➖ (use tags)         |                    ✅                    |            ➖            |             ◐ (tag categories)             |
-| Typed custom fields/properties |             ✅             |                    ✅                    |            ✅            |                     ✅                     |
-| Deterministic classification   |             ✅             |      ✅ (matching rules, ML classifier)      |   ✅ (tagging rules)    | ◐ (matching against known metadata; ML tags) |
-| Optional LLM assistance        | ✅ (classification, questions) | ✅ (suggestions, chat, auto-apply workflow) |    ✅ (auto-tagging)    |                     ➖                     |
-| Human review of suggestions    |   ✅ (Approvals queue)    |  ◐ (accept or reject on the document page)  |            ➖            |  ◐ (confirm suggestions on new items)  |
+See it in practice: [Keep the folder layout you already use](https://suchi.page/blog/keep-your-folder-layout/).
 
-Sources: [Paperless-ngx document suggestions](https://docs.paperless-ngx.com/usage/#document-suggestions),
-[Paperless-ngx AI features](https://docs.paperless-ngx.com/advanced_usage/#ai-features),
-[Papra tagging rules](https://docs.papra.app/guides/tagging-rules/),
-[Papra auto-tagging](https://docs.papra.app/guides/auto-tagging/),
-[Docspell metadata](https://docspell.org/docs/webapp/metadata/), and
-[Docspell curation](https://docspell.org/docs/webapp/curate/).
+### Uncertain changes wait for a person
 
-### Filing on disk and document history
+Rules you write apply exactly. Local matching and the optional model propose a
+category, title, correspondent, tags, or dates; anything below its confidence
+threshold, or everything if you choose **Review first**, waits in **Approvals**
+with the evidence beside it. Original files are never modified.
 
-| Feature                      |                    suchi                     |              Paperless-ngx              |                    Papra                     |               Docspell                |
-| ---------------------------- | :------------------------------------------: | :-------------------------------------: | :------------------------------------------: | :-----------------------------------: |
-| Readable folder tree on disk | ✅ (templated layouts; links to stored files) |    ✅ (storage paths rename originals)    | ◐ (opt-in storage key patterns, v26.3+)  |  ➖ (fixed internal layout)  |
-| Watched-folder source files  |         Kept (read-only watcher)         |          Removed after import           |        Deleted by default; can move        | Kept by default; can delete or move |
-| Document version history     |                      ✅                      |                ✅ (3.0+)                |                      ➖                      |         ➖ (stated limitation)         |
-| Links between documents      |         ✅ (named; both ends show it)         | ✅ (Document Link field, reverse link added) |   ◐ (document-relation custom property)    |          ➖ (merge items only)          |
-| Archive serial numbers       |      ✅ (QR labels; feeder-scan splitting)      |              ✅ (barcodes)              |                      ➖                      |    ➖ (custom-field convention only)    |
+**Trade-off:** in **Review first** mode, new documents stay unfiled until
+someone clears the queue.
 
-Sources: [Paperless-ngx usage](https://docs.paperless-ngx.com/usage/) (consumption,
-document file versions, custom fields),
-[Paperless-ngx file name handling](https://docs.paperless-ngx.com/advanced_usage/#file-name-handling),
-[Papra storage key patterns](https://docs.papra.app/guides/storage-key-patterns/),
-[Papra ingestion folder](https://docs.papra.app/guides/setup-ingestion-folder/),
-[Papra changelog](https://docs.papra.app/changelog/),
-[Docspell file backends](https://docspell.org/docs/configure/file-backends/),
-[Docspell CLI](https://docspell.org/docs/tools/cli/), and
-[Docspell features](https://docspell.org/docs/features/). Suchi:
-[folder layouts](/web-app#settings), [versions and links](/document-versions-and-links),
-and [archive serial numbers](/formats#barcode-assisted-physical-filing-with-archive-serial-numbers).
+See it in practice: [From inbox to filed](https://suchi.page/blog/filing-loop/).
 
-The watched-folder row is a real workflow difference. Paperless-ngx and Papra
-treat the drop folder as a temporary inbox and empty it by default. Suchi never
-moves, renames or deletes files there, and its organised tree is a separate
-folder of links that Suchi keeps current. Docspell's CLI watcher also leaves
-files in place unless told to delete or move them.
+### Filing trees, not just tags
 
-### API and access
+Suchi files every document into one category of a filing tree based on the
+Johnny.Decimal concept, such as `51 Utilities`. Five ready-made trees are
+included, and tags, correspondents, and typed custom fields sit alongside. There
+is no separate document-type field; categories and tags do that job.
 
-| Feature                         |                 suchi                  |          Paperless-ngx           |                Papra                 |              Docspell              |
-| ------------------------------- | :------------------------------------: | :------------------------------: | :----------------------------------: | :--------------------------------: |
-| Documented REST API             |                   ✅                   |                ✅                |                  ✅                  |                 ✅                 |
-| Public share links              |          ✅ (expiry/password)          |    ✅ (expiry; ZIP bundles)    |          ✅ (expiry/password)          | ✅ (required expiry; optional password) |
-| Multi-user ownership            |                   ✅                   |                ✅                |          ✅ (organizations)           |          ✅ (collectives)          |
-| Fine-grained object permissions |                   ✅                   |                ✅                |   ◐ (organization roles only)   |    ➖ (documented limitation)    |
-| Single sign-on (OIDC)           |                   ✅                   |                ✅                |       ✅ (custom OAuth2/OIDC)        |                 ✅                 |
-| Built-in two-factor login       |       ➖ (use your OIDC provider)       |                ✅                |                  ✅                  |              ✅ (TOTP)              |
-| Audit log                       |                   ✅                   |                ✅                |          ✅ (activity log)           |                 ➖                 |
-| Mobile access                   | ✅ (first-party Android/iOS Companion) | ◐ (web + community clients) | ✅ (responsive web; Android app) | ◐ (web + Android upload client) |
-| MCP server                      |                   ✅                   |                ➖                |                  ➖                  |                 ➖                 |
+**Trade-off:** you pick, or adapt, a tree before filing. If you only ever want
+free-form tags, the structure is overhead.
 
-Sources: [Suchi Companion](/companion),
-[Paperless-ngx usage](https://docs.paperless-ngx.com/usage/) (share links,
-permissions, document history, two-factor authentication),
-[Paperless-ngx OpenID Connect](https://docs.paperless-ngx.com/advanced_usage/#openid-connect-and-social-authentication),
-[Paperless-ngx API](https://docs.paperless-ngx.com/api/),
-[Papra roles](https://docs.papra.app/guides/roles-administration/),
-[Papra custom OAuth2](https://docs.papra.app/guides/setup-custom-oauth2/),
-[Papra changelog](https://docs.papra.app/changelog/),
-[Papra Android release](https://github.com/papra-hq/papra/releases/tag/@papra/mobile@1.1.0),
-[Papra API reference](https://docs.papra.app/resources/api-endpoints/),
-[Docspell features](https://docspell.org/docs/features/),
-[Docspell sharing](https://docspell.org/docs/webapp/share/),
-[Docspell Android client](https://docspell.org/docs/tools/android/), and
-[Docspell API](https://docspell.org/docs/api/intro/). Docspell lists
-fine-grained permissions as a limitation. Suchi has no built-in second factor;
-with OIDC enabled, the identity provider enforces it.
+See [Filing trees](/jd).
+
+### A phone app for capture away from home
+
+[Suchi Companion](https://suchi.page/#mobile-showcase) is a first-party iOS and Android app. It scans with the phone's
+document scanner, queues captures until the server is reachable, searches the
+archive, and keeps selected documents for offline use.
+
+**Trade-off:** Companion talks only to Suchi; it does not work with other
+archives' APIs.
+
+See it in practice: [Using Suchi Companion away from home](https://suchi.page/blog/suchi-companion-away-from-home/).
+
+### History, relationships, and physical originals
+
+Replacement versions keep earlier files underneath the current one, and named
+[document links](/document-versions-and-links) connect related documents, shown
+at both ends. [Archive serial numbers](/formats#barcode-assisted-physical-filing-with-archive-serial-numbers)
+tie a retained paper original to its scan, from a QR label or typed by hand.
+
+See it in practice: [Keep a document's history and its related documents](https://suchi.page/blog/versions-and-links/)
+and [Linking scans to their physical originals](https://suchi.page/blog/archive-serial-numbers/).
+
+### Agents work through the same permissions
+
+The [MCP server](/mcp-server) lets an AI agent search, read, resolve approvals,
+create share links, and set custom fields and document links, using an ordinary
+scoped token. Every change goes through the same permission checks and audit log
+as a person's.
+
+## Where Suchi falls short
+
+- **Maturity and community.** Suchi is younger than the established projects,
+  with a smaller community and fewer third-party integrations.
+- **PDF editing.** Suchi does not rotate, reorder, or delete pages.
+- **Scale-out.** One process; see above.
+
+## When another tool may fit better
+
+Look elsewhere if you need:
+
+- a large ecosystem of community mobile clients, plugins, and integrations;
+- page-level PDF editing inside the archive;
+- document processing that scales out across several machines;
+- a dedicated document-type field, or free-form tags with no filing structure;
+- a drop folder that is emptied automatically after import;
+- several files stored together as one document.
+
+## Moving an existing archive
+
+`suchi import` reads an export bundle from an existing archive, including
+originals, archive PDFs, tags, correspondents, storage paths (as folder
+layouts), saved views, and workflows, which map onto Suchi's
+[automations](/automations). It is idempotent, so you can re-run it against a
+nightly export and keep both systems running side by side;
+`suchi import --verify` reports what still differs.
+
+The importer targets one specific source version. Exports from newer versions
+may contain shapes it doesn't recognize; those are listed as failed in the
+migration report for you to review rather than imported silently. See the
+[importer guide](/guides/importer) for supported sources and versions.
 
 ## Resource profile
 
-The accepted v0.1 suchi benchmark measures a 25.5 MB stripped binary, 31.9 MB median
-idle RSS, 86 ms cold start to `/healthz`, and 625 accepted upload requests/s in
-the 10-user x 20-document scenario. Upload acceptance is measured separately
-from asynchronous extraction. See
+The accepted v0.1 Suchi benchmark measures a 25.5 MB stripped binary, 31.9 MB
+median idle RSS, 86 ms cold start to `/healthz`, and 625 accepted upload
+requests/s in the 10-user × 20-document scenario. Upload acceptance is measured
+separately from asynchronous extraction. See
 [`hack/bench/`](https://github.com/johnnybravo-xyz/suchi/tree/main/hack/bench)
 for the harness and machine details.
 
-This project has not run equivalent controlled benchmarks for the alternatives,
-so it does not publish comparative RAM, image-size, startup, or throughput
-figures. Container size and idle memory are not interchangeable with total
-operational cost.
-
-## Choosing deliberately
-
-### Paperless-ngx
-
-Choose Paperless-ngx when ecosystem maturity, community mobile clients,
-extensive documentation, PDF editing, and a broad workflow surface matter more
-than minimizing process count. Its 3.x releases added document version history,
-optional AI suggestions, chat and auto-apply workflows, and a new search
-backend. SQLite is the default; PostgreSQL is recommended for new or multi-user
-installations. A Redis-compatible broker is required.
-
-### Papra
-
-Choose Papra for a focused responsive web UI, organizations, SQLite-first
-deployment, folder and email-relay ingestion, configurable extraction backends,
-built-in LLM auto-tagging, typed custom properties, advanced search, and
-expiring or password-protected share links. An Android app is released as an
-APK on GitHub. Papra's README lagged its changelog at this snapshot, so the
-shipped changelog takes precedence here.
-
-### Docspell
-
-Choose Docspell for multi-file items, strong query capabilities, scalable REST
-and joex processes, IMAP and SMTP-gateway intake, an Android upload client, and
-optional Solr or PostgreSQL full-text search. Its embedded H2 setup avoids an
-external database, but fine-grained permissions and document versioning are
-documented limitations. Releases are infrequent: v0.43.0 shipped in March 2025,
-and later work is on the main branch.
-
-### suchi
-
-Choose suchi when one server process, a filesystem CAS, low measured idle
-memory, filing trees based on the Johnny.Decimal concept, multi-party
-correspondents, approval tasks, an audit feed, MCP tools, and a first-party
-Android/iOS app fit the problem. Companion pairs by QR code and provides
-capture, foreground uploads, Inbox filing, browsing, search, privacy-gated
-previews, offline saves, sharing, and Trash recovery. Choose it too when you
-want a folder tree you can browse without Suchi, a drop folder that is never
-emptied, or version history and named document links. Do not choose suchi for
-ecosystem maturity or proven compatibility with Paperless mobile clients; it is
-a younger project than the alternatives.
-
-<Note>
-  Johnny.Decimal is a trademark of Coruscade Pty Ltd. Suchi is independent and
-  is not affiliated with or endorsed by them.
-</Note>
+These are Suchi's own measurements; this page publishes no comparative figures.
+Container size and idle memory are not the same as total operational cost.
 
 ## Portability
 
-- **Paperless-ngx to suchi:** `suchi import --from <dir>` consumes a compatible
-  Paperless export bundle.
-- **suchi takeout:** `suchi export --out FILE.zip --system S02 --all` writes a
+- **Into Suchi:** see [Moving an existing archive](#moving-an-existing-archive).
+- **Suchi takeout:** `suchi export --out FILE.zip --system S02 --all` writes a
   partial manifest-v3 export of that one system's originals, sidecars and
   taxonomy for every owner there. Archive serial numbers are preserved when
   reingested into a system where the value remains available. Without
   `--system`, the original system is selected; without an owner flag, owner
   inference must be unambiguous. Reingestion can allocate new IDs and does not
   restore membership or ACLs.
-- **suchi backup:** preserve the whole SQLite/CAS/key set for an exact restore
+- **Suchi backup:** preserve the whole SQLite/CAS/key set for an exact restore
   of systems, memberships, IDs and relationships; see [Backup and restore](/backup-restore).
-- **suchi to another DMS:** there is no destination-specific exporter. The
+- **Suchi to another archive:** there is no destination-specific exporter. The
   takeout is documented and uses ordinary files plus JSON sidecars, but mapping
   it into another product remains migration work.
 
+<Note>
+  Johnny.Decimal is a trademark of Coruscade Pty Ltd. Suchi is independent and
+  is not affiliated with or endorsed by them.
+</Note>
+
 ## Update history
 
-- **2026-10-20:** Rechecked every row against Paperless-ngx 3.3.3, Papra
-  v26.7.0 and Docspell v0.43.0. Added the filing-on-disk and document-history
-  table, blank-page removal, single sign-on, two-factor login and audit log
-  rows. Corrected Paperless-ngx blank-page removal, human review, AI and share
-  links; Papra mobile, document relations and storage paths; and Docspell
-  document types, review, intake and share-link expiry.
+- **2026-10-20:** Rewrote the page around Suchi's design choices, their
+  trade-offs, and the needs another tool may meet better, replacing the
+  feature matrix.
 - **2026-09-28:** Added the Android/iOS Suchi Companion and clarified
-  the mobile access available from each project.
-- **2026-08-22:** Re-ran the release benchmark and rechecked the linked feature
+  mobile access.
+- **2026-08-22:** Re-ran the release benchmark and rechecked the linked
   documentation against the current product surfaces.
 - **2026-08-18:** Rechecked official documentation; corrected database,
   full-text search, audit, sharing, permissions, OCR, LLM, and licensing claims.
