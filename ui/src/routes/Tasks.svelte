@@ -1,5 +1,6 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
+  import { tick } from 'svelte'
   import { t as translate } from "../lib/i18n.svelte.js";
   import { scopedHash as filingHref } from '../lib/systems.svelte.js'
   import { listTasks, resolveApprovalTask, retryDeadJob, dismissDeadJob, thumbPath,
@@ -7,7 +8,9 @@
   import { fmtDate, formatNumber, isHighSensitivity, plural } from '../lib/format.js'
   import { DATE_ROLES, formatIntelligenceValue, canReviewDate, reviewFailure } from '../lib/intelligence.js'
   import Icon from '../lib/Icon.svelte'
+  import RuleWorkspace from '../lib/RuleWorkspace.svelte'
 
+  const REVIEW_ENTRY_LIMIT = 100
   let { notify, onCount, canReviewIntelligence = false, canManageJobs = false } = $props()
   let tasks = $state([])
   let jobs = $state([])
@@ -20,7 +23,23 @@
   let busyTasks = $state(new Set())
   let taskErrors = $state({})
   let dateErrors = $state({})
-  let reviewNotice = $state('')
+  let approvalFilter = $state('all')
+  let expandedSuggestionGroups = $state(new Set())
+  let expandedReviewContext = $state(new Set())
+  let suggestionGroupsOpen = $state(false)
+  let suggestionGroupsToggle = $state()
+  const metadataTasks = $derived(tasks.filter(isMetadataTask))
+  const visibleMetadataTasks = $derived(metadataTasks.filter(task => matchesApprovalFilter(task, approvalFilter)))
+  const documentGroups = $derived(approvalGroups(visibleMetadataTasks))
+  const displayedDocumentGroups = $derived(documentGroups.slice(0, REVIEW_ENTRY_LIMIT))
+  const hiddenDocumentGroupCount = $derived(Math.max(0, documentGroups.length - displayedDocumentGroups.length))
+  const suggestionGroups = $derived(suggestionApprovalGroups(visibleMetadataTasks))
+  const filterCounts = $derived(countApprovalFilters(metadataTasks))
+  const metadataDocumentCount = $derived(uniqueDocumentCount(metadataTasks))
+  const displayedSuggestionGroups = $derived(suggestionGroups.slice(0, REVIEW_ENTRY_LIMIT))
+  const hiddenSuggestionGroupCount = $derived(Math.max(0, suggestionGroups.length - displayedSuggestionGroups.length))
+  const otherTasks = $derived(tasks.filter(task => !isMetadataTask(task)))
+  const otherTaskGroups = $derived(approvalGroups(otherTasks))
 
   async function load() {
     loading = true; err = ''
@@ -41,6 +60,8 @@
       intelligence = facts?.results || []
       taskErrors = {}
       dateErrors = {}
+      expandedSuggestionGroups = new Set()
+      expandedReviewContext = new Set()
       onCount?.(tasks.length + jobs.length + intelligence.length)
     } catch (ex) {
       tasks = []
@@ -52,25 +73,52 @@
   }
 
   async function resolve(t, choice) {
-    if (busyTasks.has(t.id) || taskErrors[t.id] || !taskChoices(t).includes(choice)) return
-    busyTasks = new Set([...busyTasks, t.id])
+    await resolveMany([t], choice)
+  }
+
+  async function resolveMany(items, choice) {
+    const eligible = items.filter(task =>
+      !busyTasks.has(task.id) && !taskErrors[task.id] && taskChoices(task).includes(choice))
+    if (!eligible.length) return
+    const ids = new Set(eligible.map(task => task.id))
+    busyTasks = new Set([...busyTasks, ...ids])
+    const resolved = new Set()
+    const failures = { ...taskErrors }
     try {
-      await resolveApprovalTask(t.id, { choice })
-      tasks = tasks.filter(x => x.id !== t.id)
+      for (const task of eligible) {
+        try {
+          await resolveApprovalTask(task.id, { choice })
+          resolved.add(task.id)
+          delete failures[task.id]
+        } catch (ex) {
+          failures[task.id] = reviewFailure(ex)
+        }
+      }
+      if (resolved.size) tasks = tasks.filter(task => !resolved.has(task.id))
+      taskErrors = failures
       onCount?.(tasks.length + jobs.length + intelligence.length)
-      reviewNotice = choice === 'apply'
+      notify?.(resolutionNotice(choice, resolved.size, eligible.length))
+    } finally {
+      const next = new Set(busyTasks)
+      for (const id of ids) next.delete(id)
+      busyTasks = next
+    }
+  }
+
+  function resolutionNotice(choice, resolved, attempted) {
+    if (attempted === 1 && resolved === 1) {
+      return choice === 'apply'
         ? translate("tasks.decisionRecordedTheDocumentAndCurrentValueWill")
         : choice === 'reject' || choice === 'dismiss'
           ? translate("tasks.suggestionDismissed")
           : translate("tasks.decisionRecordedAnyRequestedProcessingWillContinueShortly")
-      notify?.(reviewNotice)
-    } catch (ex) {
-      taskErrors = { ...taskErrors, [t.id]: reviewFailure(ex) }
-    } finally {
-      const next = new Set(busyTasks)
-      next.delete(t.id)
-      busyTasks = next
     }
+    if (resolved === attempted) {
+      return choice === 'apply'
+        ? plural("tasks.approvedSuggestionCount", resolved)
+        : plural("tasks.dismissedSuggestionCount", resolved)
+    }
+    return translate("tasks.recordedSuggestionDecisionCount", { resolved, attempted })
   }
 
   function deadline(t) {
@@ -202,30 +250,145 @@
       : t.doc_jd_category_name
   }
 
+  function isMetadataTask(task) {
+    return task.approval_name === 'document-change' && !!task.doc_id
+  }
+
+  function taskFilterKind(task) {
+    if (task.vars?.field === 'tag') return 'tags'
+    if (task.vars?.field === 'jd_category') return 'filing'
+    return 'fields'
+  }
+
+  function matchesApprovalFilter(task, filter) {
+    return filter === 'all' || taskFilterKind(task) === filter
+  }
+
+  function countApprovalFilters(items) {
+    const counts = { all: items.length, tags: 0, filing: 0, fields: 0 }
+    for (const task of items) counts[taskFilterKind(task)]++
+    return counts
+  }
+
+  function uniqueDocumentCount(items) {
+    const ids = new Set()
+    for (const task of items) ids.add(task.doc_id)
+    return ids.size
+  }
+
+  function addTaskToGroup(group, task) {
+    group.tasks.push(task)
+    const choices = taskChoices(task)
+    if (choices.includes('apply')) group.applyTasks.push(task)
+    if (choices.includes('reject')) group.rejectTasks.push(task)
+  }
 
   function approvalGroups(items) {
     const groups = []
     const documents = new Map()
     for (const task of items) {
-      if (task.approval_name === 'document-change' && task.doc_id) {
+      if (isMetadataTask(task)) {
         let group = documents.get(task.doc_id)
         if (!group) {
-          group = { key: `document-${task.doc_id}`, document: task, tasks: [] }
+          group = {
+            key: `document-${task.doc_id}`,
+            document: task,
+            tasks: [],
+            applyTasks: [],
+            rejectTasks: [],
+          }
           documents.set(task.doc_id, group)
           groups.push(group)
         }
-        group.tasks.push(task)
+        addTaskToGroup(group, task)
       } else {
-        groups.push({ key: `task-${task.id}`, document: task.doc_id ? task : null, tasks: [task] })
+        const group = {
+          key: `task-${task.id}`,
+          document: task.doc_id ? task : null,
+          tasks: [],
+          applyTasks: [],
+          rejectTasks: [],
+        }
+        addTaskToGroup(group, task)
+        groups.push(group)
       }
     }
     return groups
   }
 
-  function groupContext(group) {
-    const filed = filingLabel(group.document || {})
-    if (!filed || !group.tasks.some(t => t.vars?.field !== 'jd_category')) return ''
-    return translate("tasks.filedUnderValueReviewTheRemainingMetadataSuggestions", { "filed": filed })
+  function suggestionApprovalGroups(items) {
+    const groups = []
+    const suggestions = new Map()
+    for (const task of items) {
+      const key = JSON.stringify([
+        task.vars?.field || '',
+        task.vars?.field_name || '',
+        suggestionValue(task.vars),
+        task.vars?.source || '',
+        task.vars?.automation_id || '',
+        task.vars?.automation_name || '',
+      ])
+      let group = suggestions.get(key)
+      if (!group) {
+        group = {
+          key,
+          representative: task,
+          tasks: [],
+          applyTasks: [],
+          rejectTasks: [],
+        }
+        suggestions.set(key, group)
+        groups.push(group)
+      }
+      addTaskToGroup(group, task)
+    }
+    return groups
+  }
+
+  function suggestionActionLabel(task) {
+    return {
+      jd_category: translate("tasks.fileDocument"),
+      correspondent: translate("tasks.setCorrespondent"),
+      tag: translate("tasks.addTag"),
+      title: translate("tasks.changeTitle"),
+      language: translate("tasks.setLanguage"),
+      custom_field: task.vars?.field_name
+        ? translate("tasks.setNamedField", { field: task.vars.field_name })
+        : translate("tasks.setCustomField"),
+    }[task.vars?.field] || translate("tasks.unsupportedActionReadOnly")
+  }
+
+  function toggleSuggestionGroup(key) {
+    const next = new Set(expandedSuggestionGroups)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    expandedSuggestionGroups = next
+  }
+
+  function toggleReviewContext(taskID) {
+    const next = new Set(expandedReviewContext)
+    if (next.has(taskID)) next.delete(taskID)
+    else next.add(taskID)
+    expandedReviewContext = next
+  }
+
+  async function setSuggestionGroupsOpen(open) {
+    suggestionGroupsOpen = open
+    await tick()
+    suggestionGroupsToggle?.focus()
+  }
+
+  function tasksAreBusy(items) {
+    return items.some(task => busyTasks.has(task.id))
+  }
+
+  function tasksHaveErrors(items) {
+    return items.some(task => !!taskErrors[task.id])
+  }
+
+  function firstTaskError(items) {
+    for (const task of items) if (taskErrors[task.id]) return taskErrors[task.id]
+    return ''
   }
 
   function intelligenceGroups() {
@@ -264,7 +427,7 @@
       dateErrors = failures
       intelligence = intelligence.filter(candidate => !resolved.has(candidate.id))
       onCount?.(tasks.length + jobs.length + intelligence.length)
-      reviewNotice = resolved.size
+      let reviewNotice = resolved.size
         ? (decision === 'accepted'
           ? plural("tasks.addedDateCountToCalendar", resolved.size)
           : plural("tasks.rejectedDateCount", resolved.size))
@@ -301,13 +464,13 @@
     }
   }
 
-  // Cmd/Ctrl+Enter resolves the top task with its first (primary) choice.
+  // Cmd/Ctrl+Enter resolves the first visible task with its primary choice.
   function onKey(e) {
-    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && tasks[0]) {
+    const task = visibleMetadataTasks[0] || otherTasks[0]
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && task) {
       e.preventDefault()
-      const t = tasks[0]
-      const choice = taskChoices(t)[0]
-      if (choice) resolve(t, choice)
+      const choice = taskChoices(task)[0]
+      if (choice) resolve(task, choice)
     }
   }
 
@@ -316,28 +479,261 @@
 
 <svelte:window onkeydown={onKey} />
 
-{#if err}<div class="err">{err}</div>{/if}
-<div class="toolbar review-toolbar" role="group" aria-label={translate("tasks.approvalOptions")}>
-  <button class="btn sm"
-          disabled={loading || intelligenceBusy || busyTasks.size > 0} onclick={load}>
-    <Icon name="refresh" size={13} /> {translate("tasks.refresh")}
-  </button>
-  {#if !loading}<span class="pill">{translate("tasks.valuePending", { "length": tasks.length + jobs.length + intelligence.length })}</span>{/if}
-  {#if addableDates.length > 1}
-    <button class="btn sm" disabled={intelligenceBusy} onclick={() => resolveDates('accepted', addableDates.map(candidate => candidate.id))}>
-      <Icon name="check" size={13} /> {plural("tasks.addAllDatesToCalendar", addableDates.length)}
-    </button>
-  {/if}
-  <p role="status">{reviewNotice}</p>
-</div>
+<div class="approvals-page">
+  <RuleWorkspace class="approvals-workspace"
+                 title={translate("app.approvals")}
+                 description={translate("tasks.suggestedChangesDescription")}
+                 headingId="approvals-workspace-heading">
+    {#snippet actions()}
+      <div class="review-toolbar" role="group" aria-label={translate("tasks.approvalOptions")}>
+        <button class="btn sm"
+                disabled={loading || intelligenceBusy || busyTasks.size > 0} onclick={load}>
+          <Icon name="refresh" size={13} /> {translate("tasks.refresh")}
+        </button>
+        {#if metadataTasks.length}
+          <button bind:this={suggestionGroupsToggle} type="button"
+                  class="btn sm suggestion-groups-toggle" class:primary={suggestionGroupsOpen}
+                  aria-expanded={suggestionGroupsOpen}
+                  aria-controls={suggestionGroupsOpen ? 'suggestion-review-pane' : undefined}
+                  onclick={() => setSuggestionGroupsOpen(!suggestionGroupsOpen)}>
+            {suggestionGroupsOpen
+              ? translate("tasks.hideSuggestionGroups")
+              : translate("tasks.showSuggestionGroups", { count: suggestionGroups.length })}
+          </button>
+        {/if}
+      </div>
+    {/snippet}
 
-{#if loading}
-  <div class="index">{#each Array(3) as _}<div class="irow"><div class="skel" style="width:55%"></div></div>{/each}</div>
-{:else}
+    {#if err}<div class="err approvals-error">{err}</div>{/if}
+
+    {#if loading || metadataTasks.length}
+      <div class="approval-filters" role="group" aria-label={translate("tasks.approvalFilters")}>
+        <button type="button" class:active={approvalFilter === 'all'} aria-pressed={approvalFilter === 'all'}
+                onclick={() => (approvalFilter = 'all')}>{translate("tasks.allSuggestionFilter", { count: filterCounts.all })}</button>
+        <button type="button" class:active={approvalFilter === 'tags'} aria-pressed={approvalFilter === 'tags'}
+                onclick={() => (approvalFilter = 'tags')}>{translate("tasks.tagSuggestionFilter", { count: filterCounts.tags })}</button>
+        <button type="button" class:active={approvalFilter === 'filing'} aria-pressed={approvalFilter === 'filing'}
+                onclick={() => (approvalFilter = 'filing')}>{translate("tasks.filingSuggestionFilter", { count: filterCounts.filing })}</button>
+        <button type="button" class:active={approvalFilter === 'fields'} aria-pressed={approvalFilter === 'fields'}
+                onclick={() => (approvalFilter = 'fields')}>{translate("tasks.fieldSuggestionFilter", { count: filterCounts.fields })}</button>
+      </div>
+    {/if}
+
+    {#if loading}
+      <div class="review-skeleton">
+        {#each Array(4) as _}<div class="approval-loading-row"><div class="skel"></div></div>{/each}
+      </div>
+    {:else}
+      {#if metadataTasks.length > 0 && visibleMetadataTasks.length === 0}
+        <p class="filtered-empty">{translate("tasks.noSuggestionsInThisFilter")}</p>
+      {:else if visibleMetadataTasks.length > 0}
+        <div class="review-panes" class:with-suggestion-groups={suggestionGroupsOpen}>
+          <section class="document-review-pane" aria-label={translate("tasks.byDocument")}>
+            {#if suggestionGroupsOpen}
+              <header class="pane-heading">
+                <div class="pane-heading-label">
+                  <h2>{translate("tasks.byDocument")}</h2>
+                  <span>{translate("tasks.inQueue", { count: documentGroups.length })}</span>
+                </div>
+              </header>
+            {/if}
+            <div class="document-review-list">
+              {#each displayedDocumentGroups as group (group.key)}
+                <article class="approval-card document-review-card">
+                  <header class="approval-card-header document-header">
+                    <a class="task-thumb" class:placeholder={!group.document.doc_has_thumbnail} class:blurred={isHighSensitivity(group.document.doc_sensitivity)}
+                       href={filingHref(`#/doc/${group.document.doc_id}`)}
+                       aria-label={translate("tasks.openValue2", { "doc_id": group.document.doc_title || `document ${group.document.doc_id}` })}>
+                      {#if group.document.doc_has_thumbnail}
+                        <img src={thumbPath(group.document.doc_id, isHighSensitivity(group.document.doc_sensitivity))} alt="" loading="lazy" />
+                      {:else}
+                        <Icon name="docs" size={20} />
+                      {/if}
+                    </a>
+                    <div class="document-identity">
+                      <div class="document-title-line">
+                        <a href={filingHref(`#/doc/${group.document.doc_id}`)}>
+                          {group.document.doc_title || translate("tasks.documentValue", { "doc_id": group.document.doc_id })}
+                        </a>
+                        <span>#{group.document.doc_id}</span>
+                        {#if filingLabel(group.document)}<span class="filing-pill">{filingLabel(group.document)}</span>{/if}
+                      </div>
+                    </div>
+                    {#if group.rejectTasks.length || group.applyTasks.length}
+                      <div class="document-bulk-actions">
+                        {#if group.rejectTasks.length}
+                          <button class="btn sm" disabled={tasksAreBusy(group.tasks) || tasksHaveErrors(group.tasks)}
+                                  onclick={() => resolveMany(group.rejectTasks, 'reject')}>
+                            {group.rejectTasks.length > 1 ? translate("tasks.dismissAll") : translate("tasks.dismiss")}
+                          </button>
+                        {/if}
+                        {#if group.applyTasks.length}
+                          <button class="btn sm primary" disabled={tasksAreBusy(group.tasks) || tasksHaveErrors(group.tasks)}
+                                  onclick={() => resolveMany(group.applyTasks, 'apply')}>
+                            {group.applyTasks.length > 1
+                              ? translate("tasks.approveAll", { count: group.applyTasks.length })
+                              : translate("tasks.approve")}
+                          </button>
+                        {/if}
+                      </div>
+                    {/if}
+                  </header>
+                  <div class="approval-card-body document-decisions">
+                    {#each group.tasks as t (t.id)}
+                      {@const choices = taskChoices(t)}
+                      {@const dl = deadline(t)}
+                      {@const reviewContextOpen = expandedReviewContext.has(t.id)}
+                      <section class="decision-row document-decision" data-task-id={t.id}>
+                        <div class="decision-kind">{suggestionActionLabel(t)}</div>
+                        <div class="metadata-transition">
+                          <span>{typeof t.vars?.current_value === 'string' ? (t.vars.current_value || translate("tasks.notSet")) : translate("tasks.unavailable")}</span>
+                          <span class="transition-arrow" aria-hidden="true">→</span>
+                          <strong>{suggestionValue(t.vars)}</strong>
+                        </div>
+                        {#if t.vars?.source}
+                          <span class="source-pill decision-source">
+                            {t.vars.automation_name
+                              ? translate("tasks.automationValue", { "automation_name": t.vars.automation_name })
+                              : sourceLabel(t.vars.source)}
+                          </span>
+                        {/if}
+                        {#if t.vars?.evidence_text || t.vars?.sources?.length}
+                          <button type="button" class="review-rationale-toggle"
+                                  aria-expanded={reviewContextOpen} aria-controls={`review-context-${t.id}`}
+                                  onclick={() => toggleReviewContext(t.id)}>
+                            {supportingContextLabel(t.vars)}
+                          </button>
+                        {/if}
+                        <div class="decision-controls">
+                          {#if choices.includes('reject')}
+                            <button class="decision-button dismiss" disabled={busyTasks.has(t.id) || !!taskErrors[t.id]}
+                                    aria-label={choiceLabel(t, 'reject')} title={choiceLabel(t, 'reject')}
+                                    onclick={() => resolve(t, 'reject')}><Icon name="x" size={16} /></button>
+                          {/if}
+                          {#if choices.includes('apply')}
+                            <button class="decision-button approve" disabled={busyTasks.has(t.id) || !!taskErrors[t.id]}
+                                    aria-label={choiceLabel(t, 'apply')} title={choiceLabel(t, 'apply')}
+                                    onclick={() => resolve(t, 'apply')}><Icon name="check" size={16} /></button>
+                          {/if}
+                        </div>
+                        {#if reviewContextOpen || taskErrors[t.id] || dl}
+                          <div class="decision-followup">
+                            {#if reviewContextOpen}
+                              <div id={`review-context-${t.id}`} class="review-rationale-content">
+                                {#if t.vars.evidence_text}<blockquote class="intelligence-evidence">“{t.vars.evidence_text}”</blockquote>{/if}
+                                {#if t.vars.sources?.length}
+                                  <ul class="review-sources">
+                                    {#each t.vars.sources as source}
+                                      <li><a href={filingHref(`#/doc/${source.document_id}`)}>{source.title || translate("tasks.openDocument")}</a></li>
+                                    {/each}
+                                  </ul>
+                                {/if}
+                              </div>
+                            {/if}
+                            {#if taskErrors[t.id]}<p class="review-error" role="alert">{taskErrors[t.id]}</p>{/if}
+                            {#if dl}<div class="meta" class:deadline-soon={dl.soon}>{dl.text}</div>{/if}
+                          </div>
+                        {/if}
+                      </section>
+                    {/each}
+                  </div>
+                </article>
+              {/each}
+            </div>
+              {#if hiddenDocumentGroupCount}
+                <p class="review-overflow">{plural("tasks.moreDocumentsBelow", hiddenDocumentGroupCount)}</p>
+              {/if}
+          </section>
+
+          {#if suggestionGroupsOpen}
+            <section id="suggestion-review-pane" class="suggestion-review-pane" aria-label={translate("tasks.bySuggestion")}>
+              <header class="pane-heading">
+                <div class="pane-heading-label">
+                  <h2>{translate("tasks.bySuggestion")}</h2>
+                  <span>{plural("tasks.groupCount", suggestionGroups.length)}</span>
+                </div>
+              </header>
+              <p class="suggestion-review-hint">
+                {translate("tasks.suggestionGroupsExplanation", { count: visibleMetadataTasks.length })}
+              </p>
+              <div class="suggestion-review-list">
+                {#each displayedSuggestionGroups as group (group.key)}
+                  {@const representative = group.representative}
+                  {@const expanded = expandedSuggestionGroups.has(group.key)}
+                  <article class="approval-card suggestion-card">
+                    <header class="approval-card-header suggestion-card-header">
+                      <div>
+                        <span>{suggestionActionLabel(representative)}</span>
+                        <strong class:tag-suggestion={representative.vars?.field === 'tag'}>{suggestionValue(representative.vars)}</strong>
+                      </div>
+                      {#if representative.vars?.source}
+                        <span class="source-pill">
+                          {representative.vars.automation_name
+                            ? translate("tasks.automationValue", { "automation_name": representative.vars.automation_name })
+                            : sourceLabel(representative.vars.source)}
+                        </span>
+                      {/if}
+                    </header>
+                    <div class="suggestion-documents">
+                      {#each group.tasks as task, index (task.id)}
+                        {#if expanded || index < 3}
+                          <a href={filingHref(`#/doc/${task.doc_id}`)}>
+                            <strong>{task.doc_title || translate("tasks.documentValue", { "doc_id": task.doc_id })}</strong>
+                            <span>#{task.doc_id}</span>
+                          </a>
+                        {/if}
+                      {/each}
+                      {#if group.tasks.length > 3}
+                        <button type="button" class="more-documents" onclick={() => toggleSuggestionGroup(group.key)}
+                                aria-expanded={expanded}>
+                          {expanded
+                            ? translate("tasks.showFewerDocuments")
+                            : translate("tasks.moreDocuments", { count: group.tasks.length - 3 })}
+                        </button>
+                      {/if}
+                    </div>
+                    {#if firstTaskError(group.tasks)}
+                      <p class="review-error suggestion-error" role="alert">{firstTaskError(group.tasks)}</p>
+                    {/if}
+                    {#if group.rejectTasks.length || group.applyTasks.length}
+                      <footer class="suggestion-card-actions">
+                        {#if group.rejectTasks.length}
+                          <button class="btn sm" disabled={tasksAreBusy(group.tasks) || tasksHaveErrors(group.tasks)}
+                                  onclick={() => resolveMany(group.rejectTasks, 'reject')}>
+                            {translate("tasks.dismissAllCount", { count: group.rejectTasks.length })}
+                          </button>
+                        {/if}
+                        {#if group.applyTasks.length}
+                          <button class="btn sm primary" disabled={tasksAreBusy(group.tasks) || tasksHaveErrors(group.tasks)}
+                                  onclick={() => resolveMany(group.applyTasks, 'apply')}>
+                            {translate("tasks.applyToAll", { count: group.applyTasks.length })}
+                          </button>
+                        {/if}
+                      </footer>
+                    {/if}
+                  </article>
+                {/each}
+              </div>
+                {#if hiddenSuggestionGroupCount}
+                  <p class="review-overflow">{plural("tasks.moreSuggestionGroupsBelow", hiddenSuggestionGroupCount)}</p>
+                {/if}
+            </section>
+          {/if}
+        </div>
+      {/if}
+
   {#if intelligence.length > 0}
     {@const reviewGroups = intelligenceGroups()}
     <section aria-labelledby="dates-title">
-      <h3 id="dates-title" class="approval-section-title">{translate("tasks.datesForCalendar")}</h3>
+      <div class="section-title-row">
+        <h3 id="dates-title" class="approval-section-title">{translate("tasks.datesForCalendar")}</h3>
+        {#if addableDates.length > 1}
+          <button class="btn sm" disabled={intelligenceBusy}
+                  onclick={() => resolveDates('accepted', addableDates.map(candidate => candidate.id))}>
+            <Icon name="check" size={13} /> {plural("tasks.addAllDatesToCalendar", addableDates.length)}
+          </button>
+        {/if}
+      </div>
       <div class="approval-grid" class:approval-grid-many={reviewGroups.length > 2} data-approval-kind="date">
         {#each reviewGroups as group (group.documentID)}
           <article class="approval-card">
@@ -400,112 +796,62 @@
       </div>
     </section>
   {/if}
-  {#if tasks.length === 0 && jobs.length === 0 && intelligence.length === 0}
-    <div class="empty"><Icon name="tasks" size={56} /><b>{translate("tasks.nothingNeedsYou")}</b><span>{translate("tasks.theArchiveIsRunningItself")}</span></div>
-  {:else if tasks.length > 0}
-    {@const workflowGroups = approvalGroups(tasks)}
+
+  {#if otherTaskGroups.length > 0}
     <h3 class="approval-section-title">{translate("tasks.decisions")}</h3>
-    <div class="approval-grid" class:approval-grid-many={workflowGroups.length > 2} data-approval-kind="workflow">
-      {#each workflowGroups as group (group.key)}
+    <div class="approval-grid" class:approval-grid-many={otherTaskGroups.length > 2} data-approval-kind="workflow">
+      {#each otherTaskGroups as group (group.key)}
         <article class="approval-card workflow-approval-card">
-          {#if group.document}
-            <header class="approval-card-header document-header">
-              <a class="task-thumb" class:placeholder={!group.document.doc_has_thumbnail} class:blurred={isHighSensitivity(group.document.doc_sensitivity)}
-                 href={filingHref(`#/doc/${group.document.doc_id}`)}
-                 aria-label={translate("tasks.openValue2", { "doc_id": group.document.doc_title || `document ${group.document.doc_id}` })}>
-                {#if group.document.doc_has_thumbnail}
-                  <img src={thumbPath(group.document.doc_id, isHighSensitivity(group.document.doc_sensitivity))} alt="" loading="lazy" />
-                {:else}
-                  <Icon name="docs" size={22} />
-                {/if}
-              </a>
-              <div class="document-identity">
-                <a href={filingHref(`#/doc/${group.document.doc_id}`)}>
-                  {group.document.doc_title || translate("tasks.documentValue", { "doc_id": group.document.doc_id })}
-                </a>
-                <div class="document-meta">
-                  <span>#{group.document.doc_id}</span>
-                  {#if filingLabel(group.document)}<span class="pill">{filingLabel(group.document)}</span>{/if}
-                  {#if group.tasks.length > 1}<span>{plural("tasks.suggestionCount", group.tasks.length)}</span>{/if}
-                </div>
-              </div>
-            </header>
-            {#if groupContext(group)}<div class="group-context">{groupContext(group)}</div>{/if}
-          {:else}
-            <header class="approval-card-header operation-header">
-              <span class="operation-mark"><Icon name="refresh" size={17} /></span>
-              <span><small>{translate("tasks.archiveOperation")}</small><b>{group.tasks[0]?.approval_name === 'rescan-proposal' ? translate("tasks.processingUpdate") : translate("tasks.approvalRequest")}</b></span>
-            </header>
-          {/if}
+          <header class="approval-card-header operation-header">
+            <span class="operation-mark"><Icon name="refresh" size={17} /></span>
+            <span><small>{translate("tasks.archiveOperation")}</small><b>{group.tasks[0]?.approval_name === 'rescan-proposal' ? translate("tasks.processingUpdate") : translate("tasks.approvalRequest")}</b></span>
+          </header>
           <div class="approval-card-body decision-list">
             {#each group.tasks as t (t.id)}
               {@const dl = deadline(t)}
               {@const targets = rescanTargets(t)}
               <section class="decision-row">
                 <div class="prompt decision">{decisionPrompt(t)}</div>
-              {#if t.approval_name === 'rescan-proposal' && t.vars}
-                <div class="rescan-context">
-                  <b>{pipelineLabel(t.vars.kind)}</b> {plural("tasks.improvedDocumentCount", t.vars.stale_count)}
-                </div>
-              {/if}
-              {#if t.approval_name === 'document-change' && t.vars}
-                <div class="metadata-transition"
-                     aria-label={`Current ${typeof t.vars.current_value === 'string' ? (t.vars.current_value || translate("tasks.notSet")) : translate("tasks.unavailable")}; suggested ${suggestionValue(t.vars)}`}>
-                  <span>{typeof t.vars.current_value === 'string' ? (t.vars.current_value || translate("tasks.notSet")) : translate("tasks.unavailable")}</span>
-                  <span class="transition-arrow" aria-hidden="true">→</span>
-                  <strong>{suggestionValue(t.vars)}</strong>
-                </div>
-                {#if t.vars.source}
-                  <div class="suggestion-source">
-                    <span>{translate("tasks.whyThisWasSuggested")}</span>
-                    <strong>{t.vars.automation_name ? translate("tasks.automationValue", { "automation_name": t.vars.automation_name }) : sourceLabel(t.vars.source)}</strong>
+                {#if t.approval_name === 'rescan-proposal' && t.vars}
+                  <div class="rescan-context">
+                    <b>{pipelineLabel(t.vars.kind)}</b> {plural("tasks.improvedDocumentCount", t.vars.stale_count)}
                   </div>
                 {/if}
-                {#if t.vars.evidence_text || t.vars.sources?.length}
-                  <details class="review-rationale">
-                    <summary>{supportingContextLabel(t.vars)}</summary>
-                    {#if t.vars.evidence_text}<blockquote class="intelligence-evidence">“{t.vars.evidence_text}”</blockquote>{/if}
-                    {#if t.vars.sources?.length}
-                      <ul class="review-sources">
-                        {#each t.vars.sources as source}
-                          <li><a href={filingHref(`#/doc/${source.document_id}`)}>{source.title || translate("tasks.openDocument")}</a></li>
+                {#if taskErrors[t.id]}<p class="review-error" role="alert">{taskErrors[t.id]}</p>{/if}
+                <div class="choices">
+                  {#each taskChoices(t) as c, i}
+                    <button class="btn sm" class:primary={i === 0} class:danger={/reject|deny|decline/i.test(c)}
+                            disabled={busyTasks.has(t.id) || !!taskErrors[t.id]} onclick={() => resolve(t, c)}>
+                      {#if i === 0}<Icon name="check" size={13} />{/if}{choiceLabel(t, c)}
+                    </button>
+                  {/each}
+                </div>
+                {#if dl}<div class="meta" class:deadline-soon={dl.soon}>{dl.text}</div>{/if}
+                {#if targets.length}
+                  <details class="task-details">
+                    <summary>{translate("tasks.affectedDocuments")}</summary>
+                    <div class="rescan-targets">
+                      <ul>
+                        {#each targets as target (target.id)}
+                          <li><a href={filingHref(`#/doc/${target.id}`)}>{target.title || translate("tasks.documentValue3", { "id": target.id })}</a></li>
                         {/each}
                       </ul>
-                    {/if}
+                      {#if Number(t.vars?.stale_count || 0) > targets.length}
+                        <span>{translate("tasks.andValueMore", { "length": Number(t.vars.stale_count) - targets.length })}</span>
+                      {/if}
+                    </div>
                   </details>
                 {/if}
-              {/if}
-              {#if taskErrors[t.id]}<p class="review-error" role="alert">{taskErrors[t.id]}</p>{/if}
-              <div class="choices">
-                {#each taskChoices(t) as c, i}
-                  <button class="btn sm" class:primary={i === 0} class:danger={/reject|deny|decline/i.test(c)}
-                          disabled={busyTasks.has(t.id) || !!taskErrors[t.id]} onclick={() => resolve(t, c)}>
-                    {#if i === 0}<Icon name="check" size={13} />{/if}{choiceLabel(t, c)}
-                  </button>
-                {/each}
-              </div>
-              {#if dl}<div class="meta" class:deadline-soon={dl.soon}>{dl.text}</div>{/if}
-              {#if targets.length}
-                <details class="task-details">
-                  <summary>{translate("tasks.affectedDocuments")}</summary>
-                  <div class="rescan-targets">
-                    <ul>
-                      {#each targets as target (target.id)}
-                        <li><a href={filingHref(`#/doc/${target.id}`)}>{target.title || translate("tasks.documentValue3", { "id": target.id })}</a></li>
-                      {/each}
-                    </ul>
-                    {#if Number(t.vars?.stale_count || 0) > targets.length}
-                      <span>{translate("tasks.andValueMore", { "length": Number(t.vars.stale_count) - targets.length })}</span>
-                    {/if}
-                  </div>
-                </details>
-              {/if}
               </section>
             {/each}
           </div>
         </article>
       {/each}
     </div>
+  {/if}
+
+  {#if tasks.length === 0 && jobs.length === 0 && intelligence.length === 0}
+    <div class="empty"><Icon name="tasks" size={56} /><b>{translate("tasks.nothingNeedsYou")}</b><span>{translate("tasks.theArchiveIsRunningItself")}</span></div>
   {/if}
 
   {#if canManageJobs && jobs.length}
@@ -537,21 +883,125 @@
   {/if}
 
 {/if}
+  </RuleWorkspace>
+</div>
 
 <style>
-  .approval-section-title { font-size:.9rem;color:var(--muted);margin:0 0 8px }
-  .approval-grid { display: grid; max-width: 820px; gap: 12px; align-items: start; margin-bottom: 22px; }
-  .approval-grid.approval-grid-many { max-width: none; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .approval-card { min-width: 0; border: 1px solid var(--line); border-radius: 11px; overflow: hidden; background: var(--bg); }
-  .approval-card-header { border-bottom: 1px solid var(--line); background: var(--surface-2); }
-  .approval-card-body { background: var(--bg); }
-  .date-value { display:flex;align-items:center;gap:7px;flex-wrap:wrap }
-  .intelligence-evidence { color: var(--muted); font-size: .78rem; line-height: 1.5; }
-  .evidence-note { margin:0;color:var(--faint);font-size:.7rem }
-  .document-header { display:flex;gap:11px;align-items:center;padding:11px 13px }
+  .approvals-page { width:min(100%,1400px);margin:0 auto }
+  .approvals-error { margin:14px 20px 0 }
+  .review-toolbar { display:flex;align-items:center;justify-content:flex-end;gap:10px;min-width:0 }
+  .review-toolbar button { flex:none }
+  .suggestion-groups-toggle { border-radius:999px }
+  .approval-filters {
+    display:flex;align-items:center;gap:4px;margin:0;padding:0 20px;
+    border-bottom:1px solid var(--line);overflow-x:auto
+  }
+  .approval-filters button {
+    position:relative;flex:none;margin-bottom:-1px;padding:14px 12px;border:0;border-bottom:2px solid transparent;
+    background:transparent;color:var(--muted);font:inherit;font-size:.74rem;font-weight:650;cursor:pointer
+  }
+  .approval-filters button:hover { color:var(--ink) }
+  .approval-filters button.active { border-bottom-color:var(--accent);color:var(--accent) }
+  .review-skeleton { display:grid }
+  .approval-loading-row { padding:24px 28px;border-bottom:1px solid var(--line) }
+  .approval-loading-row:last-child { border-bottom:0 }
+  .approval-loading-row .skel { width:68% }
+  .filtered-empty { margin:0;padding:32px 22px;color:var(--muted);text-align:center }
+  .review-panes { display:grid;grid-template-columns:minmax(0,1fr);width:100%;margin:0 }
+  .review-panes.with-suggestion-groups { grid-template-columns:minmax(0,1fr) 400px }
+  .document-review-pane { min-width:0 }
+  .suggestion-review-pane {
+    min-width:0;border-left:1px solid var(--line);
+    background:color-mix(in srgb,var(--surface-2) 58%,var(--surface))
+  }
+  .pane-heading { display:flex;align-items:center;min-height:40px;padding:9px 28px;border-bottom:1px solid var(--line) }
+  .pane-heading-label { display:flex;align-items:baseline;gap:9px;min-width:0 }
+  .pane-heading h2 { margin:0;color:var(--muted);font-size:.7rem;font-weight:750;letter-spacing:.08em;text-transform:uppercase }
+  .pane-heading span { color:var(--muted);font-size:.68rem }
+  .suggestion-review-hint {
+    margin:12px 14px;padding:10px 12px;border:1px solid var(--line);border-radius:9px;
+    background:color-mix(in srgb,var(--accent) 5%,var(--surface));color:var(--muted);font-size:.72rem;line-height:1.45
+  }
+  .document-review-list { display:block }
+  .suggestion-review-list { display:grid;gap:12px;padding:0 14px 16px }
+  .review-overflow { margin:0;padding:14px 28px;border-top:1px solid var(--line);color:var(--muted);font-size:.72rem }
+  .approval-section-title { margin:20px 20px 8px;color:var(--muted);font-size:.9rem }
+  .section-title-row { display:flex;align-items:center;justify-content:space-between;gap:12px;margin:20px 20px 8px }
+  .section-title-row .approval-section-title { margin:0 }
+  .approval-grid { display:grid;max-width:820px;gap:12px;align-items:start;margin:0 20px 22px }
+  .approval-grid.approval-grid-many { max-width:none;grid-template-columns:repeat(2,minmax(0,1fr)) }
+  .approval-card {
+    min-width:0;border:1px solid var(--line);border-radius:11px;overflow:hidden;
+    background:var(--bg);box-shadow:0 10px 24px color-mix(in srgb,var(--ink) 4%,transparent)
+  }
+  .document-review-card {
+    border:0;border-radius:0;background:var(--surface);box-shadow:none
+  }
+  .document-review-card + .document-review-card { border-top:1px solid var(--line) }
+  .approval-card-header { border-bottom:1px solid var(--line);background:var(--surface-2) }
+  .approval-card-body { background:var(--bg) }
+  .document-review-card .approval-card-body { background:var(--surface) }
+  .document-header { display:flex;gap:11px;align-items:center;padding:11px 28px }
   .document-identity { flex:1;min-width:0 }
   .document-identity > a { color:var(--ink);font-weight:650;overflow-wrap:anywhere }
-  .document-meta { display:flex;align-items:center;gap:7px;flex-wrap:wrap;color:var(--muted);font-size:.76rem;margin-top:6px }
+  .document-title-line { display:flex;align-items:baseline;gap:8px;min-width:0 }
+  .document-title-line a { min-width:0;overflow:hidden;color:var(--ink);font-size:.82rem;font-weight:700;text-overflow:ellipsis;white-space:nowrap }
+  .document-title-line > span:not(.filing-pill),.document-meta { color:var(--muted);font-family:"Spline Sans Mono",ui-monospace,monospace;font-size:.61rem }
+  .document-meta { display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:6px }
+  .filing-pill {
+    display:inline-flex;flex:none;max-width:100%;padding:2px 7px;border-radius:999px;border:1px solid var(--line);
+    background:var(--bg);color:var(--muted);font-size:.61rem;font-weight:600;overflow-wrap:anywhere
+  }
+  .document-bulk-actions { display:flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:wrap }
+  .document-decisions { padding:0 28px }
+  .document-decision {
+    display:grid;grid-template-columns:126px minmax(0,1fr) 148px 96px 68px;
+    column-gap:14px;align-items:center
+  }
+  .decision-kind { grid-column:1;color:var(--muted);font-size:.72rem;font-weight:650;line-height:1.35 }
+  .metadata-transition {
+    grid-column:2;display:flex;min-width:0;align-items:baseline;gap:7px;
+    margin:0;font-size:.76rem;line-height:1.4;overflow-wrap:anywhere
+  }
+  .metadata-transition > span:first-child { min-width:0;color:var(--muted);text-decoration:line-through }
+  .metadata-transition > strong { min-width:0;color:var(--ink);font-weight:700 }
+  .transition-arrow { flex:none;color:var(--faint) }
+  .decision-source { grid-column:3;justify-self:start;max-width:100% }
+  .review-rationale-toggle {
+    grid-column:4;justify-self:start;max-width:100%;padding:3px 0;border:0;background:transparent;
+    color:var(--muted);font:inherit;font-size:.7rem;line-height:1.3;overflow:hidden;text-overflow:ellipsis;
+    white-space:nowrap;cursor:pointer
+  }
+  .review-rationale-toggle:hover { color:var(--accent) }
+  .decision-controls { grid-column:5;display:flex;justify-content:flex-end;gap:6px }
+  .decision-button {
+    display:grid;place-items:center;width:31px;height:31px;padding:0;border:1px solid var(--line);
+    border-radius:7px;background:var(--bg);color:var(--muted);cursor:pointer
+  }
+  .decision-button:hover:not(:disabled) { border-color:var(--line-strong);color:var(--ink) }
+  .decision-button.approve { border-color:color-mix(in srgb,var(--accent) 45%,var(--line));color:var(--accent) }
+  .decision-button.approve:hover:not(:disabled) { background:var(--accent);color:white }
+  .decision-button:disabled { opacity:.45;cursor:default }
+  .decision-followup { grid-column:2 / 5;min-width:0;margin-top:8px;color:var(--muted);font-size:.73rem }
+  .review-rationale-content { padding:8px 10px;border-left:2px solid var(--line);background:var(--surface) }
+  .intelligence-evidence { margin:0 0 6px;color:var(--muted);font-size:.78rem;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere }
+  .review-sources { margin:0;padding-left:18px;font-size:.78rem;overflow-wrap:anywhere }
+  .review-error { color:var(--danger);font-size:.75rem;line-height:1.45;overflow-wrap:anywhere }
+  .suggestion-card-header { display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 13px }
+  .suggestion-card-header > div { display:flex;min-width:0;align-items:baseline;gap:9px;overflow:hidden }
+  .suggestion-card-header > div > span { flex:none;color:var(--ink);font-size:.74rem;font-weight:700 }
+  .suggestion-card-header strong { min-width:0;font-size:.76rem;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
+  .suggestion-card-header strong.tag-suggestion { padding:2px 6px;border-radius:5px;background:var(--tint);color:var(--accent);font-family:"Spline Sans Mono",ui-monospace,monospace }
+  .source-pill { display:inline-flex;flex:none;max-width:46%;padding:3px 8px;border:1px solid var(--line);border-radius:999px;color:var(--muted);font-size:.59rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
+  .source-pill.decision-source { max-width:100% }
+  .suggestion-documents { display:grid;padding:4px 13px }
+  .suggestion-documents a { display:flex;align-items:baseline;justify-content:space-between;gap:9px;padding:9px 0;border-bottom:1px solid var(--line);color:var(--ink);font-size:.74rem }
+  .suggestion-documents a strong { min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
+  .suggestion-documents a span { flex:none;color:var(--faint);font-family:"Spline Sans Mono",ui-monospace,monospace;font-size:.58rem }
+  .more-documents { justify-self:start;padding:8px 0;border:0;background:transparent;color:var(--accent);font:inherit;font-size:.68rem;font-weight:650;cursor:pointer }
+  .suggestion-card-actions { display:flex;align-items:center;justify-content:flex-end;gap:7px;padding:10px 13px;border-top:1px solid var(--line);background:var(--surface-2) }
+  .suggestion-error { margin:8px 13px }
+  .date-value { display:flex;align-items:center;gap:7px;flex-wrap:wrap }
   .decision { font-size:1rem;line-height:1.35;overflow-wrap:anywhere }
   .task-thumb {
     display:flex;align-items:center;justify-content:center;flex:0 0 46px;width:46px;aspect-ratio:3 / 4;
@@ -560,9 +1010,8 @@
   .task-thumb img { width:100%;height:100%;object-fit:cover;display:block }
   .task-thumb.blurred img { filter:blur(6px) }
   .task-thumb.placeholder { color:var(--faint) }
-  .group-context { padding:9px 13px;border-bottom:1px solid var(--line);color:var(--muted);font-size:.78rem;line-height:1.45;background:var(--surface) }
   .decision-list { padding:0 13px }
-  .decision-row { padding:15px 0;border-bottom:1px solid var(--line) }
+  .decision-row { padding:13px 0;border-bottom:1px solid var(--line) }
   .decision-row:last-child { border-bottom:0 }
   .operation-header { display:flex;align-items:center;gap:10px;padding:11px 13px }
   .operation-header > span:last-child { display:flex;flex-direction:column;gap:2px }
@@ -577,29 +1026,67 @@
   .rescan-targets ul { margin:5px 0 3px;padding-left:18px }
   .rescan-targets li { margin:3px 0;overflow-wrap:anywhere }
   .rescan-targets a { color:var(--accent) }
-  .review-toolbar p { flex:1;min-width:0;margin:0;text-align:right;font-size:.8rem;color:var(--muted) }
-  .review-toolbar button { flex:none }
-  .metadata-transition { display:flex;align-items:baseline;gap:10px;margin:12px 0;font-size:.84rem;overflow-wrap:anywhere }
-  .metadata-transition > span:first-child { color:var(--muted);min-width:0 }
-  .metadata-transition strong { min-width:0 }
-  .transition-arrow { color:var(--faint);flex:none }
-  .suggestion-source { display:flex;align-items:baseline;gap:10px;margin:8px 0;font-size:.78rem }
-  .suggestion-source span { color:var(--muted) }
-  .review-rationale { margin:8px 0;color:var(--muted);font-size:.78rem }
-  .review-rationale summary { cursor:pointer;width:max-content;max-width:100% }
-  .intelligence-evidence { margin:8px 0 6px;white-space:pre-wrap;overflow-wrap:anywhere }
-  .review-sources { margin:8px 0;padding-left:18px;font-size:.78rem;overflow-wrap:anywhere }
-  .review-error { color:var(--danger);font-size:.8rem;line-height:1.45;overflow-wrap:anywhere }
   .processing-issue { align-items:flex-start;flex-wrap:wrap;cursor:default }
   .processing-issue-copy { display:flex;flex:1 1 260px;min-width:0;flex-direction:column;gap:3px }
   .processing-details { color:var(--muted);font-size:.7rem }
   .processing-details summary { width:max-content;cursor:pointer }
   .processing-details code { display:block;margin-top:6px;color:var(--faint) }
   .processing-details pre { max-width:720px;margin:6px 0 0;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--muted);font:inherit }
-  @media (max-width: 1050px) {
-    .approval-grid.approval-grid-many { grid-template-columns: 1fr; }
+  .approvals-page .index { margin:0 20px 22px }
+  .review-panes.with-suggestion-groups .document-decision { grid-template-columns:126px minmax(0,1fr) 68px }
+  .review-panes.with-suggestion-groups .decision-source,
+  .review-panes.with-suggestion-groups .review-rationale-toggle,
+  .review-panes.with-suggestion-groups .review-rationale-content { display:none }
+  .review-panes.with-suggestion-groups .decision-controls { grid-column:3 }
+  .review-panes.with-suggestion-groups .decision-followup { grid-column:2 }
+
+  @media (max-width:1050px) {
+    .review-panes.with-suggestion-groups { grid-template-columns:1fr }
+    .suggestion-review-pane { border-top:1px solid var(--line);border-left:0 }
+    .review-panes.with-suggestion-groups .document-decision {
+      grid-template-columns:126px minmax(0,1fr) 148px 96px 68px
+    }
+    .review-panes.with-suggestion-groups .decision-source { display:inline-flex }
+    .review-panes.with-suggestion-groups .review-rationale-toggle { display:block }
+    .review-panes.with-suggestion-groups .review-rationale-content { display:block }
+    .review-panes.with-suggestion-groups .decision-controls { grid-column:5 }
+    .review-panes.with-suggestion-groups .decision-followup { grid-column:2 / 5 }
+    .approval-grid.approval-grid-many { grid-template-columns:1fr }
   }
-  @media (max-width: 560px) {
+  @media (max-width:780px) {
+    .document-decision,
+    .review-panes.with-suggestion-groups .document-decision {
+      grid-template-columns:108px minmax(0,1fr) 68px;row-gap:8px
+    }
+    .decision-kind { grid-column:1 }
+    .metadata-transition { grid-column:2 }
+    .decision-source { grid-column:2 }
+    .review-rationale-toggle { grid-column:2 }
+    .decision-controls,
+    .review-panes.with-suggestion-groups .decision-controls { grid-column:3 }
+    .decision-followup,
+    .review-panes.with-suggestion-groups .decision-followup { grid-column:2 }
+  }
+  @media (max-width:620px) {
+    .review-toolbar { width:100%;justify-content:space-between }
+    .approval-filters { padding-inline:8px }
+    .document-header { align-items:flex-start;padding-inline:16px;flex-wrap:wrap }
+    .document-identity { flex:1 1 calc(100% - 60px) }
+    .document-bulk-actions { width:100%;padding-left:57px;justify-content:flex-start }
+    .document-decisions { padding-inline:16px }
+    .document-decision,
+    .review-panes.with-suggestion-groups .document-decision {
+      grid-template-columns:minmax(0,1fr) 68px
+    }
+    .decision-kind { grid-column:1 / -1 }
+    .metadata-transition,.decision-source,.review-rationale-toggle { grid-column:1 }
+    .decision-controls,
+    .review-panes.with-suggestion-groups .decision-controls { grid-column:2 }
+    .decision-followup,
+    .review-panes.with-suggestion-groups .decision-followup { grid-column:1 / -1 }
     .task-thumb { flex-basis:42px;width:42px }
+    .pane-heading { padding-inline:16px }
+    .approval-grid { margin-inline:14px }
+    .section-title-row,.approval-section-title { margin-inline:14px }
   }
 </style>

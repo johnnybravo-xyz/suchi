@@ -154,6 +154,10 @@ input, select, textarea { font: inherit; color: inherit; }
   background: var(--bg);
 }
 .topbar h1 { font-size: 1.05rem; font-weight: 700; }
+.topbar-page-meta {
+  display: block; max-width: 44ch; overflow: hidden; color: var(--muted);
+  font-size: .64rem; font-weight: 500; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap;
+}
 .topbar > .omni { margin-left: auto; }
 .topbar-upload { padding: 8px 16px; }
 

@@ -87,6 +87,8 @@ func TestListTasksRejectsAmbiguousOrMalformedFilters(t *testing.T) {
 		"/api/tasks/?state=waiting",
 		"/api/tasks/?limit=none",
 		"/api/tasks/?limit=0",
+		"/api/tasks/?limit=all",
+		"/api/tasks/?include=jobs&limit=all",
 		"/api/tasks/?doc_id=none",
 		"/api/tasks/?doc_id=-1",
 		"/api/tasks/?include=both",

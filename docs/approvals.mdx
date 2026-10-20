@@ -26,6 +26,39 @@ user remain independent. Suchi checks the current document, matching text, field
 generations, access, and reviewer credentials before recording or applying a
 decision.
 
+### Reviewing suggestions
+
+The **Approvals** screen uses the same centered workspace card as Automations,
+Calendar, and Views. Its header keeps the page description, refresh action, and
+**Show suggestion groups** control together; the **All**, **Tags**, **Filing**,
+and **Fields** tabs are the only suggestion counts.
+
+The screen opens with one **By document** table, keeping each document's current
+and proposed values together. Document strips and hairlines provide the
+hierarchy without nested cards. Each decision reads left to right as one change:
+the struck current value, an arrow, and the emphasized new value. Rows share
+fixed action, change, reason, similar-document, and decision columns so
+different suggestion types retain the same edges. The reason is a quiet chip;
+supporting documents use a compact **_n_ similar** disclosure.
+
+Choose **Show suggestion groups** to open a 400-pixel sidecar inside the same
+workspace card. The header control becomes **Hide suggestion groups** without
+moving, and the **By document** and **By suggestion** captions appear only while
+both projections are visible. Each projection shows at most 100 entries and
+states how many remain; settling visible entries brings the next queued entries
+into view. On narrower screens the sidecar stacks after the document table. The
+workspace is capped at 1,400 pixels so the change sentence and its actions
+remain connected on very wide displays.
+
+Applying or dismissing a decision updates both views immediately. Document
+strips offer per-decision controls plus **Approve** and **Dismiss** in the strip
+header; documents with several decisions use **Approve all** and **Dismiss all**.
+Suggestion cards can apply or dismiss the grouped decision for every listed
+document. Expand a grouped card's document list before a bulk action when you
+need to inspect every affected item. A partially failed bulk action removes
+only completed decisions, keeps failures visible, and requires a refresh before
+retrying.
+
 ## Model
 
 - A **definition** stores a versioned JSON state machine under a stable slug.
@@ -162,13 +195,15 @@ shipped `document-change` definition when review is required. The task is
 assigned to the document owner. By default, **Apply when confident** lets
 eligible model and local archive changes apply automatically. Choose **Review
 first** to check every valid inferred change, even at 100% model confidence.
-Below-threshold or otherwise review-required changes still appear here. The card
-leads with current and suggested values plus **Why this was suggested**.
-**How this was suggested** expands model confidence and who suggested it. An
-automation-question card names the automation and suggested effect, not the
-discarded question/answer transcript. Companion presents title, filing-category
-and tag suggestions from this same feed; other document-change fields, including
-typed custom fields, remain available in the web review surface.
+Below-threshold or otherwise review-required changes still appear here. A
+document row states the current-to-proposed change once, followed by its reason
+chip and any supporting-document disclosure. **How this was suggested** expands
+model confidence and who suggested it on date-review cards. An
+automation-question card names the automation as the reason for its proposed
+fixed metadata effect, not the discarded question/answer transcript. Companion
+presents title, filing-category and tag suggestions from this same feed; other
+document-change fields, including typed custom fields, remain available in the
+web review surface.
 
 A title proposal is eligible only while the current title is automatically
 owned. Accepting it makes the resulting title human-owned. A person renaming

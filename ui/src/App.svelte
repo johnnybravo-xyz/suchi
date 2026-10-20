@@ -621,7 +621,12 @@
                 aria-controls="primary-navigation" aria-expanded={mobileNavOpen}>
           <Icon name={mobileNavOpen ? 'x' : 'menu'} size={17} />
         </button>
-        <h1>{pageTitle}{#if scopeReady && systems.introduced}<small style="display:block;font-size:.68rem;font-weight:400;max-width:28ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{systems.code} · {systems.results.find(item => item.code === systems.code)?.name}</small>{/if}</h1>
+        <h1 aria-label={pageTitle}>
+          {pageTitle}
+          {#if page !== 'tasks' && scopeReady && systems.introduced}
+            <small class="topbar-page-meta">{systems.code} · {systems.results.find(item => item.code === systems.code)?.name}</small>
+          {/if}
+        </h1>
         {#if scopeReady}<Omnibox pages={session.user?.role === 'admin'
           ? [...PAGES, { href: '#/settings?tab=archive', label: translate("app.archiveConfiguration"), ico: 'settings' }, { href: '#/settings?tab=archive&section=users', label: translate("app.people"), ico: 'shield' }, { href: '#/settings?tab=archive&section=metadata', label: translate("app.metadata"), ico: 'tag' }]
           : PAGES} commands={COMMANDS} canAsk={chatEnabled && canUseArchiveChat} onAsk={openArchiveChat} />{/if}

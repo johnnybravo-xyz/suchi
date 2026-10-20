@@ -80,8 +80,7 @@ type ApprovalTask struct {
 // for both machine work and its own inbox.
 //
 // /api/tasks/ deliberately does NOT wear the DRF pagination envelope —
-// it's a live-poll queue endpoint, not a paginated list. Callers ask
-// for the top N via ?limit and re-poll; there's no next-page semantics.
+// it's a live-poll queue endpoint. Callers ask for a bounded top N via ?limit.
 type TasksResponse struct {
 	Counts        map[string]int `json:"counts"`
 	Results       []Task         `json:"results"`

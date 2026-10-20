@@ -178,21 +178,41 @@ Use semantic controls, visible focus, icon labels and stable responsive layouts.
 Account-email controls follow the same semantic rule: native labels and inputs,
 visible focus, a trapped modal, live error/status regions, and layouts with no
 horizontal overflow at desktop, Pixel 7 width, or enlarged root text.
-Approval cards show decision context, not internal IDs; rescan document links live
-under **Affected documents**. [Web app](/web-app) owns remaining interaction detail.
 
-`Tasks.svelte` and `lib/intelligence.js` consume bounded server projections:
-proposed/current values, reasons, source freshness and permitted known actions.
-Producer/score details are disclosures, not authority badges. Ask-derived
-metadata cards use the projected automation name and fixed effect, including
-typed custom fields; they never need the classifier question, answer, evidence
-quote, action mapping, or destination IDs. Hidden supporters are omitted
-server-side; sensitive quotes require local Reveal. Unknown actions stay
-read-only, stale dates cannot be accepted, and superseded metadata reviews are
-canceled server-side instead of becoming a special card state. Metadata
-resolution reports queued work rather than claiming the field changed. Date
-mutation results clear only successful rows; failures remain distinguishable
-and refreshable.
+`Tasks.svelte` presents the document projection of open metadata decisions by
+default, grouped by `doc_id`. The single queue is centered with a 1,400-pixel
+maximum width. Each document decision uses one five-column row: fixed action,
+flexible current-to-proposed change, reason chip, compact supporting-document
+disclosure, and decision controls. The current value is struck, the proposed
+value is emphasized, and the proposal is not repeated elsewhere in the row.
+Long values wrap inside the change column without moving the remaining edges.
+
+The user can progressively disclose a synchronized suggestion projection
+grouped by field, proposed value, projected source, and automation identity; its
+explanation exists only while that projection is visible. Above the responsive
+breakpoint the two projections use side-by-side columns and the left rows
+temporarily compact their reason and supporting-document columns. Below it they
+stack document-first and the complete document context returns.
+Completing an individual or sequential bulk action removes each successful task
+from the shared array, so counts and both projections change without a reload.
+Failed tasks retain their server error and stay disabled until refresh. Filters
+apply to metadata tasks only; date review, workflow decisions, and processing
+recovery remain independent sections.
+
+Approval cards show decision context, not internal IDs; rescan document links
+live under **Affected documents**. `Tasks.svelte` and `lib/intelligence.js`
+consume bounded server projections: proposed/current values, reasons, source
+freshness and permitted known actions. Producer/score details are disclosures,
+not authority badges. Ask-derived metadata cards use the projected automation
+name and fixed effect, including typed custom fields; they never need the
+classifier question, answer, evidence quote, action mapping, or destination IDs.
+Hidden supporters are omitted server-side; sensitive quotes require local
+Reveal. Unknown actions stay read-only, stale dates cannot be accepted, and
+superseded metadata reviews are canceled server-side instead of becoming a
+special card state. Metadata resolution reports queued work rather than claiming
+the field changed. Date mutation results clear only successful rows; failures
+remain distinguishable and refreshable. [Web app](/web-app) owns remaining
+interaction detail.
 
 `Calendar.svelte` preserves accepted facts and recognizes reviewed, automatic
 and previously accepted legacy values. Automatic dates are unlabeled; the other

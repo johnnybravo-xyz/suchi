@@ -2076,10 +2076,10 @@ Query parameters:
 | Param     | Default | Purpose                                                                                                                                                           |
 | --------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `state`   | (unset) | Filter to one state: `pending`, `running`, `done`, `dead`. Default hides `done` because a healthy instance drowns the response in completions.                    |
-| `limit`   | `50`    | Max rows to return. Capped at `200`.                                                                                                                              |
+| `limit`   | `50`    | Max rows to return. Positive integers are capped at `200`.                                                                                                       |
 | `doc_id`  | (unset) | Filter to the jobs for one document.                                                                                                                              |
 | `kind`    | (unset) | Literal prefix filter on the internal job kind.                                                                                                                  |
-| `include` | (both)  | `jobs` returns only the durable outbox; `approvals` returns only human approvals. Default returns both. |
+| `include` | (both)  | `jobs` returns only the durable outbox; `approvals` returns only human approvals. Default returns both.                                                          |
 
 Malformed, non-positive, duplicated, or unsupported filter values return
 `400 bad_task_filter`; they never silently broaden the result. Job counts use

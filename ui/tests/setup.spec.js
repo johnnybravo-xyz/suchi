@@ -730,7 +730,9 @@ async function mockAPI(page, options = {}) {
       inbox_count: options.inboxCount ?? 0,
       pending_approvals: options.pendingApprovals ?? 0,
       pending_intelligence: options.pendingIntelligence ?? 0,
-      dead_jobs: options.deadJobs ?? 0,
+      dead_jobs: options.deadJobsCount ?? options.deadJobs?.length ?? 0,
+      processing_reading: options.processingReading ?? 0,
+      processing_classifying: options.processingClassifying ?? 0,
       ingested_7d: options.ingested7d ?? 0,
     }
     else if (path === '/api/jd/categories/') body = {
@@ -1090,8 +1092,10 @@ async function mockAPI(page, options = {}) {
       ? { token: 'new-token-secret', name: 'Readonly tablet', scopes: 'documents:read' }
       : { results: [{ id: 1, name: 'Archive search', scopes: 'documents:read', created_at: 1780100000 }] }
     else if (path === '/api/tasks/') {
-      const include = new URL(request.url()).searchParams.get('include')
+      const taskQuery = new URL(request.url()).searchParams
+      const include = taskQuery.get('include')
       options.taskIncludes?.push(include)
+      options.taskLimits?.push(taskQuery.get('limit'))
       body = include === 'approvals' ? {
         counts: { approvals_open: options.approvalTasks?.length || 2 },
         results: [],
@@ -5304,47 +5308,104 @@ test('route changes cancel and clear an open mobile pairing code', async ({ page
   await expect(page.locator('#pairing-link')).toHaveCount(0)
 })
 
-test('groups metadata reviews by document', async ({ page }) => {
+test('starts with the document table and reveals synchronized suggestion groups inside the workspace', async ({ page }) => {
   await mockAPI(page)
 
   await page.goto('/#/tasks')
+  const workspace = page.locator('.approvals-workspace')
+  const suggestionPane = page.locator('.suggestion-review-pane')
+  await expect(workspace).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'By document' })).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'By suggestion' })).toHaveCount(0)
+  await expect(page.locator('.document-review-card')).toHaveCount(1)
+  await expect(page.locator('.suggestion-card')).toHaveCount(0)
+  await expect(page.locator('.suggestion-review-hint')).toHaveCount(0)
+  const showSuggestionGroups = page.getByRole('button', { name: 'Show suggestion groups · 2', exact: true })
+  await expect(workspace.locator('.rule-workspace-header').getByRole('button', { name: 'Show suggestion groups · 2' })).toBeVisible()
+  await expect(showSuggestionGroups).toHaveAttribute('aria-expanded', 'false')
+  await showSuggestionGroups.click()
+  await expect(page.getByRole('heading', { name: 'By document' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'By suggestion' })).toBeVisible()
+  await expect(page.locator('.suggestion-card')).toHaveCount(2)
+  await expect(page.getByText('The same 2 suggestions, grouped the other way. Settle a whole group at once; both sides update together.', { exact: true })).toBeVisible()
+  const hideSuggestionGroups = page.getByRole('button', { name: 'Hide suggestion groups', exact: true })
+  await expect(hideSuggestionGroups).toBeFocused()
+  await expect(workspace.locator('.rule-workspace-header').getByRole('button', { name: 'Hide suggestion groups' })).toBeVisible()
+  await expect(suggestionPane.getByRole('button', { name: 'Hide suggestion groups' })).toHaveCount(0)
   await expect(page.getByRole('link', { name: 'HDFC receipt.pdf', exact: true })).toBeVisible()
   await expect(page.getByText('24 Receipts', { exact: true })).toBeVisible()
-  await expect(page.getByText('2 suggestions')).toBeVisible()
-  const decisions = page.locator('.decision-row')
+  const decisions = page.locator('.document-decision')
   await expect(decisions).toHaveCount(2)
   await expect(decisions.getByRole('button', { name: 'Add tag', exact: true })).toBeVisible()
   await expect(decisions.getByRole('button', { name: 'Set correspondent', exact: true })).toBeVisible()
   await expect(page.getByText('document-change', { exact: true })).toHaveCount(0)
   await expect(page.getByText('Details', { exact: true })).toHaveCount(0)
   await expect(page.getByText('user:1', { exact: true })).toHaveCount(0)
-  if ((page.viewportSize()?.width || 0) > 1050) {
-    expect(Math.round((await page.locator('.approval-grid[data-approval-kind="workflow"]').boundingBox()).width)).toBeLessThanOrEqual(820)
-  }
 })
 
-test('starts Approvals at the content edge with one title and places it after Inbox', async ({ page }) => {
-  await mockAPI(page)
+test('uses the standard capped page card and requests the queue for bounded projections', async ({ page }) => {
+  const taskLimits = []
+  await mockAPI(page, {
+    capabilities: ['mailboxes', 'archive_intelligence'],
+    pendingApprovals: 5,
+    pendingIntelligence: 2,
+    processingReading: 1,
+    processingClassifying: 1,
+    deadJobsCount: 3,
+    taskLimits,
+  })
   await page.goto('/#/tasks')
 
-  const card = page.locator('.approval-card').first()
-  await expect(card).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Approvals', exact: true })).toHaveCount(1)
-  const toolbar = page.getByRole('group', { name: 'Approval options' })
-  await expect(toolbar.locator(':scope > *').first()).toHaveAccessibleName('Refresh')
-  const toolbarBeforeCard = await page.evaluate(() => {
-    const toolbarNode = document.querySelector('.review-toolbar')
-    const cardNode = document.querySelector('.approval-card')
-    return Boolean(toolbarNode.compareDocumentPosition(cardNode) & Node.DOCUMENT_POSITION_FOLLOWING)
-  })
-  expect(toolbarBeforeCard).toBe(true)
+  const workspace = page.locator('.approvals-workspace')
+  const workspaceHeader = workspace.locator('.rule-workspace-header')
+  await expect(workspace).toBeVisible()
+  await expect(workspaceHeader.getByRole('heading', { name: 'Approvals', exact: true })).toBeVisible()
+  await expect(workspaceHeader.getByText('Suggested changes to your documents, waiting for a yes.', { exact: true })).toBeVisible()
+  await expect(page.locator('.topbar .topbar-page-meta')).toHaveCount(0)
+  await expect(page.locator('.review-summary')).toHaveCount(0)
+  await expect(workspace.getByRole('group', { name: 'Suggestion filters' })).toBeVisible()
+  await expect(workspaceHeader.getByRole('button', { name: 'Refresh', exact: true })).toBeVisible()
+  const box = await workspace.boundingBox()
+  expect(box.width).toBeLessThanOrEqual(1401)
+  expect(taskLimits).toContain('200')
 
   const navigation = await page.locator('#primary-navigation .nav > a').evaluateAll(links =>
     links.map(link => link.getAttribute('href')))
   const inboxIndex = navigation.findIndex(href => href?.includes('#/inbox'))
   const approvalsIndex = navigation.findIndex(href => href?.includes('#/tasks'))
   expect(approvalsIndex).toBe(inboxIndex + 1)
-  await expect(page.getByRole('button', { name: 'Refresh', exact: true })).toBeVisible()
+})
+
+test('shows at most 100 document and suggestion-group entries', async ({ page }) => {
+  const approvalTasks = Array.from({ length: 102 }, (_, index) => ({
+    id: 300 + index,
+    run_id: 600 + index,
+    approval_id: 1,
+    approval_name: 'document-change',
+    doc_id: 1000 + index,
+    doc_title: `Queued document ${index + 1}`,
+    choices: ['apply', 'reject'],
+    status: 'open',
+    state_key: 'review',
+    assignee: 'user:1',
+    created_at: 1780100000 - index,
+    vars: {
+      field: 'tag',
+      current_value: '',
+      proposed_value: `queued-${index + 1}`,
+      source: 'archive',
+      source_current: true,
+      review_conflict: false,
+    },
+  }))
+  await mockAPI(page, { approvalTasks })
+  await page.goto('/#/tasks')
+
+  await expect(page.locator('.document-review-card')).toHaveCount(100)
+  await expect(page.getByText('2 more documents below', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Show suggestion groups · 102', exact: true }).click()
+  await expect(page.locator('.suggestion-card')).toHaveCount(100)
+  await expect(page.getByText('2 more suggestion groups below', { exact: true })).toBeVisible()
 })
 
 test('keeps filing reviews compact and explains sources on demand', async ({ page }) => {
@@ -5370,16 +5431,21 @@ test('keeps filing reviews compact and explains sources on demand', async ({ pag
 
   await page.goto('/#/tasks')
   const review = page.locator('.decision-row')
-  await expect(review.locator('.metadata-transition')).toHaveText(/Inbox\s*→\s*Receipts/)
+  const transition = review.locator('.metadata-transition')
+  await expect(transition).toHaveText(/Inbox\s*→\s*Receipts/)
+  await expect(transition.locator('span').first()).toHaveText('Inbox')
+  await expect(transition.locator('strong')).toHaveText('Receipts')
+  expect(await transition.locator('span').first().evaluate(node => getComputedStyle(node).textDecorationLine)).toContain('line-through')
+  await expect(review.getByText('Receipts', { exact: true })).toHaveCount(1)
   await expect(review.getByText('Current', { exact: true })).toHaveCount(0)
   await expect(review.getByText('Proposed', { exact: true })).toHaveCount(0)
-
-  await expect(review.getByText('Why this was suggested', { exact: true })).toBeVisible()
-  await expect(review.getByText('Archive match', { exact: true })).toBeVisible()
-  const rationale = review.getByText('Similar documents (2)', { exact: true })
-  await expect(rationale).toBeVisible()
-  await expect(review.getByRole('link', { name: 'Swiggy Tax Invoice' })).not.toBeVisible()
+  await expect(review.getByText('Why this was suggested', { exact: true })).toHaveCount(0)
+  await expect(review.getByText('archive match', { exact: true })).toBeVisible()
+  const rationale = review.getByRole('button', { name: '2 similar', exact: true })
+  await expect(rationale).toHaveAttribute('aria-expanded', 'false')
+  await expect(review.getByRole('link', { name: 'Swiggy Tax Invoice' })).toHaveCount(0)
   await rationale.click()
+  await expect(rationale).toHaveAttribute('aria-expanded', 'true')
   await expect(review.getByRole('link', { name: 'Swiggy Tax Invoice' })).toBeVisible()
   await expect(review.getByRole('link', { name: 'H&M Online Shopping Tax Invoice' })).toBeVisible()
   await expect(review.getByRole('button', { name: 'File document', exact: true })).toBeVisible()
@@ -5406,7 +5472,9 @@ test('labels automation answer reviews without retaining the model transcript', 
 
   await page.goto('/#/tasks')
   const review = page.locator('.decision-row')
-  await expect(review.getByText('Warranty proof proposes setting “Warranty status” to “Yes”.', { exact: true })).toBeVisible()
+  await expect(review.getByText('No', { exact: true })).toBeVisible()
+  await expect(review.getByText('Yes', { exact: true })).toBeVisible()
+  await expect(review.getByText('Warranty proof proposes setting “Warranty status” to “Yes”.', { exact: true })).toHaveCount(0)
   await expect(review.getByText('Automation · Warranty proof', { exact: true })).toBeVisible()
   await expect(review.getByRole('button', { name: 'Set custom field', exact: true })).toBeVisible()
   await expect(review.getByText(/Is this valid warranty proof/)).toHaveCount(0)
@@ -5476,32 +5544,133 @@ test('keeps stale metadata visible, unknown actions read-only, and queued decisi
   await expect(unknown.getByRole('button')).toHaveCount(0)
 })
 
-test('lays out more than two workflow approvals in the shared responsive grid', async ({ page }, testInfo) => {
-  const approvalTasks = [17, 18, 19].map((docID, index) => ({
+test('keeps document and suggestion queues synchronized and responsive', async ({ page }, testInfo) => {
+  const resolutions = []
+  const approvalTasks = [17, 18, 19, 20].map((docID, index) => ({
     id: 90 + index, run_id: 30 + index, approval_id: 8, approval_name: 'document-change',
     doc_id: docID, doc_title: `Review document ${index + 1}.pdf`, doc_has_thumbnail: false,
     state_key: 'review', assignee: 'user:1', prompt: 'Review suggested document metadata',
     choices: ['apply', 'reject'], status: 'open', created_at: 1780100000,
-    vars: { field: 'tag', proposed_value: `review-${index + 1}`, current_value: '', confidence: 0.74, source: 'archive', reason: 'review_first', source_current: true, review_conflict: false },
+    vars: {
+      field: 'tag', proposed_value: 'reviewed', current_value: '', confidence: 0.74,
+      source: 'archive', sources: [{ document_id: 70, title: 'Similar review' }],
+      reason: 'review_first', source_current: true, review_conflict: false,
+    },
   }))
   await mockAPI(page, { approvalTasks })
+  await page.route('**/api/approvals/tasks/*/resolve', async route => {
+    const match = new URL(route.request().url()).pathname.match(/\/tasks\/(\d+)\/resolve$/)
+    resolutions.push({ id: Number(match[1]), ...route.request().postDataJSON() })
+    await route.fulfill({ status: 204 })
+  })
+  if (testInfo.project.name === 'desktop') await page.setViewportSize({ width: 1900, height: 900 })
   await page.goto('/#/tasks')
 
-  const grid = page.locator('.approval-grid[data-approval-kind="workflow"]')
-  await expect(grid).toHaveClass(/approval-grid-many/)
-  await expect(grid.locator('.approval-card')).toHaveCount(3)
-  const boxes = await grid.locator('.approval-card').evaluateAll(cards => cards.map(card => {
-    const box = card.getBoundingClientRect()
-    return { x: Math.round(box.x), width: Math.round(box.width) }
+  const panes = page.locator('.review-panes')
+  const documentPane = page.locator('.document-review-pane')
+  const suggestionPane = page.locator('.suggestion-review-pane')
+  const showSuggestionGroups = page.getByRole('button', { name: 'Show suggestion groups · 1', exact: true })
+  await expect(panes).toBeVisible()
+  await expect(documentPane.locator('.document-review-card')).toHaveCount(4)
+  await expect(suggestionPane).toHaveCount(0)
+  await expect(page.locator('.suggestion-review-hint')).toHaveCount(0)
+  await expect(showSuggestionGroups).toHaveAttribute('aria-expanded', 'false')
+  if (testInfo.project.name === 'desktop') {
+    const workspaceBox = await page.locator('.approvals-workspace').boundingBox()
+    expect(workspaceBox.width).toBeLessThanOrEqual(1401)
+    const columnLefts = await documentPane.locator('.document-decision').evaluateAll(rows => rows.map(row =>
+      ['.decision-kind', '.metadata-transition', '.decision-source', '.review-rationale-toggle', '.decision-controls']
+        .map(selector => Math.round(row.querySelector(selector).getBoundingClientRect().left))))
+    expect(columnLefts[0]).toEqual([...columnLefts[0]].sort((a, b) => a - b))
+    expect(new Set(columnLefts[0]).size).toBe(5)
+    for (const row of columnLefts.slice(1)) expect(row).toEqual(columnLefts[0])
+  }
+  await showSuggestionGroups.click()
+  await expect(suggestionPane.locator('.suggestion-card')).toHaveCount(1)
+  await expect(page.getByText('The same 4 suggestions, grouped the other way. Settle a whole group at once; both sides update together.', { exact: true })).toBeVisible()
+  const hideSuggestionGroups = page.getByRole('button', { name: 'Hide suggestion groups', exact: true })
+  await expect(hideSuggestionGroups).toBeFocused()
+  await expect(page.locator('.rule-workspace-header').getByRole('button', { name: 'Hide suggestion groups' })).toBeVisible()
+  await expect(suggestionPane.getByRole('button', { name: 'Hide suggestion groups' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'All 4', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('button', { name: 'Tags 4' })).toBeVisible()
+  await page.getByRole('button', { name: 'Fields 0' }).click()
+  await expect(page.getByText('No suggestions match this filter.')).toBeVisible()
+  await page.getByRole('button', { name: 'Tags 4' }).click()
+
+  const paneBoxes = await panes.locator(':scope > section').evaluateAll(sections => sections.map(section => {
+    const box = section.getBoundingClientRect()
+    return { x: Math.round(box.x), y: Math.round(box.y), width: Math.round(box.width) }
   }))
   if ((page.viewportSize()?.width || 0) > 1050) {
-    expect(boxes[0].x).not.toBe(boxes[1].x)
-    expect(Math.abs(boxes[0].width - boxes[1].width)).toBeLessThanOrEqual(1)
+    expect(paneBoxes[0].x).toBeLessThan(paneBoxes[1].x)
+    expect(paneBoxes[0].y).toBe(paneBoxes[1].y)
+    expect(paneBoxes[1].width).toBeGreaterThanOrEqual(399)
+    expect(paneBoxes[1].width).toBeLessThanOrEqual(401)
   } else {
-    expect(new Set(boxes.map(box => box.x)).size).toBe(1)
+    expect(paneBoxes[0].x).toBe(paneBoxes[1].x)
+    expect(paneBoxes[0].y).toBeLessThan(paneBoxes[1].y)
+  }
+  if (testInfo.project.name === 'desktop') {
+    await expect(documentPane.locator('.decision-source').first()).not.toBeVisible()
+    await expect(documentPane.locator('.review-rationale-toggle').first()).not.toBeVisible()
   }
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
-  await page.screenshot({ path: `/tmp/suchi-workflow-approvals-${testInfo.project.name}.png`, fullPage: true })
+  await hideSuggestionGroups.click()
+  await expect(suggestionPane).toHaveCount(0)
+  await expect(page.locator('.suggestion-review-hint')).toHaveCount(0)
+  await expect(showSuggestionGroups).toBeFocused()
+  await showSuggestionGroups.click()
+  await expect(suggestionPane).toBeVisible()
+  await page.screenshot({ path: `/tmp/suchi-synchronized-approvals-${testInfo.project.name}.png`, fullPage: true })
+  await suggestionPane.getByRole('button', { name: '+ 1 more documents', exact: true }).click()
+  await expect(suggestionPane.locator('.suggestion-documents a')).toHaveCount(4)
+
+  await suggestionPane.getByRole('button', { name: 'Apply to all 4' }).click()
+  await expect.poll(() => resolutions).toEqual([
+    { id: 90, choice: 'apply' },
+    { id: 91, choice: 'apply' },
+    { id: 92, choice: 'apply' },
+    { id: 93, choice: 'apply' },
+  ])
+  await expect(page.locator('.review-toolbar [role="status"]')).toHaveCount(0)
+  await expect(page.getByText('Nothing needs you.')).toBeVisible()
+  await expect(documentPane).toHaveCount(0)
+  await expect(suggestionPane).toHaveCount(0)
+})
+
+test('keeps failed bulk suggestions while removing successful decisions from both queues', async ({ page }) => {
+  const resolutions = []
+  const approvalTasks = [31, 32, 33].map((docID, index) => ({
+    id: 120 + index, run_id: 50 + index, approval_id: 9, approval_name: 'document-change',
+    doc_id: docID, doc_title: `Bulk review ${index + 1}.pdf`, doc_has_thumbnail: false,
+    state_key: 'review', assignee: 'user:1', prompt: 'Review suggested document metadata',
+    choices: ['apply', 'reject'], status: 'open', created_at: 1780100000,
+    vars: { field: 'tag', proposed_value: 'tax', current_value: '', confidence: 0.8, source: 'archive', reason: 'review_first', source_current: true, review_conflict: false },
+  }))
+  await mockAPI(page, { approvalTasks })
+  await page.route('**/api/approvals/tasks/*/resolve', async route => {
+    const id = Number(new URL(route.request().url()).pathname.match(/\/tasks\/(\d+)\/resolve$/)[1])
+    resolutions.push(id)
+    if (id === 121) {
+      await route.fulfill({ status: 409, json: { code: 'stale_proposal', error: 'Nothing was applied because the document changed.' } })
+      return
+    }
+    await route.fulfill({ status: 204 })
+  })
+  await page.goto('/#/tasks')
+
+  await page.getByRole('button', { name: 'Show suggestion groups · 1', exact: true }).click()
+  await page.locator('.suggestion-review-pane').getByRole('button', { name: 'Apply to all 3' }).click()
+  await expect.poll(() => resolutions).toEqual([120, 121, 122])
+  await expect(page.locator('.document-review-card')).toHaveCount(1)
+  await expect(page.locator('.suggestion-card')).toHaveCount(1)
+  await expect(page.getByRole('link', { name: 'Bulk review 1.pdf', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('link', { name: 'Bulk review 3.pdf', exact: true })).toHaveCount(0)
+  await expect(page.locator('.document-review-card').getByRole('link', { name: 'Bulk review 2.pdf', exact: true })).toBeVisible()
+  await expect(page.locator('.suggestion-card').getByText('Bulk review 2.pdf', { exact: true })).toBeVisible()
+  await expect(page.locator('.document-review-card').getByRole('alert')).toContainText('Nothing was applied')
+  await expect(page.getByRole('button', { name: 'Apply to all 1' })).toBeDisabled()
 })
 
 test('shows affected document titles in rescan details', async ({ page }) => {
@@ -6101,7 +6270,7 @@ test('offers only safe date actions and preserves failed date decisions for revi
   await expect(candidates.nth(0).getByRole('alert')).toContainText('Nothing was applied')
   await expect(candidates).toHaveCount(3)
   await expect(candidates.nth(0).getByRole('button', { name: 'Add to Calendar' })).toBeDisabled()
-  await expect(page.locator('.review-toolbar [role="status"]')).toContainText('No dates were changed')
+  await expect(page.locator('.toast')).toContainText('No dates were changed')
 })
 
 test('keeps automatic dates quiet and labels reviewed and previously accepted history', async ({ page }) => {

@@ -37,6 +37,14 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Changed
 
+- Approvals now use the same centered workspace card as Automations, Calendar,
+  and Views. The card header owns the description, refresh action, and stable
+  suggestion-group toggle; count tabs sit directly below it. Document reviews
+  use edge-to-edge strips and aligned old-to-new rows instead of nested cards.
+  Opening **By suggestion** adds a 400-pixel sidecar inside the card. Both
+  projections show at most 100 entries, report the remainder, stay synchronized,
+  and stack document-first on narrow screens.
+
 - Saved decryption passwords now separate their editable label, last-used date,
   and most recently unlocked document into labeled columns. Labels remain plain
   text until the pencil action opens inline editing.
