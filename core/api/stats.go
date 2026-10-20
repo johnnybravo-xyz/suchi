@@ -17,6 +17,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
 )
 
 // StatsResponse is the dashboard's one-round-trip payload. Every count
@@ -32,6 +33,10 @@ type StatsResponse struct {
 	PendingIntelligence int64 `json:"pending_intelligence"`
 	DeadJobs            int64 `json:"dead_jobs"`
 	Ingested7d          int64 `json:"ingested_7d"`
+	// Visible live documents with unfinished pipeline work: reading covers
+	// extraction/OCR, classifying covers the optional model step.
+	ProcessingReading     int64 `json:"processing_reading"`
+	ProcessingClassifying int64 `json:"processing_classifying"`
 }
 
 // GetStats serves GET /api/stats/. Requires documents:read.
@@ -108,6 +113,16 @@ func (s *Server) GetStats(w http.ResponseWriter, r *http.Request) {
 			s.serverErr(w, "stats.inbox", err)
 			return
 		}
+	}
+	if err := s.DB.Read.QueryRowContext(ctx, `
+		SELECT COUNT(DISTINCT CASE WHEN j.kind = ? THEN d.id END),
+		       COUNT(DISTINCT CASE WHEN j.kind = ? THEN d.id END)
+		FROM jobs j JOIN documents d ON d.id = j.doc_id
+		WHERE j.state IN ('pending', 'running') AND j.kind IN (?, ?) AND `+docWhere,
+		append([]any{postingest.Kind, postingest.PostClassifyKind, postingest.Kind, postingest.PostClassifyKind}, docArgs...)...,
+	).Scan(&out.ProcessingReading, &out.ProcessingClassifying); err != nil {
+		s.serverErr(w, "stats.processing", err)
+		return
 	}
 
 	pendingApprovals, err := s.countVisibleApprovalTasks(ctx, p.UserID, p.Role, "open", "claimed")

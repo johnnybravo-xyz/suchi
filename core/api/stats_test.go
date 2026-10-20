@@ -200,6 +200,44 @@ func TestStats_DeadJobsAdminOnly(t *testing.T) {
 	}
 }
 
+func TestStats_ProcessingCountsVisibleUnfinishedDocuments(t *testing.T) {
+	s := newStatsServer(t)
+	now := time.Now().Unix()
+	cat := seedStatsJDInbox(t, s.DB)
+	reading := seedStatsDoc(t, s.DB, 2, "sha_reading", "reading", cat, false, now)
+	retrying := seedStatsDoc(t, s.DB, 2, "sha_retrying", "retrying", cat, false, now)
+	classifying := seedStatsDoc(t, s.DB, 2, "sha_classifying", "classifying", cat, false, now)
+	finished := seedStatsDoc(t, s.DB, 2, "sha_finished", "finished", cat, false, now)
+	trashed := seedStatsDoc(t, s.DB, 2, "sha_trashed", "trashed", cat, true, now)
+	hidden := seedStatsDoc(t, s.DB, 3, "sha_hidden", "hidden", cat, false, now)
+	if _, err := s.DB.Write.ExecContext(context.Background(), `
+		UPDATE users SET role = 'member' WHERE id IN (2, 3);
+		INSERT INTO jobs(system_id, doc_id, kind, state, next_run_at, created_at, updated_at)
+		VALUES (1, ?, 'post-ingest', 'running', 0, 0, 0),
+		       (1, ?, 'post-ingest', 'pending', 0, 0, 0),
+		       (1, ?, 'post-ingest', 'pending', 0, 0, 0),
+		       (1, ?, 'post-ingest', 'done', 0, 0, 0),
+		       (1, ?, 'post-classify', 'pending', 0, 0, 0),
+		       (1, ?, 'post-ingest', 'dead', 0, 0, 0),
+		       (1, ?, 'render', 'pending', 0, 0, 0),
+		       (1, ?, 'post-ingest', 'pending', 0, 0, 0),
+		       (1, ?, 'post-ingest', 'pending', 0, 0, 0)
+	`, reading, retrying, retrying, classifying, classifying, finished, finished, trashed, hidden); err != nil {
+		t.Fatal(err)
+	}
+
+	code, member := doStats(t, s, memberPrincipal(2))
+	if code != 200 || member.ProcessingReading != 2 || member.ProcessingClassifying != 1 {
+		t.Fatalf("member processing: status=%d reading=%d classifying=%d, want 200/2/1",
+			code, member.ProcessingReading, member.ProcessingClassifying)
+	}
+	code, admin := doStats(t, s, adminPrincipal(1))
+	if code != 200 || admin.ProcessingReading != 3 || admin.ProcessingClassifying != 1 {
+		t.Fatalf("admin processing: status=%d reading=%d classifying=%d, want 200/3/1",
+			code, admin.ProcessingReading, admin.ProcessingClassifying)
+	}
+}
+
 func TestStats_PendingApprovalsMatchesActionableInbox(t *testing.T) {
 	s := newStatsServer(t)
 	liveDoc := seedApprovalDocument(t, s.DB, "stats-live", 2, false)

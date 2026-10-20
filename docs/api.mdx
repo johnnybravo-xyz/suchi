@@ -1820,7 +1820,9 @@ Scope: **`documents:read`**.
   "pending_approvals": 2,
   "pending_intelligence": 4,
   "dead_jobs": 1,
-  "ingested_7d": 57
+  "ingested_7d": 57,
+  "processing_reading": 12,
+  "processing_classifying": 3
 }
 ```
 
@@ -1831,6 +1833,11 @@ code in the browser's `#/documents?jd=49&system=S01` route after introduction.
 `pending_approvals` is scoped to the member's assignee or all open work in that
 system for admins. `ingested_7d` counts live documents created in the last 7 days —
 useful for a sparkline; not a filing-date metric.
+`processing_reading` counts visible live documents whose extraction or OCR
+(`post-ingest`) is pending or running, including retries; `processing_classifying`
+counts those waiting on the optional model step (`post-classify`). Both drop to `0`
+once that work finishes or is dead-lettered. The browser polls this endpoint every
+15 seconds, and every 5 seconds while either is non-zero.
 
 ### `GET /api/events/`
 
