@@ -26,8 +26,8 @@ Optional integrations must preserve useful local operation.
   directories may be different branches. Preserve local changes; commit
   frequently, with concise messages and no contribution trailers.
 - Use Conventional Commits: `<type>(<scope>): brief imperative message` (scope
-  optional), then a blank line and concise `-` bullets covering behavior and
-  verification.
+  optional), then a blank line and concise `-` bullets covering behavior. Leave
+  out bullets that only list the checks or tests that were run.
 - When commits are requested, split work into coherent, independently reviewable
   slices. Keep implementation, UI, and documentation commits separate when each
   can stand on its own.
