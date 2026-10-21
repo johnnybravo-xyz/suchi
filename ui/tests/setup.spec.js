@@ -3437,7 +3437,7 @@ test('offers Microsoft sign-in without exposing registration controls', async ({
   await expect(page.getByTitle('Microsoft sign-in settings')).toHaveCount(0)
 })
 
-test('shows every acquisition place and the original file date', async ({ page }) => {
+test('shows every acquisition place and groups the original file facts', async ({ page }) => {
   await mockAPI(page)
   await page.goto('/#/doc/42')
 
@@ -3448,9 +3448,10 @@ test('shows every acquisition place and the original file date', async ({ page }
   await expect(page.getByText('Personal Outlook', { exact: true })).toBeVisible()
   await expect(page.getByText(/archive@example\.test \/ Receipts/)).toBeVisible()
   await expect(page.getByText('Uploaded by Admin', { exact: true })).toBeVisible()
-  await expect(page.getByText(/bill\.pdf/)).toBeVisible()
+  await expect(page.getByText('bill.pdf', { exact: true })).toBeVisible()
+  await expect(page.getByText(/application\/pdf · .* · file dated/)).toBeVisible()
   await expect(page.getByText('first added', { exact: true })).toBeVisible()
-  await expect(page.getByText('Original file date', { exact: true })).toBeVisible()
+  await expect(page.getByText('Original file date', { exact: true })).toHaveCount(0)
   await expect(page.getByText('Created', { exact: true })).toHaveCount(0)
 })
 

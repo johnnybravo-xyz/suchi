@@ -8,6 +8,7 @@
   import { getDocument, getDocumentIntrinsic, patchDocument, deleteDocument, restoreDocument, permanentlyDeleteDocument, documentVersions, documentBacklinks, uploadDocumentVersion, setDocumentCustomField, clearDocumentCustomField, createDocumentNote, updateDocumentNote, deleteDocumentNote, createShareLink, listShareLinks, deleteShareLink, previewPath, downloadPath, similarDocs, listGrants, putGrant, deleteGrant, listAllTags, listCorrespondents, listCustomFields, listDocuments, bulkEdit } from '../lib/api.js'
   import { go } from '../lib/router.svelte.js'
   import { SENSITIVITY_OPTIONS, fmtDate, fmtBytes, isHighSensitivity, sensDot, sensitivityLabel } from '../lib/format.js'
+  import { originalNames, sourceGroups } from '../lib/documentSources.js'
   import { session } from '../lib/session.svelte.js'
   import { hasCapability } from '../lib/capabilities.js'
   import { CUSTOM_FIELDS_SETTINGS_HASH, TAGS_SETTINGS_HASH } from '../lib/configuration.js'
@@ -183,6 +184,11 @@
   // The card keeps core metadata visible. An unset archive serial number and
   // all ordinary custom fields sit behind the More toggle.
   const archiveSerialNumberInMore = $derived(doc?.archive_serial_number == null)
+  const sourceGroupList = $derived(sourceGroups(doc?.sources))
+  const originalNameList = $derived(originalNames(doc?.sources))
+  // created_at differs from added_at only when ingest carried the file's own date.
+  const originalFileDate = $derived(doc?.source_mtime ||
+    (doc?.created_at && doc.created_at !== doc.added_at ? doc.created_at : null))
   const setCustomFieldCount = $derived(displayedOrdinaryCustomFields.filter(field => field.is_set).length)
   const hasMoreFields = $derived(archiveSerialNumberInMore || displayedOrdinaryCustomFields.length > 0 ||
     (!trashed && availableOrdinaryCustomFields.length > 0))
@@ -449,15 +455,6 @@
     if (source.kind === 'watched_folder') return source.label || translate("documentDetail.watchedFolder")
     if (source.kind === 'import') return source.label || translate("documentDetail.import")
     return source.label || translate("documentDetail.unknownOrigin")
-  }
-
-  function sourceDetail(source) {
-    const detail = source.detail?.trim() || ''
-    const label = source.label?.trim() || ''
-    if (source.kind !== 'mailbox' || !label) return detail
-    if (detail === label) return ''
-    const repeatedPrefix = `${label} / `
-    return detail.startsWith(repeatedPrefix) ? detail.slice(repeatedPrefix.length) : detail
   }
 
   function documentLinkValue(fieldID) {
@@ -1540,24 +1537,40 @@
             {/if}
           </dd>
           <dt>{translate("documentDetail.added")}</dt><dd>{fmtDate(doc.added_at || doc.created_at)}</dd>
-          {#if doc.sources?.length}
+          {#if sourceGroupList.length}
             <dt>{translate("documentDetail.addedFrom")}</dt>
             <dd style="display:flex;flex-direction:column;gap:4px;min-width:0">
-              {#each doc.sources as source, i}
+              {#each sourceGroupList as group, i}
                 <div style="min-width:0;overflow-wrap:anywhere">
-                  <span>{sourceLabel(source)}</span>
-                  {#if sourceDetail(source)}<span class="sub"> · {sourceDetail(source)}</span>{/if}
-                  {#if i === 0 && doc.sources.length > 1}<span class="pill" style="margin-left:6px;font-size:.68rem">{translate("documentDetail.firstAdded")}</span>{/if}
+                  <span>{sourceLabel(group)}</span>
+                  {#if group.places.length}<span class="sub"> · {group.places[0]}</span>{/if}
+                  {#if i === 0 && sourceGroupList.length > 1}<span class="pill" style="margin-left:6px;font-size:.68rem">{translate("documentDetail.firstAdded")}</span>{/if}
+                  {#if group.places.length > 1}
+                    <details class="sub">
+                      <summary>{group.places.length === 2 ? translate("documentDetail.earlierPlacesOne") : translate("documentDetail.earlierPlacesMany", { count: String(group.places.length - 1) })}</summary>
+                      {#each group.places.slice(1) as place (place)}<div>{place}</div>{/each}
+                    </details>
+                  {/if}
                 </div>
               {/each}
             </dd>
           {/if}
-          {#if doc.source_mtime || (doc.created_at && doc.created_at !== doc.added_at)}
-            <dt title={translate("documentDetail.dateCarriedFromTheOriginalFileWhen")}>{translate("documentDetail.originalFileDate")}</dt>
-            <dd>{fmtDate(doc.source_mtime || doc.created_at)}</dd>
-          {/if}
           {#if !archiveSerialNumberInMore}{@render archiveSerialNumberRow()}{/if}
-          <dt>{translate("documentDetail.original")}</dt><dd>{doc.mime_type} · {fmtBytes(doc.original_size)}</dd>
+          <dt>{translate("documentDetail.original")}</dt>
+          <dd style="min-width:0;overflow-wrap:anywhere">
+            {#if originalNameList.length}<div>{originalNameList[0].name}</div>{/if}
+            <div class={originalNameList.length ? 'sub' : ''}>
+              {doc.mime_type} · {fmtBytes(doc.original_size)}{originalFileDate ? ` · ${translate("documentDetail.fileDatedValue", { date: fmtDate(originalFileDate) })}` : ''}
+            </div>
+            {#if originalNameList.length > 1}
+              <details class="sub">
+                <summary>{originalNameList.length === 2 ? translate("documentDetail.otherNamesOne") : translate("documentDetail.otherNamesMany", { count: String(originalNameList.length - 1) })}</summary>
+                {#each originalNameList.slice(1) as entry (entry.name)}
+                  <div>{entry.name} · {sourceLabel(entry.source)} · {fmtDate(entry.source.observed_at)}</div>
+                {/each}
+              </details>
+            {/if}
+          </dd>
           {#if doc.archive_blob}
             <dt>{translate("documentDetail.archive")}</dt>
             <dd title={doc.content ? translate("documentDetail.fullTextSearchableOcrExtractionPopulatedDocumentsContent") : translate("documentDetail.pdfWrapperOnlyNoOcrLayerInstallTesseract")}>

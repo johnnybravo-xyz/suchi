@@ -37,6 +37,12 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Changed
 
+- Document Detail groups the original file's facts in one **Original** row: the
+  name it was added under, its type and size, and its own file date. Other
+  names the same file arrived under are folded beneath it. **Added from** now
+  shows one line per source, folding older mailbox folders under the current
+  one.
+
 - Approvals now use the same centered workspace card as Automations, Calendar,
   and Views. The card header owns the description, refresh action, and stable
   suggestion-group toggle; count tabs sit directly below it. Document reviews

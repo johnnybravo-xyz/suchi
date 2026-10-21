@@ -91,6 +91,12 @@ different documents/systems may share CAS bytes. Mailbox history preserves the
 observed name/folder after account deletion. Split children/email attachments
 inherit sources; each version records its own upload.
 
+Document Detail derives its display from these rows without new storage
+(`ui/src/lib/documentSources.js`). The **Original** row shows the oldest
+acquisition's file name, with later distinct names folded beneath it; mailbox
+sources carry no file name. **Added from** shows one line per kind and label,
+with older folders or watched-folder directories folded under the newest.
+
 `documents.title_owner` is the narrow precedence state for naming: `auto`
 allows model or rule naming, `rule` allows a later rule refresh, and `human`
 blocks both. API renames and approved title suggestions claim human ownership;
