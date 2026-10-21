@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Source details for these kinds are the acquired file's name or relative
-// path. Mailbox details name the account folder, never a file.
+// path. Mailbox details name the account folder; an attachment's name
+// arrives in filename instead.
 const FILE_DETAIL_KINDS = new Set(['upload', 'api', 'watched_folder', 'import'])
 
 function splitPath(detail) {
@@ -14,8 +15,8 @@ function splitPath(detail) {
 export function originalNames(sources) {
   const names = new Map()
   for (const source of sources || []) {
-    if (!FILE_DETAIL_KINDS.has(source.kind)) continue
-    const name = splitPath(source.detail).pop()
+    const name = source.filename?.trim() ||
+      (FILE_DETAIL_KINDS.has(source.kind) ? splitPath(source.detail).pop() : '')
     if (name && !names.has(name)) names.set(name, source)
   }
   return [...names].map(([name, source]) => ({ name, source }))

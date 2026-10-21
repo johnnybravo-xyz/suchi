@@ -58,9 +58,9 @@ func RecordMailboxSource(ctx context.Context, tx *sql.Tx, documentID, emailAccou
 func CopySources(ctx context.Context, tx *sql.Tx, fromDocumentID, toDocumentID int64) error {
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO document_sources(
-			document_id, kind, label, detail, observed_at, email_account_id
+			document_id, kind, label, detail, observed_at, email_account_id, filename
 		)
-		SELECT ?, src.kind, src.label, src.detail, src.observed_at, src.email_account_id
+		SELECT ?, src.kind, src.label, src.detail, src.observed_at, src.email_account_id, src.filename
 		FROM document_sources src
 		WHERE src.document_id = ?
 		  AND NOT EXISTS (

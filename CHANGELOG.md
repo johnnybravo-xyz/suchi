@@ -39,7 +39,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 - Document Detail groups the original file's facts in one **Original** row: the
   name it was added under, its type and size, and its own file date. Other
-  names the same file arrived under are folded beneath it. **Added from** now
+  names the same file arrived under are folded beneath it. Email attachments
+  now keep their attachment file name, and filename filters on consumption
+  automations match it. **Added from** now
   shows one line per source, folding older mailbox folders under the current
   one.
 

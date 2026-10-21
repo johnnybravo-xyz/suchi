@@ -1686,6 +1686,13 @@ func (h *Handler) createEmailAttachmentChild(ctx context.Context, log *slog.Logg
 		if err := ingestmeta.CopySources(ctx, tx, parentID, childID); err != nil {
 			return err
 		}
+		if att.Filename != "" {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE document_sources SET filename = ? WHERE document_id = ?`,
+				att.Filename, childID); err != nil {
+				return fmt.Errorf("record attachment filename: %w", err)
+			}
+		}
 		// Inherit the parent email's correspondents (sender + any
 		// recipients that got upserted). Without this, every attachment
 		// PDF renders with a blank "From" field even though the email
@@ -1694,7 +1701,7 @@ func (h *Handler) createEmailAttachmentChild(ctx context.Context, log *slog.Logg
 			return fmt.Errorf("inherit correspondents: %w", err)
 		}
 		payload, _ := json.Marshal(postIngestPayload{
-			SHA256: ref.SHA256, Size: ref.Size, MIME: mime,
+			SHA256: ref.SHA256, Size: ref.Size, MIME: mime, Filename: att.Filename,
 		})
 		if err := jobs.Enqueue(ctx, tx, Kind, childID, systemID, string(payload)); err != nil {
 			return err

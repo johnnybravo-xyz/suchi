@@ -421,14 +421,19 @@ func TestHandleEmailRefinesGenericAttachmentMIME(t *testing.T) {
 			if err != nil || !bytes.Equal(got, source) {
 				t.Fatalf("attachment original changed: err=%v", err)
 			}
-			var queuedMIME string
+			var queuedMIME, queuedFilename string
 			if err := d.Read.QueryRowContext(ctx, `
-				SELECT json_extract(payload, '$.mime_type') FROM jobs WHERE doc_id = ? AND kind = ?
-			`, childID, Kind).Scan(&queuedMIME); err != nil {
+				SELECT json_extract(payload, '$.mime_type'), json_extract(payload, '$.filename')
+				FROM jobs WHERE doc_id = ? AND kind = ?
+			`, childID, Kind).Scan(&queuedMIME, &queuedFilename); err != nil {
 				t.Fatal(err)
 			}
 			if queuedMIME != mime {
 				t.Fatalf("queued MIME = %q, want %q", queuedMIME, mime)
+			}
+			// Filename-filtered consumption automations match attachment children.
+			if queuedFilename != "statement.bin" {
+				t.Fatalf("queued filename = %q, want statement.bin", queuedFilename)
 			}
 		})
 	}
@@ -1035,15 +1040,22 @@ func TestChildrenRetainSystemAcrossFanoutAndStagingDeletion(t *testing.T) {
 					t.Fatal("child inherited foreign correspondent")
 				}
 			}
-			var sourceLabel, sourceDetail string
+			var sourceLabel, sourceDetail, sourceFilename string
 			var observed int64
 			if err := d.Read.QueryRowContext(ctx, `
-				SELECT label, detail, observed_at FROM document_sources WHERE document_id = ?
-			`, childID).Scan(&sourceLabel, &sourceDetail, &observed); err != nil {
+				SELECT label, detail, filename, observed_at FROM document_sources WHERE document_id = ?
+			`, childID).Scan(&sourceLabel, &sourceDetail, &sourceFilename, &observed); err != nil {
 				t.Fatal(err)
 			}
 			if sourceLabel != "S02 acquisition" || sourceDetail != "target.eml" || observed != 456 {
 				t.Fatalf("child acquired foreign or lost staging provenance: %q %q %d", sourceLabel, sourceDetail, observed)
+			}
+			wantFilename := "invoice.pdf"
+			if mode == "split" {
+				wantFilename = ""
+			}
+			if sourceFilename != wantFilename {
+				t.Fatalf("child source filename = %q, want %q", sourceFilename, wantFilename)
 			}
 			// The namespace is an invariant after fanout as well as at insert.
 			if _, err := d.Write.ExecContext(ctx, `UPDATE documents SET jd_category_id = 1 WHERE id = ?`, childID); err == nil {

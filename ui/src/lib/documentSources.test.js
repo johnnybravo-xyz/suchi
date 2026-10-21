@@ -13,6 +13,11 @@ test('lists distinct original file names in acquisition order', () => {
   ]
   assert.deepEqual(originalNames(sources).map((entry) => entry.name), ['Scan.pdf', 'inv.pdf'])
   assert.deepEqual(originalNames([{ kind: 'mailbox', label: 'Inbox', detail: 'me / INBOX' }]), [])
+  assert.deepEqual(
+    originalNames([{ kind: 'mailbox', label: 'Inbox', detail: 'me / INBOX', filename: 'invoice.pdf' }])
+      .map((entry) => entry.name),
+    ['invoice.pdf'],
+  )
 })
 
 test('folds repeat observations of one channel under its newest place', () => {

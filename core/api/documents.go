@@ -925,9 +925,12 @@ type DocumentRenderedLayout struct {
 }
 
 type DocumentSource struct {
-	Kind       string `json:"kind"`
-	Label      string `json:"label"`
-	Detail     string `json:"detail,omitempty"`
+	Kind   string `json:"kind"`
+	Label  string `json:"label"`
+	Detail string `json:"detail,omitempty"`
+	// Filename is set only where detail does not name the file, such as
+	// email attachments whose detail is the mailbox folder.
+	Filename   string `json:"filename,omitempty"`
 	ObservedAt int64  `json:"observed_at"`
 }
 
@@ -1210,7 +1213,7 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sourceRows, err := s.DB.Read.QueryContext(r.Context(), `
-		SELECT ds.kind, COALESCE(ea.name, ds.label), ds.detail, ds.observed_at
+		SELECT ds.kind, COALESCE(ea.name, ds.label), ds.detail, ds.filename, ds.observed_at
 		FROM document_sources ds
 		LEFT JOIN email_accounts ea ON ea.id = ds.email_account_id
 		WHERE ds.document_id = ?
@@ -1223,7 +1226,7 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 	defer sourceRows.Close()
 	for sourceRows.Next() {
 		var source DocumentSource
-		if err := sourceRows.Scan(&source.Kind, &source.Label, &source.Detail, &source.ObservedAt); err != nil {
+		if err := sourceRows.Scan(&source.Kind, &source.Label, &source.Detail, &source.Filename, &source.ObservedAt); err != nil {
 			s.writeError(w, http.StatusInternalServerError, "db_read", "failed to read document sources")
 			return
 		}

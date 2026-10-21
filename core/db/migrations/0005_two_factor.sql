@@ -15,3 +15,8 @@ CREATE TABLE local_auth_recovery_codes (
     created_at  INTEGER NOT NULL,
     PRIMARY KEY (user_id, code_digest)
 ) STRICT;
+
+-- Email attachment children inherit the message's sources, whose detail names
+-- the mailbox folder. filename keeps the attachment's own name; other kinds
+-- carry the acquired file name in detail and leave this empty.
+ALTER TABLE document_sources ADD COLUMN filename TEXT NOT NULL DEFAULT '';
