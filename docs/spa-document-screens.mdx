@@ -41,10 +41,11 @@ Detail reloads only when its document ID changes or an explicit action requests
 refresh. Arrival of sidebar categories must not restart reads or discard edits.
 Metadata/language saves check that same document generation before updating local
 state, so an earlier save cannot change the next document's sensitivity or Reveal.
-Person-renamed titles show one lock with the protection explanation and a
-subtle **Let Suchi rename this** action. Rename completion updates local
-ownership to `human`; release sends only `title_owner: auto` and removes the
-lock without changing the title. Both paths use the same route-generation guard
+Human-owned titles show a **Title pinned** line under the heading, with a pin
+icon (the lock is reserved for passwords), the protection explanation on hover,
+and an **Unpin** button. Rename completion updates local ownership to `human`;
+unpinning sends only `title_owner: auto` and removes the line without changing
+the title. Both paths use the same route-generation guard
 as other detail metadata writes.
 The Correspondents editor loads the existing system catalog on demand and uses
 the shared type-to-select picker before sending one

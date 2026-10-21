@@ -877,7 +877,7 @@
       doc = { ...doc, title_owner: 'auto' }
       notify?.(translate("documentDetail.suchiCanRenameThisTitle"))
     } catch (ex) {
-      if (!disposed && version === loadVersion) notify?.(ex.message || translate("documentDetail.couldNotReleaseTitle"))
+      if (!disposed && version === loadVersion) notify?.(ex.message || translate("documentDetail.couldNotUnpinTitle"))
     } finally {
       if (!disposed && version === loadVersion) titleOwnerBusy = false
     }
@@ -1485,15 +1485,15 @@
               <button class="title-rename" title={translate("documentDetail.rename")} onclick={() => (editingTitle = true)}>
                 <span class="dot {sensDot(doc.sensitivity)}"></span>{doc.title || translate("documentDetail.documentValue", { "id": doc.id })}
               </button>
-              {#if doc.title_owner === 'human'}
-                <span class="title-lock" role="img" aria-label={translate("documentDetail.suggestionsAndRulesWonTChangeThis")}
-                      title={translate("documentDetail.suggestionsAndRulesWonTChangeThis")}><Icon name="lock" size={14} /></span>
-              {/if}
             </h2>
             {#if doc.title_owner === 'human'}
-              <button class="title-release" disabled={titleOwnerBusy} onclick={releaseTitle}>
-                {titleOwnerBusy ? translate("documentDetail.releasing") : translate("documentDetail.letSuchiRenameThis")}
-              </button>
+              <div class="title-pin">
+                <Icon name="pin" size={13} />
+                <span title={translate("documentDetail.suggestionsAndRulesWonTChangeThis")}>{translate("documentDetail.titlePinned")}</span>
+                <button class="btn sm" disabled={titleOwnerBusy} onclick={releaseTitle}>
+                  {titleOwnerBusy ? translate("documentDetail.unpinning") : translate("documentDetail.unpin")}
+                </button>
+              </div>
             {/if}
           </div>
         {/if}
@@ -2370,10 +2370,8 @@
   .title-heading h2 { display:flex; align-items:flex-start; gap:7px; min-width:0; font-size:1.15rem; }
   .title-rename { all:unset; display:inline; min-width:0; overflow-wrap:anywhere; cursor:text; }
   .title-rename .dot { display:inline-block; margin-right:8px; }
-  .title-lock { display:inline-flex; flex:none; margin-top:2px; color:var(--muted); }
-  .title-release { justify-self:start; padding:0; border:0; background:none; color:var(--muted); font:inherit; font-size:.7rem; cursor:pointer; }
-  .title-release:hover { color:var(--accent); text-decoration:underline; }
-  .title-release:disabled { cursor:default; opacity:.6; text-decoration:none; }
+  .title-pin { display:flex; flex-wrap:wrap; align-items:center; gap:6px; color:var(--muted); font-size:.75rem; }
+  .title-pin .btn.sm { padding:1px 8px; font-size:.7rem; }
   .document-tags { min-width:0 }
   .more-fields { display:contents; }
   .more-fields-toggle { display:inline-flex; align-items:center; gap:6px; margin-top:10px; padding:4px 0; border:0; background:none; color:var(--accent); font:inherit; font-size:.82rem; cursor:pointer; }

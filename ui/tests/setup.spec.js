@@ -3727,7 +3727,7 @@ test('sets and clears a document correspondent from the detail view', async ({ p
   ])
 })
 
-test('keeps human titles locked until the owner returns naming to Suchi', async ({ page }) => {
+test('keeps human titles pinned until the owner unpins them', async ({ page }) => {
   const writes = []
   await mockAPI(page, { documentDetails: {
     42: { document: { title: 'Carefully named bill', title_owner: 'human' } },
@@ -3739,21 +3739,23 @@ test('keeps human titles locked until the owner returns naming to Suchi', async 
   })
 
   await page.goto('/#/doc/42')
-  const lock = page.getByRole('img', { name: "Suggestions and rules won't change this title.", exact: true })
-  await expect(lock).toBeVisible()
-  await expect(lock).toHaveAttribute('title', "Suggestions and rules won't change this title.")
+  const pinned = page.getByText('Title pinned', { exact: true })
+  await expect(pinned).toBeVisible()
+  await expect(pinned).toHaveAttribute('title', "Suggestions and rules won't change this title.")
 
-  await page.getByRole('button', { name: 'Let Suchi rename this', exact: true }).click()
+  await page.getByRole('button', { name: 'Unpin', exact: true }).click()
   await expect.poll(() => writes).toEqual([{ title_owner: 'auto' }])
-  await expect(lock).toHaveCount(0)
-  await expect(page.getByRole('button', { name: 'Let Suchi rename this', exact: true })).toHaveCount(0)
+  await expect(page.locator('.toast')).toContainText('Suchi may rename this the next time it analyses the document.')
+  await expect(pinned).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Unpin', exact: true })).toHaveCount(0)
 
   await page.getByTitle('Rename', { exact: true }).click()
   await page.getByRole('textbox', { name: 'Document title', exact: true }).fill('Pinned bill title')
   await page.getByRole('textbox', { name: 'Document title', exact: true }).press('Enter')
   await expect.poll(() => writes).toEqual([{ title_owner: 'auto' }, { title: 'Pinned bill title' }])
   await expect(page.getByTitle('Rename', { exact: true })).toContainText('Pinned bill title')
-  await expect(lock).toBeVisible()
+  await expect(page.locator('.toast')).toContainText('Title saved and pinned')
+  await expect(pinned).toBeVisible()
 })
 
 test('keeps a new document behind Reveal when an earlier sensitivity save finishes', async ({ page }) => {

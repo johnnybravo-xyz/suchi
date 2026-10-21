@@ -37,6 +37,10 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Changed
 
+- A human-owned title now shows **Title pinned** with an **Unpin** button under
+  the heading, replacing the lock icon and **Let Suchi rename this**. The lock
+  stays reserved for password status.
+
 - Document Detail and Trash name file formats in plain words, such as PDF,
   Word, or Email, instead of MIME types. The exact type remains on hover.
 
