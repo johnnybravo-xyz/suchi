@@ -37,6 +37,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Changed
 
+- Document Detail and Trash name file formats in plain words, such as PDF,
+  Word, or Email, instead of MIME types. The exact type remains on hover.
+
 - Document Detail groups the original file's facts in one **Original** row: the
   name it was added under, its type and size, and its own file date. Other
   names the same file arrived under are folded beneath it. Email attachments

@@ -3,8 +3,19 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  SENSITIVITY_OPTIONS, customFieldLabel, isHighSensitivity, sensDot, sensitivityLabel,
+  SENSITIVITY_OPTIONS, customFieldLabel, formatLabel, isHighSensitivity, sensDot, sensitivityLabel,
 } from './format.js'
+
+test('names file formats for people and falls back to the raw MIME', () => {
+  assert.equal(formatLabel('application/pdf'), 'PDF')
+  assert.equal(formatLabel('Application/VND.openxmlformats-officedocument.wordprocessingml.document'), 'Word')
+  assert.equal(formatLabel('text/plain; charset=utf-8'), 'Plain text')
+  assert.equal(formatLabel('message/rfc822'), 'Email')
+  assert.equal(formatLabel('image/x-portable-pixmap'), 'Image')
+  assert.equal(formatLabel('text/x-log'), 'Text')
+  assert.equal(formatLabel('application/x-unknown'), 'application/x-unknown')
+  assert.equal(formatLabel(''), '')
+})
 
 test('keeps the sensitivity vocabulary and privacy posture aligned', () => {
   assert.deepEqual(

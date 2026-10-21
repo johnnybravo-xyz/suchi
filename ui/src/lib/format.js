@@ -66,6 +66,75 @@ export function fmtBytes(n) {
   return `${formatNumber(n, { maximumFractionDigits: n < 10 && i > 0 ? 1 : 0 })} ${units[i]}`
 }
 
+// Product and format names stay untranslated; generic words use catalog keys.
+// Covers the formats core/mimeutil ingests, including its aliases.
+const FORMAT_LABELS = Object.freeze({
+  'application/pdf': 'PDF',
+  'application/epub+zip': 'EPUB',
+  'application/epub': 'EPUB',
+  'application/msword': 'Word',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'Word',
+  'application/vnd.ms-word.document.macroenabled.12': 'Word',
+  'application/vnd.ms-powerpoint': 'PowerPoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'PowerPoint',
+  'application/vnd.ms-powerpoint.presentation.macroenabled.12': 'PowerPoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.slideshow': 'PowerPoint',
+  'application/vnd.ms-powerpoint.slideshow.macroenabled.12': 'PowerPoint',
+  'application/vnd.ms-excel': 'Excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'Excel',
+  'application/vnd.ms-excel.sheet.macroenabled.12': 'Excel',
+  'application/vnd.ms-excel.sheet.binary.macroenabled.12': 'Excel',
+  'application/vnd.oasis.opendocument.text': 'OpenDocument Text',
+  'application/vnd.oasis.opendocument.spreadsheet': 'OpenDocument Spreadsheet',
+  'application/vnd.oasis.opendocument.presentation': 'OpenDocument Presentation',
+  'application/rtf': 'RTF',
+  'text/rtf': 'RTF',
+  'text/csv': 'CSV',
+  'text/markdown': 'Markdown',
+  'text/html': 'HTML',
+  'image/jpeg': 'JPEG',
+  'image/jpg': 'JPEG',
+  'image/pjpeg': 'JPEG',
+  'image/png': 'PNG',
+  'image/tiff': 'TIFF',
+  'image/x-tiff': 'TIFF',
+  'image/heic': 'HEIC',
+  'image/heic-sequence': 'HEIC',
+  'image/heif': 'HEIF',
+  'image/heif-sequence': 'HEIF',
+  'image/webp': 'WebP',
+  'image/gif': 'GIF',
+  'image/bmp': 'BMP',
+  'image/x-bmp': 'BMP',
+  'image/x-ms-bmp': 'BMP',
+  'image/avif': 'AVIF',
+  'image/svg+xml': 'SVG',
+  'image/vnd.djvu': 'DjVu',
+  'image/x-djvu': 'DjVu',
+  'image/djvu': 'DjVu',
+})
+
+const FORMAT_LABEL_KEYS = Object.freeze({
+  'message/rfc822': 'format.email',
+  'message/global': 'format.email',
+  'application/vnd.ms-outlook': 'format.outlookMessage',
+  'application/x-outlook-msg': 'format.outlookMessage',
+  'application/ms-outlook': 'format.outlookMessage',
+  'text/plain': 'format.plainText',
+})
+
+// formatLabel names a MIME type for people. Unknown types fall back to their
+// top-level family, then to the raw MIME, which is never wrong.
+export function formatLabel(mime) {
+  const normalized = String(mime || '').split(';')[0].trim().toLowerCase()
+  if (!normalized) return ''
+  if (FORMAT_LABELS[normalized]) return FORMAT_LABELS[normalized]
+  if (FORMAT_LABEL_KEYS[normalized]) return t(FORMAT_LABEL_KEYS[normalized])
+  if (normalized.startsWith('image/')) return t('format.image')
+  if (normalized.startsWith('text/')) return t('format.text')
+  return normalized
+}
+
 export const SENSITIVITY_OPTIONS = Object.freeze([
   Object.freeze({ value: 'public', get label() { return t('sensitivity.public') } }),
   Object.freeze({ value: 'internal', get label() { return t('sensitivity.internal') } }),

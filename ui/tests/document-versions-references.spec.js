@@ -540,7 +540,7 @@ test('groups original file facts and folds repeated sources', async ({ page }) =
 
   const original = page.locator('dt', { hasText: /^Original$/ }).locator('xpath=following-sibling::dd[1]')
   await expect(original).toContainText('Scan 01.pdf')
-  await expect(original).toContainText('application/pdf · 2 KB · file dated')
+  await expect(original).toContainText('PDF · 2 KB · file dated')
   await expect(original.locator('summary')).toHaveText('1 other name')
   await expect(page.getByText('Original file date')).toHaveCount(0)
 

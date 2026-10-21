@@ -3449,7 +3449,7 @@ test('shows every acquisition place and groups the original file facts', async (
   await expect(page.getByText(/archive@example\.test \/ Receipts/)).toBeVisible()
   await expect(page.getByText('Uploaded by Admin', { exact: true })).toBeVisible()
   await expect(page.getByText('bill.pdf', { exact: true })).toBeVisible()
-  await expect(page.getByText(/application\/pdf · .* · file dated/)).toBeVisible()
+  await expect(page.getByText(/PDF · .* · file dated/)).toBeVisible()
   await expect(page.getByText('first added', { exact: true })).toBeVisible()
   await expect(page.getByText('Original file date', { exact: true })).toHaveCount(0)
   await expect(page.getByText('Created', { exact: true })).toHaveCount(0)

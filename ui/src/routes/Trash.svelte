@@ -3,7 +3,7 @@
   import { t as translate } from "../lib/i18n.svelte.js";
   import { scopedHash as filingHref } from '../lib/systems.svelte.js'
   import { emptyTrash, listTrash, permanentlyDeleteDocument, restoreDocument } from '../lib/api.js'
-  import { fmtDate, fmtBytes, formatNumber, plural } from '../lib/format.js'
+  import { fmtDate, fmtBytes, formatLabel, formatNumber, plural } from '../lib/format.js'
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
   import Icon from '../lib/Icon.svelte'
 
@@ -100,7 +100,7 @@
             <span class="trash-info">
               <span class="title">{d.title || translate("trash.documentValue", { "id": d.id })}</span>
               {#if d.archive_serial_number != null}<span><span class="chip">{translate("common.asnValue", { value: String(d.archive_serial_number) })}</span></span>{/if}
-              <span class="sub">{d.mime_type || translate("trash.unknownFormat")}{d.original_size ? ' · ' + fmtBytes(d.original_size) : ''}</span>
+              <span class="sub" title={d.mime_type}>{formatLabel(d.mime_type) || translate("trash.unknownFormat")}{d.original_size ? ' · ' + fmtBytes(d.original_size) : ''}</span>
               <span class="sub">{translate("trash.trashedValueDeletesPermanentlyValue", { "trashed_at": fmtDate(d.trashed_at), "deletes_at": fmtDate(d.deletes_at) })}</span>
             </span>
             <Icon name="chev" size={15} />

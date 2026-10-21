@@ -7,7 +7,7 @@
   import { onDestroy, tick, untrack } from 'svelte'
   import { getDocument, getDocumentIntrinsic, patchDocument, deleteDocument, restoreDocument, permanentlyDeleteDocument, documentVersions, documentBacklinks, uploadDocumentVersion, setDocumentCustomField, clearDocumentCustomField, createDocumentNote, updateDocumentNote, deleteDocumentNote, createShareLink, listShareLinks, deleteShareLink, previewPath, downloadPath, similarDocs, listGrants, putGrant, deleteGrant, listAllTags, listCorrespondents, listCustomFields, listDocuments, bulkEdit } from '../lib/api.js'
   import { go } from '../lib/router.svelte.js'
-  import { SENSITIVITY_OPTIONS, fmtDate, fmtBytes, isHighSensitivity, sensDot, sensitivityLabel } from '../lib/format.js'
+  import { SENSITIVITY_OPTIONS, fmtDate, fmtBytes, formatLabel, isHighSensitivity, sensDot, sensitivityLabel } from '../lib/format.js'
   import { originalNames, sourceGroups } from '../lib/documentSources.js'
   import { session } from '../lib/session.svelte.js'
   import { hasCapability } from '../lib/capabilities.js'
@@ -1463,7 +1463,7 @@
         <iframe src={previewPath(id, highSensitivity)} title={translate("documentDetail.documentPreview")}></iframe>
       {:else}
         <div class="reveal">
-          <span class="pill">{doc.mime_type || translate("documentDetail.unknownFormat")}</span>
+          <span class="pill" title={doc.mime_type}>{formatLabel(doc.mime_type) || translate("documentDetail.unknownFormat")}</span>
           <b style="font-size:.95rem">{translate("documentDetail.noInlinePreviewForThisFormat")}</b>
           <span class="sub" style="max-width:32ch;text-align:center">{translate("documentDetail.browsersCanTRenderThisFileInline")}</span>
           <a class="btn" href={downloadPath(id)} download><Icon name="download" size={13} /> {translate("documentDetail.downloadOriginal")}</a>
@@ -1560,7 +1560,7 @@
           <dd style="min-width:0;overflow-wrap:anywhere">
             {#if originalNameList.length}<div>{originalNameList[0].name}</div>{/if}
             <div class={originalNameList.length ? 'sub' : ''}>
-              {doc.mime_type} · {fmtBytes(doc.original_size)}{originalFileDate ? ` · ${translate("documentDetail.fileDatedValue", { date: fmtDate(originalFileDate) })}` : ''}
+              <span title={doc.mime_type}>{formatLabel(doc.mime_type)}</span> · {fmtBytes(doc.original_size)}{originalFileDate ? ` · ${translate("documentDetail.fileDatedValue", { date: fmtDate(originalFileDate) })}` : ''}
             </div>
             {#if originalNameList.length > 1}
               <details class="sub">
