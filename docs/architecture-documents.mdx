@@ -96,8 +96,12 @@ Document Detail derives its display from these rows without new storage
 acquisition's file name, with later distinct names folded beneath it. A
 source's `filename` column names the file where `detail` does not: email
 attachment children set it on the sources they inherit from the message, in the
-same transaction that creates them. **Added from** shows one line per kind and label,
-with older folders or watched-folder directories folded under the newest.
+same transaction that creates them. **Added from** shows one line per kind and
+label, with older folders or watched-folder directories folded under the newest.
+An upload with an API token issued by mobile pairing sets `client` to
+`companion_app` from the token's server-recorded provenance, never from request
+data; `label` stays the uploader, and the row renders as **Suchi Companion ·
+name**. Other API tokens leave `client` empty and render as API uploads.
 
 `documents.title_owner` is the narrow precedence state for naming: `auto`
 allows model or rule naming, `rule` allows a later rule refresh, and `human`

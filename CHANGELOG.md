@@ -41,6 +41,11 @@ Notable user-visible changes to Suchi are recorded here.
   the heading, replacing the lock icon and **Let Suchi rename this**. The lock
   stays reserved for password status.
 
+- Uploads from Suchi Companion now show **Suchi Companion · name** under
+  **Added from**, recognised by the pairing token rather than anything the app
+  sends. Manually created tokens remain labeled as API uploads, and
+  `sources[].client` reports `companion_app` to API clients.
+
 - Document Detail and Trash name file formats in plain words, such as PDF,
   Word, or Email, instead of MIME types. The exact type remains on hover.
 

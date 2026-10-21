@@ -158,8 +158,8 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 			}
 			outID = splitOriginID
 			deduplicated = true
-			if err := ingest.RecordSource(r.Context(), tx, outID, upload.SourceKind,
-				upload.SourceLabel, upload.Filename, time.Now().Unix()); err != nil {
+			if err := ingest.RecordClientSource(r.Context(), tx, outID, upload.SourceKind,
+				upload.SourceLabel, upload.SourceClient, upload.Filename, time.Now().Unix()); err != nil {
 				return err
 			}
 			status = http.StatusOK
@@ -192,8 +192,8 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 		if errAlive == nil {
 			outID = aliveID
 			deduplicated = true
-			if err := ingest.RecordSource(r.Context(), tx, outID, upload.SourceKind,
-				upload.SourceLabel, upload.Filename, time.Now().Unix()); err != nil {
+			if err := ingest.RecordClientSource(r.Context(), tx, outID, upload.SourceKind,
+				upload.SourceLabel, upload.SourceClient, upload.Filename, time.Now().Unix()); err != nil {
 				return err
 			}
 			existingTitle := upload.Title
@@ -238,8 +238,8 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 			}
 			outID = trashedID
 			restored = true
-			if err := ingest.RecordSource(r.Context(), tx, outID, upload.SourceKind,
-				upload.SourceLabel, upload.Filename, now); err != nil {
+			if err := ingest.RecordClientSource(r.Context(), tx, outID, upload.SourceKind,
+				upload.SourceLabel, upload.SourceClient, upload.Filename, now); err != nil {
 				return err
 			}
 			var restoredTitle string
@@ -287,8 +287,8 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		outID = id
-		if err := ingest.RecordSource(r.Context(), tx, outID, upload.SourceKind,
-			upload.SourceLabel, upload.Filename, now); err != nil {
+		if err := ingest.RecordClientSource(r.Context(), tx, outID, upload.SourceKind,
+			upload.SourceLabel, upload.SourceClient, upload.Filename, now); err != nil {
 			return err
 		}
 
@@ -930,7 +930,9 @@ type DocumentSource struct {
 	Detail string `json:"detail,omitempty"`
 	// Filename is set only where detail does not name the file, such as
 	// email attachments whose detail is the mailbox folder.
-	Filename   string `json:"filename,omitempty"`
+	Filename string `json:"filename,omitempty"`
+	// Client names the official app behind an API upload: "companion_app".
+	Client     string `json:"client,omitempty"`
 	ObservedAt int64  `json:"observed_at"`
 }
 
@@ -1213,7 +1215,7 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sourceRows, err := s.DB.Read.QueryContext(r.Context(), `
-		SELECT ds.kind, COALESCE(ea.name, ds.label), ds.detail, ds.filename, ds.observed_at
+		SELECT ds.kind, COALESCE(ea.name, ds.label), ds.detail, ds.filename, ds.client, ds.observed_at
 		FROM document_sources ds
 		LEFT JOIN email_accounts ea ON ea.id = ds.email_account_id
 		WHERE ds.document_id = ?
@@ -1226,7 +1228,7 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 	defer sourceRows.Close()
 	for sourceRows.Next() {
 		var source DocumentSource
-		if err := sourceRows.Scan(&source.Kind, &source.Label, &source.Detail, &source.Filename, &source.ObservedAt); err != nil {
+		if err := sourceRows.Scan(&source.Kind, &source.Label, &source.Detail, &source.Filename, &source.Client, &source.ObservedAt); err != nil {
 			s.writeError(w, http.StatusInternalServerError, "db_read", "failed to read document sources")
 			return
 		}

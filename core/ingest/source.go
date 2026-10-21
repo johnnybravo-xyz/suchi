@@ -15,24 +15,33 @@ const (
 	SourceMailbox       = "mailbox"
 	SourceWatchedFolder = "watched_folder"
 	SourceImport        = "import"
+
+	// ClientCompanionApp marks uploads made with a Suchi Companion pairing token.
+	ClientCompanionApp = "companion_app"
 )
 
 // RecordSource stores one user-meaningful acquisition place. Exact repeats are
 // ignored; distinct labels or details remain visible on the document.
 func RecordSource(ctx context.Context, tx *sql.Tx, documentID int64, kind, label, detail string, observedAt int64) error {
+	return RecordClientSource(ctx, tx, documentID, kind, label, "", detail, observedAt)
+}
+
+// RecordClientSource is RecordSource for uploads that also name the official
+// app used; the same person uploading through another client stays distinct.
+func RecordClientSource(ctx context.Context, tx *sql.Tx, documentID int64, kind, label, client, detail string, observedAt int64) error {
 	if observedAt <= 0 {
 		observedAt = time.Now().Unix()
 	}
 	_, err := tx.ExecContext(ctx, `
-		INSERT INTO document_sources(document_id, kind, label, detail, observed_at)
-		SELECT ?, ?, ?, ?, ?
+		INSERT INTO document_sources(document_id, kind, label, client, detail, observed_at)
+		SELECT ?, ?, ?, ?, ?, ?
 		WHERE NOT EXISTS (
 			SELECT 1 FROM document_sources
-			WHERE document_id = ? AND kind = ? AND label = ? AND detail = ?
+			WHERE document_id = ? AND kind = ? AND label = ? AND client = ? AND detail = ?
 			  AND email_account_id IS NULL
 		)
-	`, documentID, kind, label, detail, observedAt,
-		documentID, kind, label, detail)
+	`, documentID, kind, label, client, detail, observedAt,
+		documentID, kind, label, client, detail)
 	return err
 }
 
@@ -58,9 +67,9 @@ func RecordMailboxSource(ctx context.Context, tx *sql.Tx, documentID, emailAccou
 func CopySources(ctx context.Context, tx *sql.Tx, fromDocumentID, toDocumentID int64) error {
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO document_sources(
-			document_id, kind, label, detail, observed_at, email_account_id, filename
+			document_id, kind, label, detail, observed_at, email_account_id, filename, client
 		)
-		SELECT ?, src.kind, src.label, src.detail, src.observed_at, src.email_account_id, src.filename
+		SELECT ?, src.kind, src.label, src.detail, src.observed_at, src.email_account_id, src.filename, src.client
 		FROM document_sources src
 		WHERE src.document_id = ?
 		  AND NOT EXISTS (
@@ -68,6 +77,7 @@ func CopySources(ctx context.Context, tx *sql.Tx, fromDocumentID, toDocumentID i
 			  WHERE dst.document_id = ?
 			    AND dst.kind = src.kind
 			    AND dst.label = src.label
+			    AND dst.client = src.client
 			    AND dst.detail = src.detail
 			    AND dst.email_account_id IS src.email_account_id
 		  )

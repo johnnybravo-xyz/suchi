@@ -241,8 +241,9 @@ func TestMobilePairingRegistersConnectedApps(t *testing.T) {
 	authRequest := httptest.NewRequest("GET", "/api/whoami", nil)
 	authRequest.Header.Set("Authorization", "Token "+credentials[0])
 	principal, err := local.Authenticate(authRequest)
-	if err != nil || principal == nil || principal.UserID != 1 {
-		t.Fatalf("paired token auth: %v", err)
+	if err != nil || principal == nil || principal.UserID != 1 ||
+		principal.TokenSource != auth.TokenSourceMobilePairing {
+		t.Fatalf("paired token auth: principal=%+v err=%v", principal, err)
 	}
 	rows := list(1)
 	if rows[1].ID != connected[0].ID || rows[1].LastUsedAt == 0 {

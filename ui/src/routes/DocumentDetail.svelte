@@ -450,6 +450,9 @@
 
   function sourceLabel(source) {
     if (source.kind === 'upload') return source.label ? translate("documentDetail.uploadedByValue", { "label": source.label }) : translate("documentDetail.manualUpload")
+    if (source.kind === 'api' && source.client === 'companion_app') {
+      return source.label ? translate("documentDetail.companionAppUploadByValue", { "label": source.label }) : translate("documentDetail.companionAppUpload")
+    }
     if (source.kind === 'api') return source.label ? translate("documentDetail.apiUploadByValue", { "label": source.label }) : translate("documentDetail.apiUpload")
     if (source.kind === 'mailbox') return source.label || translate("documentDetail.mailbox")
     if (source.kind === 'watched_folder') return source.label || translate("documentDetail.watchedFolder")

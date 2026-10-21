@@ -320,22 +320,24 @@ func (p *Plugin) authToken(ctx context.Context, header string) (*pluginapi.Princ
 	hashHex := hex.EncodeToString(sum[:])
 
 	var (
-		tokenID  int64
-		userID   int64
-		systemID int64
-		scopes   string
-		revoked  sql.NullInt64
-		email    string
-		display  string
-		role     string
+		tokenID     int64
+		userID      int64
+		systemID    int64
+		scopes      string
+		tokenSource string
+		revoked     sql.NullInt64
+		email       string
+		display     string
+		role        string
 	)
 	err := p.db.Read.QueryRowContext(ctx, `
-		SELECT t.id, t.user_id, t.system_id, t.scopes, t.revoked_at, u.email, u.display_name, u.role
+		SELECT t.id, t.user_id, t.system_id, t.scopes, t.source, t.revoked_at,
+		       u.email, u.display_name, u.role
 		  FROM api_tokens t JOIN users u ON u.id = t.user_id
 		 WHERE t.token_hash = ? AND u.disabled = 0
 		   AND (u.role = 'admin' OR EXISTS (
 		       SELECT 1 FROM jd_system_members m WHERE m.system_id = t.system_id AND m.user_id = u.id))
-	`, hashHex).Scan(&tokenID, &userID, &systemID, &scopes, &revoked, &email, &display, &role)
+	`, hashHex).Scan(&tokenID, &userID, &systemID, &scopes, &tokenSource, &revoked, &email, &display, &role)
 	if err == sql.ErrNoRows {
 		return nil, errors.New("token not recognized")
 	}
@@ -363,6 +365,7 @@ func (p *Plugin) authToken(ctx context.Context, header string) (*pluginapi.Princ
 		UserID:        userID,
 		TokenID:       tokenID,
 		TokenSystemID: systemID,
+		TokenSource:   tokenSource,
 		Email:         email,
 		Display:       display,
 		Role:          role,

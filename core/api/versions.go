@@ -330,8 +330,8 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		newID = id
-		if err := ingest.RecordSource(r.Context(), tx, newID, upload.SourceKind,
-			upload.SourceLabel, upload.Filename, now); err != nil {
+		if err := ingest.RecordClientSource(r.Context(), tx, newID, upload.SourceKind,
+			upload.SourceLabel, upload.SourceClient, upload.Filename, now); err != nil {
 			return err
 		}
 

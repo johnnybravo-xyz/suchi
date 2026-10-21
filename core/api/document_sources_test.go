@@ -17,6 +17,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/blob"
+	"github.com/johnnybravo-xyz/suchi/core/ingest"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
@@ -101,6 +102,62 @@ func TestUploadDuplicateRecordsDistinctSources(t *testing.T) {
 	}
 	if detail.Sources[0].Detail != "invoice.pdf" || detail.Sources[1].Detail != "renamed-scan.pdf" {
 		t.Fatalf("source order=%+v", detail.Sources)
+	}
+}
+
+func TestUploadDistinguishesCompanionFromOtherAPITokens(t *testing.T) {
+	d := openTestDB(t)
+	seedUser(t, d, 1)
+	seedUploadCategory(t, d)
+	cas, err := blob.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{
+		DB: d, CAS: cas, Authz: authz.ACLAuthorizer{DB: d},
+		Log: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+	}
+	ordinary := &pluginapi.Principal{
+		Kind: "token", UserID: 1, TokenSystemID: 1, Email: "owner@example.com", Display: "Owner",
+		Role: "member", Scopes: []string{"documents:read", "documents:write"},
+	}
+	companion := *ordinary
+	companion.TokenSource = auth.TokenSourceMobilePairing
+
+	first := httptest.NewRecorder()
+	s.UploadDocument(first, sourceUploadRequest(t, "api.pdf", []byte("same bytes"), ordinary))
+	if first.Code != http.StatusCreated {
+		t.Fatalf("ordinary upload status=%d body=%s", first.Code, first.Body.String())
+	}
+	var created UploadResponse
+	if err := json.Unmarshal(first.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+
+	second := httptest.NewRecorder()
+	s.UploadDocument(second, sourceUploadRequest(t, "companion.pdf", []byte("same bytes"), &companion))
+	if second.Code != http.StatusOK {
+		t.Fatalf("Companion upload status=%d body=%s", second.Code, second.Body.String())
+	}
+
+	detailReq := httptest.NewRequest(http.MethodGet, "/api/documents/1", nil)
+	detailReq.SetPathValue("id", strconv.FormatInt(created.ID, 10))
+	detailReq = detailReq.WithContext(auth.WithPrincipal(detailReq.Context(), ordinary))
+	detailRec := httptest.NewRecorder()
+	s.GetDocument(detailRec, detailReq)
+	if detailRec.Code != http.StatusOK {
+		t.Fatalf("detail status=%d body=%s", detailRec.Code, detailRec.Body.String())
+	}
+	var detail DocumentDetail
+	if err := json.Unmarshal(detailRec.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	// Same person, same file: the official app stays a distinct source row.
+	if len(detail.Sources) != 2 ||
+		detail.Sources[0].Kind != "api" || detail.Sources[0].Label != "Owner" || detail.Sources[0].Client != "" ||
+		detail.Sources[1].Kind != "api" || detail.Sources[1].Label != "Owner" ||
+		detail.Sources[1].Client != ingest.ClientCompanionApp {
+		t.Fatalf("sources=%+v", detail.Sources)
 	}
 }
 

@@ -196,8 +196,9 @@ provider-specific token parsing.
 Token authenticators must set `TokenSystemID`; an external token that leaves it
 zero is restricted to original system 1, never all systems. Local tokens also
 carry `TokenID` so mutations can recheck revocation, actor and binding inside the
-single writer. Authentication does not grant membership or document permission;
-even administrator tokens cannot escape their bound system or an explicit target.
+single writer, plus the server-selected `TokenSource` issuance provenance.
+Authentication does not grant membership or document permission; even
+administrator tokens cannot escape their bound system or an explicit target.
 
 Local issuance uses the caller-owned transaction contract
 `IssueAPIToken(ctx context.Context, tx *sql.Tx, userID, systemID int64, name, scopes, source string) (string, error)`.

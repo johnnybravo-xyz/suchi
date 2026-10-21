@@ -801,6 +801,8 @@
   "documentDetail.allDocuments": "All documents",
   "documentDetail.apiUpload": "API upload",
   "documentDetail.apiUploadByValue": "API upload by {label}",
+  "documentDetail.companionAppUpload": "Suchi Companion",
+  "documentDetail.companionAppUploadByValue": "Suchi Companion · {label}",
   "documentDetail.archive": "Archive",
   "documentDetail.archiveSerialNumber": "Archive serial number",
   "documentDetail.archiveSerialNumberHelp": "Must be unique in this filing system. Clear it to let another document use it.",

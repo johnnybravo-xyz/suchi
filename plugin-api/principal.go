@@ -16,11 +16,14 @@ type Principal struct {
 	// TokenSystemID binds a token to one filing system. Session identities leave
 	// it zero; an external token without a binding is limited to original system 1.
 	TokenSystemID int64
-	Email         string
-	Display       string
-	Role          string
-	Scopes        []string
-	AuthNBy       string
+	// TokenSource is server-selected issuance provenance for a local API token.
+	// Session identities and external tokens leave it empty.
+	TokenSource string `json:"-"`
+	Email       string
+	Display     string
+	Role        string
+	Scopes      []string
+	AuthNBy     string
 	// SessionID is the stored session digest, never the bearer cookie.
 	SessionID string `json:"-"`
 	// AuthExpiresAt bounds deferred use of an authenticated identity.

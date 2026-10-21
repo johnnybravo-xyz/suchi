@@ -27,11 +27,13 @@ test('folds repeat observations of one channel under its newest place', () => {
     { kind: 'api', label: 'Ritesh', detail: 'b.pdf' },
     { kind: 'mailbox', label: 'Work', detail: 'me / New' },
     { kind: 'watched_folder', label: 'Drop', detail: 'root.pdf' },
+    { kind: 'api', label: 'Ritesh', client: 'companion_app', detail: 'c.pdf' },
   ])
   assert.deepEqual(groups, [
-    { kind: 'api', label: 'Ritesh', places: [] },
-    { kind: 'mailbox', label: 'Work', places: ['me / New', 'me / Old'] },
-    { kind: 'watched_folder', label: 'Drop', places: [] },
+    { kind: 'api', label: 'Ritesh', client: '', places: [] },
+    { kind: 'mailbox', label: 'Work', client: '', places: ['me / New', 'me / Old'] },
+    { kind: 'watched_folder', label: 'Drop', client: '', places: [] },
+    { kind: 'api', label: 'Ritesh', client: 'companion_app', places: [] },
   ])
   assert.deepEqual(
     sourceGroups([{ kind: 'mailbox', label: 'Work', detail: 'Work / INBOX' }])[0].places,

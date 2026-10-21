@@ -531,6 +531,7 @@ test('groups original file facts and folds repeated sources', async ({ page }) =
         { kind: 'api', label: 'Admin', detail: 'Scan 01.pdf', observed_at: 1780000000 },
         { kind: 'mailbox', label: 'Work', detail: 'me / Old', observed_at: 1780000100 },
         { kind: 'api', label: 'Admin', detail: 'bill.pdf', observed_at: 1780000200 },
+        { kind: 'api', label: 'Admin', client: 'companion_app', detail: 'bill.pdf', observed_at: 1780000250 },
         { kind: 'mailbox', label: 'Work', detail: 'me / New', observed_at: 1780000300 },
       ],
     }) })
@@ -545,8 +546,10 @@ test('groups original file facts and folds repeated sources', async ({ page }) =
   await expect(page.getByText('Original file date')).toHaveCount(0)
 
   const addedFrom = page.locator('dt', { hasText: 'Added from' }).locator('xpath=following-sibling::dd[1]')
-  await expect(addedFrom.locator(':scope > div')).toHaveCount(2)
+  await expect(addedFrom.locator(':scope > div')).toHaveCount(3)
   await expect(addedFrom).not.toContainText('Scan 01.pdf')
+  await expect(addedFrom.getByText('Suchi Companion · Admin', { exact: true })).toBeVisible()
+  await expect(addedFrom.getByText('API upload by Admin', { exact: true })).toBeVisible()
   await expect(addedFrom).toContainText('Work · me / New')
   await expect(addedFrom.locator('summary')).toHaveText('1 earlier place')
 })

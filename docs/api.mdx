@@ -757,7 +757,8 @@ Dedup state machine (always within the captured system and document owner):
   ```
 
   Repeating the same uploader and filename does not add another source row.
-  A different uploader, filename, mailbox, watched path, or import source does.
+  A different uploader, client app, filename, mailbox, watched path, or import
+  source does.
 
 - Hash matches a **trashed** document still inside its 30-day recovery window
   → clears `trashed_at`, returns `200 OK` with `"restored": true`. An expired
@@ -953,7 +954,9 @@ entered the archive. A mailbox source's `label` follows the configured
 mailbox's current display name. Suchi retains the name captured at ingest and
 uses it if that mailbox is later deleted; `detail` remains the observed address
 and folder. Optional `filename` is the file's own name where `detail` does not
-carry it, such as an email attachment observed through a mailbox. `added_at` is when Suchi ingested the document;
+carry it, such as an email attachment observed through a mailbox. Optional
+`client` is `companion_app` on an `api` source uploaded with a token issued by
+Suchi Companion pairing; `label` remains the uploading person. `added_at` is when Suchi ingested the document;
 `created_at` and optional `source_mtime` carry upstream dates.
 
 `title_owner` is `auto`, `rule`, or `human`. New uploads start as `auto`.

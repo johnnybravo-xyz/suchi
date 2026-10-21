@@ -20,3 +20,7 @@ CREATE TABLE local_auth_recovery_codes (
 -- the mailbox folder. filename keeps the attachment's own name; other kinds
 -- carry the acquired file name in detail and leave this empty.
 ALTER TABLE document_sources ADD COLUMN filename TEXT NOT NULL DEFAULT '';
+
+-- client names the official app behind an API upload, set from server-issued
+-- token provenance. label stays the uploading person.
+ALTER TABLE document_sources ADD COLUMN client TEXT NOT NULL DEFAULT '' CHECK (client IN ('', 'companion_app'));

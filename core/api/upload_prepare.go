@@ -26,8 +26,10 @@ type preparedUpload struct {
 	Title       string
 	SourceKind  string
 	SourceLabel string
-	Metadata    uploadMetadata
-	Idempotency uploadIdempotencyRequest
+	// SourceClient names the official app behind a token upload, or is empty.
+	SourceClient string
+	Metadata     uploadMetadata
+	Idempotency  uploadIdempotencyRequest
 }
 
 func (s *Server) prepareUpload(
@@ -89,10 +91,15 @@ func (s *Server) prepareUpload(
 	if sourceLabel == "" {
 		sourceLabel = principal.Email
 	}
+	sourceClient := ""
 	if principal.Kind == "token" {
 		sourceKind = ingest.SourceAPI
 		if sourceLabel == "" {
 			sourceLabel = "API token"
+		}
+		// Pairing issues the token, so a client cannot claim this by itself.
+		if principal.TokenSource == auth.TokenSourceMobilePairing {
+			sourceClient = ingest.ClientCompanionApp
 		}
 	}
 
@@ -108,7 +115,7 @@ func (s *Server) prepareUpload(
 	return &preparedUpload{
 		SHA256: ref.SHA256, Size: ref.Size, Filename: header.Filename,
 		MIME: sniffed, Title: deriveTitle(header.Filename),
-		SourceKind: sourceKind, SourceLabel: sourceLabel,
+		SourceKind: sourceKind, SourceLabel: sourceLabel, SourceClient: sourceClient,
 		Metadata: metadata, Idempotency: idempotency,
 	}
 }

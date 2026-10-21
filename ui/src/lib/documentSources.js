@@ -36,14 +36,14 @@ export function sourcePlace(source) {
   return detail.startsWith(repeatedPrefix) ? detail.slice(repeatedPrefix.length) : detail
 }
 
-// sourceGroups collapses repeat observations through one channel (kind and
-// label) into one entry, in first-seen order. Places are distinct and newest
+// sourceGroups collapses repeat observations through one channel (kind, label,
+// and official client app) into one entry, in first-seen order. Places are distinct and newest
 // first, so folder renames fold under the current name.
 export function sourceGroups(sources) {
   const groups = new Map()
   for (const source of sources || []) {
-    const key = `${source.kind}\u0000${source.label || ''}`
-    if (!groups.has(key)) groups.set(key, { kind: source.kind, label: source.label, places: [] })
+    const key = `${source.kind}\u0000${source.label || ''}\u0000${source.client || ''}`
+    if (!groups.has(key)) groups.set(key, { kind: source.kind, label: source.label, client: source.client || '', places: [] })
     const group = groups.get(key)
     const place = sourcePlace(source)
     if (place && !group.places.includes(place)) group.places.unshift(place)
