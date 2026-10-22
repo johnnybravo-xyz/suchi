@@ -65,6 +65,14 @@ Notable user-visible changes to Suchi are recorded here.
   projections show at most 100 entries, report the remainder, stay synchronized,
   and stack document-first on narrow screens.
 
+- Trash now uses the shared workspace card. Its header holds the retention
+  explanation and counted **Empty trash** action; like Documents rows, each row
+  highlights and opens its document anywhere outside its controls, and its
+  compact metadata line ends with the prior filing category. A day countdown to
+  deletion turns into an amber pill in the final week, beside a safer-looking
+  **Restore** action and a plain permanent-delete action. The zero-count action
+  disables and the empty state stays in the card.
+
 - Saved decryption passwords now separate their editable label, last-used date,
   and most recently unlocked document into labeled columns. Labels remain plain
   text until the pencil action opens inline editing.

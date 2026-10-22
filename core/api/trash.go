@@ -23,6 +23,8 @@ type TrashRow struct {
 	CreatedAt           int64  `json:"created_at"`
 	TrashedAt           int64  `json:"trashed_at"`
 	DeletesAt           int64  `json:"deletes_at"`
+	JDCategoryCode      int64  `json:"jd_category_code,omitempty"`
+	JDCategoryName      string `json:"jd_category_name,omitempty"`
 	ArchiveSerialNumber *int64 `json:"archive_serial_number,omitempty"`
 }
 
@@ -38,25 +40,28 @@ func (s *Server) ListTrash(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	where := "trashed_at IS NOT NULL AND system_id = ?"
+	where := "d.trashed_at IS NOT NULL AND d.system_id = ?"
 	args := []any{systemID}
 	if p.Role != "admin" {
-		where += " AND owner_id = ?"
+		where += " AND d.owner_id = ?"
 		args = append(args, p.UserID)
 	}
 
 	var total int
 	if err := s.DB.Read.QueryRowContext(r.Context(),
-		"SELECT COUNT(*) FROM documents WHERE "+where, args...).Scan(&total); err != nil {
+		"SELECT COUNT(*) FROM documents d WHERE "+where, args...).Scan(&total); err != nil {
 		s.serverErr(w, "trash.count", err)
 		return
 	}
 	pp := ParsePageParams(r, 50, 200)
-	query := `SELECT id, title, COALESCE(mime_type, ''), original_size,
-	              created_at, COALESCE(trashed_at, 0), archive_serial_number
-	      FROM documents
+	query := `SELECT d.id, d.title, COALESCE(d.mime_type, ''), d.original_size,
+	              d.created_at, COALESCE(d.trashed_at, 0),
+	              COALESCE(jc.code, 0), COALESCE(jc.name, ''),
+	              d.archive_serial_number
+	      FROM documents d
+	      LEFT JOIN jd_categories jc ON jc.id = d.jd_category_id AND jc.system_id = d.system_id
 	      WHERE ` + where + `
-	      ORDER BY trashed_at DESC, id DESC
+	      ORDER BY d.trashed_at DESC, d.id DESC
 	      LIMIT ? OFFSET ?`
 	args = append(args, pp.PageSize, pp.Offset())
 	rows, err := s.DB.Read.QueryContext(r.Context(), query, args...)
@@ -70,7 +75,7 @@ func (s *Server) ListTrash(w http.ResponseWriter, r *http.Request) {
 		var row TrashRow
 		var archiveNumber sql.NullInt64
 		if err := rows.Scan(&row.ID, &row.Title, &row.MIME, &row.Size,
-			&row.CreatedAt, &row.TrashedAt, &archiveNumber); err != nil {
+			&row.CreatedAt, &row.TrashedAt, &row.JDCategoryCode, &row.JDCategoryName, &archiveNumber); err != nil {
 			s.serverErr(w, "trash.scan", err)
 			return
 		}

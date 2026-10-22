@@ -3,9 +3,10 @@
   import { t as translate } from "../lib/i18n.svelte.js";
   import { scopedHash as filingHref } from '../lib/systems.svelte.js'
   import { emptyTrash, listTrash, permanentlyDeleteDocument, restoreDocument } from '../lib/api.js'
-  import { fmtDate, fmtBytes, formatLabel, formatNumber, plural } from '../lib/format.js'
+  import { fmtDate, fmtBytes, formatDate, formatLabel, formatNumber, plural } from '../lib/format.js'
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
   import Icon from '../lib/Icon.svelte'
+  import RuleWorkspace from '../lib/RuleWorkspace.svelte'
 
   let { notify } = $props()
   let rows = $state([])
@@ -15,6 +16,41 @@
   let deleteRequest = $state(null)
   let deleteBusy = $state(false)
   let restoringID = $state(null)
+
+  const DAY_SECONDS = 24 * 60 * 60
+
+  function filingLabel(document) {
+    return [document.jd_category_code, document.jd_category_name].filter(Boolean).join(' ')
+  }
+
+  function rowMetadata(document) {
+    const parts = [
+      formatLabel(document.mime_type) || translate("trash.unknownFormat"),
+      document.original_size != null ? fmtBytes(document.original_size) : '',
+      translate("trash.trashedValue", { date: fmtDate(document.trashed_at) }),
+    ].filter(Boolean)
+    const category = filingLabel(document)
+    if (category) parts.push(translate("trash.wasFiledUnderValue", { category }))
+    // A no-break space keeps each separator at the end of a wrapped line.
+    return parts.join('\u00a0· ')
+  }
+
+  function deletionStatus(document) {
+    const secondsRemaining = Number(document.deletes_at || 0) - Math.floor(Date.now() / 1000)
+    if (secondsRemaining <= 0) {
+      return { label: translate("trash.deletionDue"), urgent: true }
+    }
+    const daysRemaining = Math.ceil(secondsRemaining / DAY_SECONDS)
+    const deadline = new Date(document.deletes_at * 1000)
+    const options = deadline.getFullYear() === new Date().getFullYear()
+      ? { month: 'short', day: 'numeric' }
+      : { year: 'numeric', month: 'short', day: 'numeric' }
+    return {
+      label: plural("trash.deletesInDayCount", daysRemaining),
+      date: translate("trash.deletesOnValue", { date: formatDate(deadline, options) }),
+      urgent: daysRemaining <= 7,
+    }
+  }
 
   async function load() {
     loading = true
@@ -73,52 +109,71 @@
   load()
 </script>
 
-<div class="toolbar trash-toolbar" role="group" aria-label={translate("trash.trashOptions")}>
-  <button class="btn sm danger"
-          disabled={loading || total === 0}
-          title={total === 0 ? translate("trash.trashIsEmpty2") : plural("trash.permanentlyDeleteDocumentCount", total)}
-          onclick={() => (deleteRequest = { kind: 'all' })}>
-    <Icon name="trash" size={13} /> {translate("trash.emptyTrash")}
-    {#if total > 0}<span class="pill">{formatNumber(total)}</span>{/if}
-  </button>
-</div>
-<div class="content-narrow">
-  <p class="sub trash-retention">
-    {translate("trash.documentsArePermanentlyDeleted30DaysAfter")}
-  </p>
-  {#if err}<div class="err">{err}</div>{/if}
-  {#if loading}
-    <div class="index">{#each Array(3) as _}<div class="irow"><div class="skel" style="width:55%"></div></div>{/each}</div>
-  {:else if rows.length === 0}
-    <div class="empty"><Icon name="trash" size={50} /><b>{translate("trash.trashIsEmpty")}</b></div>
-  {:else}
-    <div class="index">
-      {#each rows as d (d.id)}
-        <div class="irow trash-row">
-          <a class="trash-document" href={filingHref(`#/doc/${d.id}`)}>
-            <span class="file-icon"><Icon name="docs" size={23} /></span>
-            <span class="trash-info">
-              <span class="title">{d.title || translate("trash.documentValue", { "id": d.id })}</span>
-              {#if d.archive_serial_number != null}<span><span class="chip">{translate("common.asnValue", { value: String(d.archive_serial_number) })}</span></span>{/if}
-              <span class="sub" title={d.mime_type}>{formatLabel(d.mime_type) || translate("trash.unknownFormat")}{d.original_size ? ' · ' + fmtBytes(d.original_size) : ''}</span>
-              <span class="sub">{translate("trash.trashedValueDeletesPermanentlyValue", { "trashed_at": fmtDate(d.trashed_at), "deletes_at": fmtDate(d.deletes_at) })}</span>
-            </span>
-            <Icon name="chev" size={15} />
-          </a>
-          <div class="trash-actions">
-            {#if d.deletes_at > Math.floor(Date.now() / 1000)}
-              <button class="btn sm" disabled={restoringID !== null} onclick={() => restore(d)}>
-                <Icon name="refresh" size={13} /> {restoringID === d.id ? translate("trash.restoring") : translate("trash.restore")}
-              </button>
-            {/if}
-            <button class="btn sm danger" onclick={() => (deleteRequest = { kind: 'document', document: d })}>
-              <Icon name="trash" size={13} /> {translate("trash.deletePermanently")}
-            </button>
-          </div>
-        </div>
-      {/each}
-    </div>
-  {/if}
+<div class="trash-page">
+  <RuleWorkspace
+    class="trash-workspace"
+    title={translate("app.trash")}
+    description={translate("trash.documentsArePermanentlyDeleted30DaysAfter")}
+    headingId="trash-workspace-heading">
+    {#snippet actions()}
+      <button class="btn sm empty-trash"
+              disabled={loading || total === 0}
+              title={total === 0 ? translate("trash.trashIsEmpty2") : plural("trash.permanentlyDeleteDocumentCount", total)}
+              onclick={() => (deleteRequest = { kind: 'all' })}>
+        <Icon name="trash" size={13} />
+        {translate("trash.emptyTrash")}
+        <span class="trash-count">{formatNumber(total)}</span>
+      </button>
+    {/snippet}
+
+    {#if err}<div class="err trash-error">{err}</div>{/if}
+    {#if loading}
+      <div class="trash-list" aria-label={translate("common.loading")}>
+        {#each Array(3) as _}
+          <div class="trash-row trash-row-loading"><div class="skel" style="width:55%"></div></div>
+        {/each}
+      </div>
+    {:else if rows.length === 0}
+      <div class="trash-empty" role="status">
+        <Icon name="trash" size={42} />
+        <b>{translate("trash.trashIsEmpty")}</b>
+        <span>{translate("trash.emptyStateRestoreNote")}</span>
+      </div>
+    {:else}
+      <div class="trash-list">
+        {#each rows as d (d.id)}
+          {@const deadline = deletionStatus(d)}
+          <article class="trash-row">
+            <a class="trash-document" href={filingHref(`#/doc/${d.id}`)}
+               aria-label={d.title || translate("trash.documentValue", { "id": d.id })}>
+              <div class="trash-info">
+                <div class="trash-title-line">
+                  <span class="title trash-title">{d.title || translate("trash.documentValue", { "id": d.id })}</span>
+                  {#if d.archive_serial_number != null}
+                    <span class="chip">{translate("common.asnValue", { value: String(d.archive_serial_number) })}</span>
+                  {/if}
+                </div>
+                <div class="trash-meta" title={d.mime_type}>{rowMetadata(d)}</div>
+              </div>
+            </a>
+            <div class="trash-outcome">
+              <span class="deletion-chip" class:urgent={deadline.urgent} title={deadline.date}>{deadline.label}</span>
+              <div class="trash-actions">
+                {#if d.deletes_at > Math.floor(Date.now() / 1000)}
+                  <button class="btn sm restore-action" disabled={restoringID !== null} onclick={() => restore(d)}>
+                    {restoringID === d.id ? translate("trash.restoring") : translate("trash.restore")}
+                  </button>
+                {/if}
+                <button class="btn sm" onclick={() => (deleteRequest = { kind: 'document', document: d })}>
+                  {translate("trash.deletePermanently")}
+                </button>
+              </div>
+            </div>
+          </article>
+        {/each}
+      </div>
+    {/if}
+  </RuleWorkspace>
 </div>
 
 {#if deleteRequest}
@@ -135,18 +190,56 @@
 {/if}
 
 <style>
-  .trash-retention { margin:0 0 12px;color:var(--muted);font-size:.86rem }
-  .trash-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; cursor: default; }
-  .trash-document { display: flex; align-items: center; gap: 12px; min-width: 0; text-decoration: none; }
-  .file-icon { display: grid; place-items: center; width: 36px; height: 44px; flex: none; color: var(--muted); background: var(--surface-2); border-radius: var(--r-sm); }
-  .trash-info { display: grid; gap: 3px; min-width: 0; flex: 1; }
-  .trash-row .title, .trash-row .sub { white-space: normal; overflow-wrap: anywhere; }
-  .trash-document:hover .title { color: var(--accent); }
-  .trash-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-  .trash-actions .btn { min-height: 40px; }
-  @media (max-width: 700px) {
-    .trash-row { grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 16px; }
-    .trash-document { align-items: flex-start; }
-    .trash-actions { padding-top: 12px; border-top: 1px solid var(--line); }
+  .trash-page { width:min(100%,1400px);margin:0 auto }
+  .trash-error { margin:14px 20px 0 }
+  .empty-trash { gap:7px }
+  .trash-count {
+    display:inline-grid;place-items:center;min-width:21px;height:21px;padding:0 6px;
+    border:1px solid var(--line);border-radius:999px;background:var(--surface-2);
+    color:var(--muted);font-size:.72rem;font-variant-numeric:tabular-nums;
+  }
+  .trash-list { width:100% }
+  .trash-row {
+    display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:24px;
+    position:relative;min-height:72px;padding:12px 20px;border-bottom:1px solid var(--line);
+  }
+  .trash-row:last-child { border-bottom:0 }
+  .trash-row:not(.trash-row-loading):hover { background:var(--tint) }
+  .trash-row-loading { display:flex;align-items:center }
+  .trash-document { display:block;min-width:0;color:inherit;text-decoration:none }
+  .trash-document:focus-visible { border-radius:5px;outline:2px solid var(--accent);outline-offset:4px }
+  /* The link covers the whole row, like Documents rows; recovery controls stay above it. */
+  .trash-document::after { content:'';position:absolute;inset:0 }
+  .trash-info { position:relative;z-index:1;display:grid;gap:5px;min-width:0 }
+  .trash-meta { color:var(--muted);font-size:.8rem;white-space:normal;overflow-wrap:anywhere }
+  .trash-title-line { display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap }
+  .trash-title { min-width:0;color:var(--ink);font-weight:550;overflow-wrap:anywhere }
+  .trash-outcome { position:relative;z-index:1;display:flex;align-items:center;justify-content:flex-end;gap:16px }
+  .deletion-chip { white-space:nowrap;color:var(--muted);font-size:.76rem }
+  /* Only a deadline within a week earns a pill. */
+  .deletion-chip.urgent {
+    display:inline-flex;align-items:center;min-height:25px;padding:2px 10px;font-weight:600;
+    border:1px solid color-mix(in srgb,var(--warn) 28%,var(--line));border-radius:999px;
+    background:var(--warn-soft);color:var(--warn);
+  }
+  .trash-actions { display:flex;align-items:center;gap:8px;flex-wrap:wrap }
+  /* Restore is a standard button with accent text; its hover is the shared .btn hover, independent of the row tint. */
+  .restore-action { color:var(--accent) }
+  .trash-empty {
+    display:grid;place-items:center;gap:8px;min-height:240px;padding:36px 20px;
+    color:var(--muted);text-align:center;
+  }
+  .trash-empty b { color:var(--ink);font-size:1rem }
+  .trash-empty span { max-width:440px;font-size:.84rem;line-height:1.5 }
+  @media (max-width: 800px) {
+    .trash-row { grid-template-columns:minmax(0,1fr);gap:14px;padding:16px 20px }
+    .trash-outcome { justify-content:space-between;padding-top:14px;border-top:1px solid var(--line) }
+    .trash-actions .btn { min-height:40px }
+  }
+  @media (max-width: 520px) {
+    .trash-outcome { align-items:stretch;flex-direction:column }
+    .deletion-chip { align-self:flex-start }
+    .trash-actions { display:grid;grid-template-columns:1fr 1fr }
+    .trash-actions .btn { width:100% }
   }
 </style>

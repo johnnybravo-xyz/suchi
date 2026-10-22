@@ -95,6 +95,10 @@ func TestListTrashIncludesFixedDeletionDateAndOwnerScope(t *testing.T) {
 	if envelope.Results[0].DeletesAt != wantDeletesAt {
 		t.Fatalf("deletes_at=%d, want %d", envelope.Results[0].DeletesAt, wantDeletesAt)
 	}
+	if envelope.Results[0].JDCategoryCode != 1 || envelope.Results[0].JDCategoryName != "Inbox" {
+		t.Fatalf("filing category=%d %q, want 1 Inbox",
+			envelope.Results[0].JDCategoryCode, envelope.Results[0].JDCategoryName)
+	}
 }
 
 func TestDocumentDetailIncludesTrashOwnershipAndDeadline(t *testing.T) {

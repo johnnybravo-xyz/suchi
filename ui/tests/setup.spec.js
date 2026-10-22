@@ -6864,6 +6864,7 @@ test('opens a readable Trash document without overlapping actions and restores i
     trashDocuments: [{
       id: 31, owner_id: 7, title, mime_type: 'application/pdf', original_size: 2048,
       sensitivity: 'restricted', trashed_at: now - 86400, deletes_at: now + 29 * 86400,
+      jd_category_code: 49, jd_category_name: 'Inbox',
     }],
   })
   await page.goto('/#/trash')
@@ -6883,6 +6884,11 @@ test('opens a readable Trash document without overlapping actions and restores i
   if (viewport.width <= 700) expect(actionsBox.y).toBeGreaterThanOrEqual(linkBox.y + linkBox.height)
   else expect(actionsBox.x).toBeGreaterThanOrEqual(linkBox.x + linkBox.width)
   expect(await documentLink.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
+  // The document link covers the row's empty space; recovery controls stay on top.
+  const hrefAt = (x, y) => page.evaluate(([px, py]) => document.elementFromPoint(px, py)?.closest('a, button')?.getAttribute('href') ?? 'button', [x, y])
+  expect(await hrefAt(rowBox.x + rowBox.width - 4, rowBox.y + 4)).toBe('#/doc/31')
+  const restoreBox = await actions.getByRole('button', { name: 'Restore', exact: true }).boundingBox()
+  expect(await hrefAt(restoreBox.x + restoreBox.width / 2, restoreBox.y + restoreBox.height / 2)).toBe('button')
   await page.screenshot({ path: testInfo.outputPath('trash-list.png'), fullPage: true })
   if (testInfo.project.use.hasTouch) await documentLink.tap()
   else { await documentLink.focus(); await page.keyboard.press('Enter') }
@@ -6985,8 +6991,10 @@ test('confirms permanent Trash deletion before removing rows', async ({ page }) 
       mime_type: 'application/pdf',
       original_size: 2048,
       created_at: trashedAt - 100,
-      trashed_at: trashedAt,
-      deletes_at: trashedAt + (30 * 24 * 60 * 60),
+      trashed_at: trashedAt - (23 * 24 * 60 * 60),
+      deletes_at: Math.floor(Date.now() / 1000) + (5 * 24 * 60 * 60),
+      jd_category_code: 49,
+      jd_category_name: 'Inbox',
     }, {
       id: 32,
       title: 'Old insurance notice',
@@ -6995,6 +7003,8 @@ test('confirms permanent Trash deletion before removing rows', async ({ page }) 
       created_at: trashedAt - 200,
       trashed_at: trashedAt,
       deletes_at: trashedAt + (30 * 24 * 60 * 60),
+      jd_category_code: 73,
+      jd_category_name: 'Receipts',
     }, {
       id: 33,
       title: 'Expired tax notice',
@@ -7003,24 +7013,32 @@ test('confirms permanent Trash deletion before removing rows', async ({ page }) 
       created_at: trashedAt - (31 * 24 * 60 * 60),
       trashed_at: trashedAt - (31 * 24 * 60 * 60),
       deletes_at: trashedAt - (24 * 60 * 60),
+      jd_category_code: 25,
+      jd_category_name: 'Tax',
     }],
   })
   await page.goto('/#/trash')
 
-  const retention = 'Documents are permanently deleted 30 days after being moved to Trash. Restore puts one back where it was filed.'
-  const workspace = page.locator('.content-narrow')
+  const retention = 'Deleted documents wait here for 30 days. Restore puts one back where it was filed.'
+  const workspace = page.getByRole('region', { name: 'Trash', exact: true })
   await expect(workspace.getByText(retention)).toBeVisible()
-  await expect(page.getByText(/Deletes permanently/).first()).toBeVisible()
-  const toolbar = page.getByRole('group', { name: 'Trash options' })
-  await expect(toolbar.locator(':scope > *').first()).toHaveAccessibleName(/Empty trash/)
-  await expect(page.getByRole('button', { name: /Empty trash/ })).toBeEnabled()
-  const toolbarBeforeWorkspace = await page.evaluate(() => {
-    const toolbarNode = document.querySelector('.trash-toolbar')
-    const workspaceNode = document.querySelector('.content-narrow')
-    return Boolean(toolbarNode.compareDocumentPosition(workspaceNode) & Node.DOCUMENT_POSITION_FOLLOWING)
-  })
-  expect(toolbarBeforeWorkspace).toBe(true)
-  const expiredRow = page.locator('.irow').filter({ hasText: 'Expired tax notice' })
+  const emptyButton = workspace.getByRole('button', { name: /Empty trash/ })
+  await expect(emptyButton).toBeEnabled()
+  await expect(emptyButton.locator('.trash-count')).toHaveText('3')
+  await expect(workspace.locator('.rule-workspace-header')).toContainText(retention)
+  const urgentRow = workspace.locator('.trash-row').filter({ hasText: 'Old electricity bill' })
+  await expect(urgentRow).toContainText(/PDF\s·\s2 KB/)
+  await expect(urgentRow).toContainText('was filed under 49 Inbox')
+  await expect(urgentRow.locator('.deletion-chip')).toHaveText('Deletes in 5 days')
+  await expect(urgentRow.locator('.deletion-chip')).toHaveClass(/urgent/)
+  await expect(urgentRow.getByRole('button', { name: 'Restore', exact: true })).toHaveClass(/restore-action/)
+  await expect(urgentRow.getByRole('button', { name: 'Delete permanently', exact: true })).not.toHaveClass(/danger/)
+  const neutralRow = workspace.locator('.trash-row').filter({ hasText: 'Old insurance notice' })
+  await expect(neutralRow.locator('.deletion-chip')).toHaveText('Deletes in 28 days')
+  await expect(neutralRow.locator('.deletion-chip')).toHaveAttribute('title', /^Deletes [A-Z][a-z]{2} \d{1,2}/)
+  await expect(neutralRow.locator('.deletion-chip')).not.toHaveClass(/urgent/)
+  const expiredRow = workspace.locator('.trash-row').filter({ hasText: 'Expired tax notice' })
+  await expect(expiredRow.locator('.deletion-chip')).toHaveText('Deletion due')
   await expect(expiredRow.getByRole('button', { name: 'Restore' })).toHaveCount(0)
 
   await page.getByRole('button', { name: 'Delete permanently' }).first().click()
@@ -7047,12 +7065,14 @@ test('confirms permanent Trash deletion before removing rows', async ({ page }) 
   await expect(page.getByText('Old electricity bill', { exact: true })).toHaveCount(0)
   expect(permanentDeleteRequests).toEqual([31])
 
-  await page.getByRole('button', { name: 'Empty trash' }).click()
+  await emptyButton.click()
   dialog = page.getByRole('alertdialog', { name: 'Empty Trash?' })
   await expect(dialog).toContainText('All 2 documents you can see in Trash')
   await dialog.getByRole('button', { name: 'Empty trash' }).click()
-  await expect(page.getByText('Trash is empty.')).toBeVisible()
-  await expect(page.getByRole('button', { name: /Empty trash/ })).toBeDisabled()
+  await expect(workspace.getByText('Trash is empty.')).toBeVisible()
+  await expect(workspace.getByText('Restoring a document returns it to the filing category shown on its row.')).toBeVisible()
+  await expect(emptyButton).toBeDisabled()
+  await expect(emptyButton.locator('.trash-count')).toHaveText('0')
   expect(emptyTrashRequests).toEqual([{ count: 2 }])
 })
 

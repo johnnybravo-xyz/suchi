@@ -1337,7 +1337,8 @@ trashed document returns `404` and remains eligible for automatic purge.
 Returns a paginated envelope of trashed documents in the selected system.
 Members see their own documents; administrators see all owners there, never
 other systems. Each row includes `trashed_at`, `deletes_at` (the Unix timestamp
-30 days later), and `archive_serial_number` when retained.
+30 days later), retained `jd_category_code` and `jd_category_name`, and
+`archive_serial_number` when retained.
 
 ### `DELETE /api/trash/{id}`
 

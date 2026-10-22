@@ -31,11 +31,18 @@ fits mobile. Invalid/out-of-range pages use `go(hash, { replace: true })` to syn
 route state without creating Back-button loops. Verify with:
 `cd ui && bun run e2e --grep 'document pagination|document controls|mobile document filters|active share links'`.
 
-Trash uses `#/doc/{id}` and the same detail owner. Server `trashed_at`, `deletes_at`
-and `owner_id` select read-only recovery; skip versions, similarity and access
-management reads. Restore reloads that document; confirmed deletion returns to
-Trash. Keep row links separate from recovery buttons, with actions below titles
-on mobile. Server authorization still governs blobs.
+Trash uses `RuleWorkspace.svelte` inside the same 1,400-pixel content cap as
+Approvals. Its card header owns the retention explanation and disabled-at-zero
+**Empty trash** count action. Each row's document link covers the whole row and
+highlights it on hover; the deadline and recovery controls sit above it. The
+line under the title combines format, size, trash date, and the retained filing
+category. The deletion deadline is a day countdown with the date as its tooltip,
+shown as an amber pill only during the final week. The empty state remains
+inside the card. Trash links use `#/doc/{id}` and the same detail owner. Server
+`trashed_at`, `deletes_at` and `owner_id` select read-only recovery; skip
+versions, similarity and access-management reads. Restore reloads that document;
+confirmed deletion returns to Trash. Actions move below the document details on
+mobile. Server authorization still governs blobs.
 
 Detail reloads only when its document ID changes or an explicit action requests
 refresh. Arrival of sidebar categories must not restart reads or discard edits.
