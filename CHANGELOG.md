@@ -37,6 +37,11 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Changed
 
+- New email attachment documents use the enclosing message's `Date` as their
+  created date while retaining the ingestion time as their added date, so their
+  generated filing paths sort by the message date. A missing or invalid `Date`
+  falls back to the ingestion time.
+
 - Text search counts its matches in the same query that ranks them instead of
   repeating the full-text match.
 

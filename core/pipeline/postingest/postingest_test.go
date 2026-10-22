@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/blob"
@@ -28,6 +29,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/docsplit"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/eml"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/msg"
+	renderview "github.com/johnnybravo-xyz/suchi/core/render/view"
 	"github.com/johnnybravo-xyz/suchi/core/rescan"
 	"github.com/johnnybravo-xyz/suchi/core/ui"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
@@ -37,6 +39,7 @@ const msgConvertedEmail = "From: sender@example.com\r\n" +
 	"To: owner@example.test\r\n" +
 	"Subject: Invoice attached\r\n" +
 	"Message-Id: <msg-fixture@example.com>\r\n" +
+	"Date: Mon, 17 Aug 2026 09:15:00 +0530\r\n" +
 	"MIME-Version: 1.0\r\n" +
 	"Content-Type: multipart/mixed; boundary=BOUNDARY\r\n\r\n" +
 	"--BOUNDARY\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nPlease see attached.\r\n" +
@@ -390,6 +393,111 @@ func TestHandleEmailFilesOnlyDoesNotPopulateTrash(t *testing.T) {
 	}
 	if inheritedSender != 1 {
 		t.Fatalf("inherited sender rows = %d, want 1", inheritedSender)
+	}
+}
+
+func TestEmailAttachmentDateFollowsMessageDate(t *testing.T) {
+	messageDate, err := time.Parse(time.RFC1123Z, "Mon, 17 Aug 2026 09:15:00 +0530")
+	if err != nil {
+		t.Fatal(err)
+	}
+	withoutDate := strings.Replace(
+		msgConvertedEmail,
+		"Date: Mon, 17 Aug 2026 09:15:00 +0530\r\n",
+		"",
+		1,
+	)
+	invalidDate := strings.Replace(
+		msgConvertedEmail,
+		"Date: Mon, 17 Aug 2026 09:15:00 +0530\r\n",
+		"Date: not-a-date\r\n",
+		1,
+	)
+	for _, tc := range []struct {
+		name            string
+		raw             string
+		filesOnly       bool
+		wantMessageDate bool
+	}{
+		{name: "parent retained", raw: msgConvertedEmail, wantMessageDate: true},
+		{name: "files only", raw: msgConvertedEmail, filesOnly: true, wantMessageDate: true},
+		{name: "missing Date", raw: withoutDate},
+		{name: "invalid Date", raw: invalidDate},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			d, cas := openPostIngestHarness(t)
+			parentID := seedPostIngestDocument(t, d, cas, "message/rfc822", []byte(tc.raw))
+			h := New(d, cas, testActions(t), slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+			retired, err := h.handleEmail(ctx, h.log, parentID, []byte(tc.raw), tc.filesOnly)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if retired != tc.filesOnly {
+				t.Fatalf("retired=%v, want %v", retired, tc.filesOnly)
+			}
+
+			var created, added int64
+			var sourceMtime sql.NullInt64
+			if err := d.Read.QueryRowContext(ctx, `
+				SELECT created_at, added_at, source_mtime
+				FROM documents
+				WHERE mime_type = 'application/pdf'
+			`).Scan(&created, &added, &sourceMtime); err != nil {
+				t.Fatal(err)
+			}
+			if tc.wantMessageDate {
+				if created != messageDate.Unix() {
+					t.Fatalf("created_at=%d, want message Date %d", created, messageDate.Unix())
+				}
+				if !sourceMtime.Valid || sourceMtime.Int64 != messageDate.Unix() {
+					t.Fatalf("source_mtime=%v, want message Date %d", sourceMtime, messageDate.Unix())
+				}
+				if added == created {
+					t.Fatalf("added_at=%d unexpectedly replaced by message Date", added)
+				}
+			} else {
+				if created != added {
+					t.Fatalf("created_at=%d added_at=%d, want ingestion-time fallback", created, added)
+				}
+				if sourceMtime.Valid {
+					t.Fatalf("source_mtime=%v, want NULL without message Date", sourceMtime)
+				}
+			}
+
+			renderer, err := renderview.New(
+				d,
+				cas,
+				filepath.Join(t.TempDir(), "rendered"),
+				slog.New(slog.NewTextHandler(io.Discard, nil)),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var childID int64
+			if err := d.Read.QueryRowContext(ctx,
+				`SELECT id FROM documents WHERE mime_type = 'application/pdf'`,
+			).Scan(&childID); err != nil {
+				t.Fatal(err)
+			}
+			if err := renderer.Move(ctx, childID); err != nil {
+				t.Fatal(err)
+			}
+			var renderedPath string
+			if err := d.Read.QueryRowContext(ctx, `
+				SELECT new_path
+				FROM render_moves
+				WHERE document_id = ? AND state = 'applied'
+				ORDER BY id DESC LIMIT 1
+			`, childID).Scan(&renderedPath); err != nil {
+				t.Fatal(err)
+			}
+			wantPrefix := time.Unix(created, 0).UTC().Format("2006-01-02") + " "
+			if base := filepath.Base(renderedPath); !strings.HasPrefix(base, wantPrefix) {
+				t.Fatalf("rendered filename=%q, want prefix %q", base, wantPrefix)
+			}
+		})
 	}
 }
 

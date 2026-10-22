@@ -214,6 +214,11 @@ Attachment children inherit the parent's correspondents (so the
 They do NOT inherit tags — the pipeline (automations and LLM classifier)
 reclassifies each child independently.
 
+Attachment children use the enclosing message's valid `Date` header as
+`created_at` and retain the ingestion time as `added_at`; `source_mtime` keeps
+the same upstream date. Without a usable `Date`, `created_at` falls back to the
+ingestion time and `source_mtime` remains empty.
+
 **How to feed it in.** Any of the three supported ingest paths works;
 suchi doesn't care what put the `.eml` on the disk:
 

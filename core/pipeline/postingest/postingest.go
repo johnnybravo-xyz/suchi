@@ -1624,11 +1624,11 @@ func (h *Handler) attachEmailCorrespondent(ctx context.Context, docID int64, e *
 // owner + JD category as defaults; the pipeline (automations, LLM) can
 // reclassify later.
 //
-// parsed is the enclosing email — used for source_mtime (Date) and,
-// under filesOnly, for the subject prefix on the child's title
-// (the parent .eml gets deleted so subject would otherwise be
-// lost). email_parent_id is set to nil when filesOnly so the
-// child doesn't dangle-point at a trashed row.
+// parsed is the enclosing email — its Date becomes the child's created_at
+// and source_mtime, while added_at remains the ingestion time. Under filesOnly
+// the subject prefixes the child's title because the parent .eml is deleted.
+// email_parent_id is nil in that mode so the child never dangle-points at the
+// removed row.
 func (h *Handler) createEmailAttachmentChild(ctx context.Context, log *slog.Logger, parentID, ownerID, jdCategoryID int64, index int, att eml.Attachment, parsed *eml.Email, filesOnly bool) error {
 	ref, err := h.cas.Put(bytes.NewReader(att.Bytes))
 	if err != nil {
@@ -1648,14 +1648,6 @@ func (h *Handler) createEmailAttachmentChild(ctx context.Context, log *slog.Logg
 	}
 	mime := mimeutil.RefineByContent(att.ContentType, att.Bytes)
 	mime = mimeutil.RefineByFilename(mime, att.Filename)
-	// source_mtime = email Date. Cheap on the parent-lives path (child
-	// timeline reflects when the mail landed, not when the pipeline
-	// ran) and essential on the files_only path (the email row
-	// is gone, so this is the only surviving "when" signal).
-	var sourceMtime any
-	if parsed != nil && !parsed.Date.IsZero() {
-		sourceMtime = parsed.Date.Unix()
-	}
 	// Under filesOnly the staging parent gets deleted. Write NULL up-front so
 	// attachment rows never rely on an ON DELETE side effect.
 	var parentRef any
@@ -1668,6 +1660,12 @@ func (h *Handler) createEmailAttachmentChild(ctx context.Context, log *slog.Logg
 			return err
 		}
 		now := time.Now().Unix()
+		created := now
+		var sourceMtime any
+		if parsed != nil && !parsed.Date.IsZero() {
+			created = parsed.Date.Unix()
+			sourceMtime = created
+		}
 		res, err := tx.ExecContext(ctx, `
 			INSERT INTO documents(
 				system_id, owner_id, original_blob, original_size, title, mime_type,
@@ -1675,7 +1673,7 @@ func (h *Handler) createEmailAttachmentChild(ctx context.Context, log *slog.Logg
 				email_parent_id, source_mtime
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`, systemID, ownerID, ref.SHA256, ref.Size, title, mime,
-			jdCategoryID, now, now, now, parentRef, sourceMtime)
+			jdCategoryID, now, created, now, parentRef, sourceMtime)
 		if err != nil {
 			return err
 		}
