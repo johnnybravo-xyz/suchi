@@ -20,7 +20,7 @@
   const DAY_SECONDS = 24 * 60 * 60
 
   function filingLabel(document) {
-    return [document.jd_category_code, document.jd_category_name].filter(Boolean).join(' ')
+    return [document.jd_address || document.jd_category_code, document.jd_category_name].filter(Boolean).join(' ')
   }
 
   function rowMetadata(document) {
@@ -29,8 +29,8 @@
       document.original_size != null ? fmtBytes(document.original_size) : '',
       translate("trash.trashedValue", { date: fmtDate(document.trashed_at) }),
     ].filter(Boolean)
-    const category = filingLabel(document)
-    if (category) parts.push(translate("trash.wasFiledUnderValue", { category }))
+    // The address chip leads the row, so the line names only the category.
+    if (document.jd_category_name) parts.push(translate("trash.wasFiledUnderValue", { category: document.jd_category_name }))
     // A no-break space keeps each separator at the end of a wrapped line.
     return parts.join('\u00a0· ')
   }
@@ -144,9 +144,11 @@
         {#each rows as d (d.id)}
           {@const deadline = deletionStatus(d)}
           <article class="trash-row">
-            <a class="trash-document" href={filingHref(`#/doc/${d.id}`)}
+            <a class="trash-document filing-row" href={filingHref(`#/doc/${d.id}`)}
                aria-label={d.title || translate("trash.documentValue", { "id": d.id })}>
               <div class="trash-info">
+                <span class="filing-code filing-code-column"
+                      title={filingLabel(d) ? translate("trash.wasFiledUnderValue", { category: filingLabel(d) }) : undefined}>{d.jd_address || d.jd_category_code || ''}</span>
                 <div class="trash-title-line">
                   <span class="title trash-title">{d.title || translate("trash.documentValue", { "id": d.id })}</span>
                   {#if d.archive_serial_number != null}
@@ -210,8 +212,9 @@
   .trash-document:focus-visible { border-radius:5px;outline:2px solid var(--accent);outline-offset:4px }
   /* The link covers the whole row, like Documents rows; recovery controls stay above it. */
   .trash-document::after { content:'';position:absolute;inset:0 }
-  .trash-info { position:relative;z-index:1;display:grid;gap:5px;min-width:0 }
-  .trash-meta { color:var(--muted);font-size:.8rem;white-space:normal;overflow-wrap:anywhere }
+  /* Same order as Documents and Search rows: address chip, then title; the meta line sits under the title. */
+  .trash-info { position:relative;z-index:1;display:grid;grid-template-columns:auto minmax(0,1fr);align-items:baseline;gap:5px 12px;min-width:0 }
+  .trash-meta { grid-column:2;color:var(--muted);font-size:.8rem;white-space:normal;overflow-wrap:anywhere }
   .trash-title-line { display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap }
   .trash-title { min-width:0;color:var(--ink);font-weight:550;overflow-wrap:anywhere }
   .trash-outcome { position:relative;z-index:1;display:flex;align-items:center;justify-content:flex-end;gap:16px }

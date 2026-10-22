@@ -258,6 +258,33 @@ input, select, textarea { font: inherit; color: inherit; }
   color: var(--accent); background: var(--tint);
   border-radius: 5px; padding: 2px 7px; white-space: nowrap;
 }
+
+.filing-code {
+  font-family: ui-monospace, monospace; font-size: .68rem; font-weight: 600;
+  font-variant-numeric: tabular-nums; color: var(--accent); white-space: nowrap;
+  background: var(--tint); border-radius: 4px; padding: 1px 5px;
+}
+.filing-code-column { flex: none; }
+/* An unfiled row keeps the column width so titles stay aligned. */
+.filing-code-column:empty { width: calc(2ch + 10px); padding: 0; background: none; }
+/* The hovered row takes the same tint, so its chips deepen to stay visible. */
+.filing-row:focus-within :is(.filing-code, .chip):not(:empty) {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+@media (hover: hover) and (pointer: fine) {
+  .filing-row:hover :is(.filing-code, .chip):not(:empty) {
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+  }
+}
+.filing-row .dot { width: 10px; height: 10px; }
+.document-meta {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 4px;
+  min-width: 0; color: var(--muted); font-size: .8rem;
+}
+.document-meta .filing-label { min-width: 0; overflow-wrap: anywhere; }
+.document-meta .filing-label .filing-code { margin-right: 2px; }
+.document-meta > :not(:last-child)::after { content: "·"; margin-left: 4px; }
+.document-meta time { white-space: nowrap; }
 .pill {
   font-size: .72rem; font-weight: 550; color: var(--muted);
   border: 1px solid var(--line-strong); border-radius: 99px; padding: 2px 9px; white-space: nowrap;

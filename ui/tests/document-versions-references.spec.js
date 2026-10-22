@@ -286,7 +286,7 @@ test('keeps outgoing and incoming document links in one compact tab', async ({ p
       ]
       if (targetID) custom_fields.push({
         field_id: 9, name: 'Governing record', data_type: 'documentlink',
-        value: { id: targetID, title: targetID === 70 ? 'Original record' : 'Replacement target', system_code: 'S02', jd_address: targetID === 70 ? '' : `S02.13.${targetID}`, created_at: 1780000000, is_latest: targetID !== 70 },
+        value: { id: targetID, title: targetID === 70 ? 'Original record' : 'Replacement target', system_code: 'S02', jd_address: 'S02.13', created_at: 1780000000, is_latest: targetID !== 70 },
       })
       await route.fulfill({ json: detail(42, { title: 'Amendment', custom_fields }) })
       return true
@@ -300,7 +300,7 @@ test('keeps outgoing and incoming document links in one compact tab', async ({ p
     }
     if (path === '/api/documents/77' && request.method() === 'GET') {
       exactReads++
-      await route.fulfill({ json: detail(77, { title: 'Replacement target', system_code: 'S02', jd_address: 'S02.13.77' }) })
+      await route.fulfill({ json: detail(77, { title: 'Replacement target', system_code: 'S02', jd_address: 'S02.13' }) })
       return true
     }
     if (path === '/api/custom_fields/') {
@@ -314,7 +314,7 @@ test('keeps outgoing and incoming document links in one compact tab', async ({ p
     if (path === '/api/documents/42/referenced-by/') {
       await route.fulfill({ json: {
         count: 1,
-        results: [{ id: 55, title: 'Follow-up note', system_code: 'S01', jd_address: 'S01.13.55', created_at: 1780000055, is_latest: false, field_id: 12, field_name: 'Previous agreement' }],
+        results: [{ id: 55, title: 'Follow-up note', system_code: 'S02', jd_address: 'S02.13', created_at: 1780000055, is_latest: false, field_id: 12, field_name: 'Previous agreement' }],
       } })
       return true
     }
@@ -347,6 +347,10 @@ test('keeps outgoing and incoming document links in one compact tab', async ({ p
   await expect(linksFrom.getByText('Earlier version', { exact: true })).toBeVisible()
   await expect(linksFrom.getByText('Supporting record', { exact: true })).toHaveCount(0)
   await expect(linksTo.getByText('Follow-up note', { exact: true })).toBeVisible()
+  await expect(linksFrom.getByText('S02.13', { exact: true })).toBeVisible()
+  await expect(linksFrom.getByRole('link', { name: 'Original record', exact: true })).toHaveAttribute('href', '#/doc/70?system=S02')
+  await expect(linksTo.getByText('S02.13', { exact: true })).toBeVisible()
+  await expect(linksTo.getByRole('link').filter({ hasText: 'Follow-up note' })).toHaveAttribute('href', '#/doc/55?system=S02')
   await expect(linksTo.getByText('Linked here as “Previous agreement”', { exact: true })).toBeVisible()
   await expect(linksTo.getByText('Earlier version', { exact: true })).toBeVisible()
   await linkedTab.focus()
@@ -365,9 +369,12 @@ test('keeps outgoing and incoming document links in one compact tab', async ({ p
   await input.fill(encodedTargetURL)
   await linksFrom.getByRole('button', { name: 'Search', exact: true }).click()
   await expect(linksFrom.getByRole('button', { name: /Replacement target/ })).toBeVisible()
+  await expect(linksFrom.getByText('#77 · S02.13', { exact: true })).toBeVisible()
   expect(exactReads).toBe(1)
   await linksFrom.getByRole('button', { name: 'Use selected document', exact: true }).click()
   await expect(linksFrom.getByText('Replacement target', { exact: true })).toBeVisible()
+  await expect(linksFrom.getByText('S02.13', { exact: true })).toBeVisible()
+  await expect(linksFrom.getByRole('link', { name: 'Replacement target', exact: true })).toHaveAttribute('href', '#/doc/77?system=S02')
   expect(writes[0]).toEqual({ method: 'PUT', body: { value: 77 } })
 
   await linksFrom.getByRole('button', { name: 'Remove link', exact: true }).click()

@@ -71,6 +71,8 @@
   function setView(v) { view = v; try { localStorage.setItem('suchi.docs.view', v) } catch {} }
   const pageSize = 50
   const jdFilter = $derived(route.query.get('jd') || '')
+  // Every row in a single-category view shares one address, so rows omit it.
+  const singleCategory = $derived(inboxMode || !!jdFilter)
   const canShareLinks = $derived(hasCapability(session.user, 'share_links'))
   const publicShareAvailable = $derived(!!session.user?.public_share_available)
   let loadVersion = 0
@@ -791,8 +793,9 @@
   {#if view === 'grid' && !inboxMode}
     <div class="dgrid">
       {#each docs as d, i (d.id)}
-        <article class="card gcard document-card" class:selected={sel.has(d.id)}>
-          <span class="gthumb" class:blurred={isHighSensitivity(d.sensitivity)}><img src={thumbPath(d.id, isHighSensitivity(d.sensitivity))} alt="" loading="lazy" onerror={(e) => e.target.closest('.gthumb').classList.add('none')} /></span>
+        <article class="card gcard document-card filing-row" class:selected={sel.has(d.id)}>
+          <!-- The thumbnail repeats the title link for pointers only; keyboard and screen readers use the title link. -->
+          <a class="gthumb" class:blurred={isHighSensitivity(d.sensitivity)} href={filingHref(`#/doc/${d.id}`)} tabindex="-1" aria-hidden="true"><img src={thumbPath(d.id, isHighSensitivity(d.sensitivity))} alt="" loading="lazy" onerror={(e) => e.target.closest('.gthumb').classList.add('none')} /></a>
           <span class="gmeta">
             <input type="checkbox" class="rowcheck" checked={sel.has(d.id)} disabled={bulkBusy}
                    onchange={(e) => toggleSel(i, e)}
@@ -800,12 +803,16 @@
             <a class="grid-document-link" href={filingHref(`#/doc/${d.id}`)}
                aria-label={d.title || translate("documents.documentValue", { "id": d.id })}>
               <span class="grid-document-title">
-                {#if d.jd_address || d.jd_category_code}<span class="chip">{d.jd_address || d.jd_category_code}</span>{/if}
                 {#if d.archive_serial_number != null}<span class="chip">{translate("common.asnValue", { value: String(d.archive_serial_number) })}</span>{/if}
                 <span class="title">{d.title || translate("documents.documentValue2", { "id": d.id })}</span>
                 <DocumentUnlockStatus state={d.encryption_state} />
               </span>
-              <span class="sub">{fmtDate(d.created_at)}</span>
+              <span class="document-meta">
+                {#if !singleCategory && (d.jd_address || d.jd_category_code)}
+                  <span class="filing-label"><span class="filing-code">{d.jd_address || d.jd_category_code}</span> {d.jd_category_name || ''}</span>
+                {/if}
+                <time>{fmtDate(d.created_at)}</time>
+              </span>
             </a>
           </span>
         </article>
@@ -814,7 +821,7 @@
   {:else}
   <div class="index">
     {#each docs as d, i (d.id)}
-      <div class="irow hoverable document-row" data-row={i} class:cursor={i === lastIdx} class:selected={sel.has(d.id)}>
+      <div class="irow hoverable document-row filing-row" data-row={i} class:cursor={i === lastIdx} class:selected={sel.has(d.id)}>
         <input type="checkbox" class="rowcheck" checked={sel.has(d.id)} disabled={bulkBusy}
                onchange={(e) => toggleSel(i, e)}
                aria-label={translate("documents.selectValue", { "id": d.title || 'document ' + d.id })} />
@@ -822,7 +829,7 @@
            aria-label={d.title || translate("documents.documentValue", { "id": d.id })}>
           <span class="rthumb" class:blurred={isHighSensitivity(d.sensitivity)}><img src={thumbPath(d.id, isHighSensitivity(d.sensitivity))} alt="" loading="lazy" onerror={(e) => e.target.closest('.rthumb').classList.add('none')} /></span>
           <span class="dot {sensDot(d.sensitivity)}" class:accent={!d.sensitivity}></span>
-          {#if d.jd_address || d.jd_category_code}<span class="chip" title={translate("documents.valueValue2", { "jd_category_name": d.jd_category_name, "jd_area_name": d.jd_area_name })}>{d.jd_address || d.jd_category_code}</span>{/if}
+          {#if !singleCategory}<span class="filing-code filing-code-column" title={translate("documents.valueValue2", { "jd_category_name": d.jd_category_name, "jd_area_name": d.jd_area_name })}>{d.jd_address || d.jd_category_code || ''}</span>{/if}
           {#if d.archive_serial_number != null}<span class="chip">{translate("common.asnValue", { value: String(d.archive_serial_number) })}</span>{/if}
           <span class="title grow">{d.title || translate("documents.documentValue2", { "id": d.id })}</span>
           <DocumentUnlockStatus state={d.encryption_state} />

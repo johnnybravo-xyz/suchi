@@ -1340,13 +1340,6 @@
     }
   }
 
-  async function copyAddress() {
-    const scope = captureScope()
-    const address = doc?.jd_address
-    if (!address) return
-    const copied = await copyText(address)
-    if (!disposed && scopeCurrent(scope)) notify?.(copied ? translate("documentDetail.filingAddressCopied") : translate("documentDetail.selectTheFilingAddressAndCopyItManually"))
-  }
   $effect(() => {
     if (id === loadedID) return
     loadedID = id
@@ -1369,7 +1362,7 @@
         <button class="reference-choice" class:selected={Number(editor.selected?.id) === Number(target.id)}
                 type="button" onclick={() => updateReferenceEditor(field.id, { selected: target, error: '' })}>
           <span>{target.title || translate("documentDetail.documentValue", { "id": target.id })}</span>
-          <small>{target.jd_address || `#${target.id}`}{target.system_code ? translate("documentDetail.value", { "system_code": target.system_code }) : ''}</small>
+          <small>#{target.id}{target.jd_address ? ` · ${target.jd_address}` : ''}</small>
         </button>
       {/each}
     </div>
@@ -1389,11 +1382,6 @@
   <a class="btn sm" href={filingHref(trashed ? '#/trash' : '#/documents')}><Icon name="left" size={13} /> {trashed ? translate("documentDetail.backToTrash") : translate("documentDetail.allDocuments")}</a>
   <span class="spacer" style="flex:1"></span>
   {#if doc}
-    {#if doc.jd_address}
-      <input class="input mono" style="max-width:210px" aria-label={translate("documentDetail.filingAddress")} readonly value={doc.jd_address}
-        onclick={event => event.currentTarget.select()} />
-      <button class="btn sm" onclick={copyAddress}>{translate("documentDetail.copyAddress")}</button>
-    {/if}
     {#if highSensitivity}
       <!-- Persistent Reveal/Hide toggle. The in-panel Reveal button
            (inside the preview) still works — this one gives a symmetric
@@ -1479,6 +1467,9 @@
         {:else}
           <div class="title-heading">
             <h2>
+              {#if doc.jd_address || doc.jd_category_code}
+                <span class="chip title-address" title={doc.jd_address ? translate("documentDetail.filingAddress") : doc.jd_category_name}>{doc.jd_address || doc.jd_category_code}</span>
+              {/if}
               <button class="title-rename" title={translate("documentDetail.rename")} onclick={() => (editingTitle = true)}>
                 <span class="dot {sensDot(doc.sensitivity)}"></span>{doc.title || translate("documentDetail.documentValue", { "id": doc.id })}
               </button>
@@ -2358,6 +2349,8 @@
   .title-heading h2 { display:flex; align-items:flex-start; gap:7px; min-width:0; font-size:1.15rem; }
   .title-rename { all:unset; display:inline; min-width:0; overflow-wrap:anywhere; cursor:text; }
   .title-rename .dot { display:inline-block; margin-right:8px; }
+  /* Centred on the title's first line box (1.15rem × the body's 1.55 line height), so long titles wrap below it. */
+  .title-address { flex:none; font-size:.76rem; line-height:1; padding:3px 7px; margin-top:calc((1.15rem * 1.55 - .76rem - 6px) / 2); }
   .title-pin { display:flex; flex-wrap:wrap; align-items:center; gap:6px; color:var(--muted); font-size:.75rem; }
   .title-pin .btn.sm { padding:1px 8px; font-size:.7rem; }
   .document-tags { min-width:0 }

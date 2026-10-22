@@ -2558,6 +2558,18 @@ test('resets document pagination when route filters change', async ({ page }) =>
   await expect(page.getByText(/Page 1 of 2/)).toBeVisible()
 })
 
+test('omits the shared filing address in a single-category Documents view', async ({ page }) => {
+  await mockAPI(page, {
+    documents: [{ id: 42, title: 'Electricity bill', jd_category_code: 16, created_at: 1780000000, tags: [] }],
+  })
+  await page.goto('/#/documents')
+  await expect(page.locator('.document-row .filing-code')).toHaveText('16')
+
+  await page.evaluate(() => { location.hash = '#/documents?jd=6' })
+  await expect(page.locator('.document-row').getByText('Electricity bill')).toBeVisible()
+  await expect(page.locator('.document-row .filing-code')).toHaveCount(0)
+})
+
 test('filters Documents by active share links', async ({ page }, testInfo) => {
   await mockAPI(page, {
     documents: [{ id: 42, title: 'Shared receipt', created_at: 1780000000, tags: [] }],
@@ -7018,6 +7030,8 @@ test('opens a readable Trash document without overlapping actions and restores i
   await expect(documentLink).toHaveAttribute('href', '#/doc/31')
   await expect(documentLink).toContainText(title)
   await expect(documentLink.getByRole('button')).toHaveCount(0)
+  await expect(documentLink.locator('.filing-code')).toHaveText('49')
+  await expect(documentLink.locator('.trash-meta')).toContainText('was filed under Inbox')
   await expect(actions.getByRole('button', { name: 'Restore', exact: true })).toBeVisible()
   await expect(actions.getByRole('button', { name: 'Delete permanently', exact: true })).toBeVisible()
   const linkBox = await documentLink.boundingBox()
@@ -7172,7 +7186,8 @@ test('confirms permanent Trash deletion before removing rows', async ({ page }) 
   await expect(workspace.locator('.rule-workspace-header')).toContainText(retention)
   const urgentRow = workspace.locator('.trash-row').filter({ hasText: 'Old electricity bill' })
   await expect(urgentRow).toContainText(/PDF\s·\s2 KB/)
-  await expect(urgentRow).toContainText('was filed under 49 Inbox')
+  await expect(urgentRow.getByTitle('was filed under 49 Inbox', { exact: true })).toHaveText('49')
+  await expect(urgentRow.locator('.trash-meta')).toHaveText(/^PDF\s·\s2 KB\s·\strashed .+\s·\swas filed under Inbox$/)
   await expect(urgentRow.locator('.deletion-chip')).toHaveText('Deletes in 5 days')
   await expect(urgentRow.locator('.deletion-chip')).toHaveClass(/urgent/)
   await expect(urgentRow.getByRole('button', { name: 'Restore', exact: true })).toHaveClass(/restore-action/)
@@ -7262,8 +7277,8 @@ async function mockFilingSystems(page, overrides = {}) {
     filingTreeChosen: true,
     systems: { introduced: true, default_system_code: 'S01', results: filingCabinets },
     documentDetails: {
-      147: { document: { system_code: 'S01', jd_address: 'S01.13.147', title: 'First private record' } },
-      148: { document: { system_code: 'S02', jd_address: 'S02.13.148', title: 'Second private record' } },
+      147: { document: { system_code: 'S01', jd_address: 'S01.13', title: 'First private record' } },
+      148: { document: { system_code: 'S02', jd_address: 'S02.13', title: 'Second private record' } },
     },
     ...overrides,
   }
@@ -7277,8 +7292,8 @@ async function mockFilingSystems(page, overrides = {}) {
     if (request.method() !== 'GET') return route.fallback()
     if (url.pathname === '/api/documents/') return route.fulfill({ json: {
       count: 1, results: [code === 'S02'
-        ? { id: 148, title: 'Second private record', system_code: 'S02', jd_address: 'S02.13.148' }
-        : { id: 147, title: 'First private record', system_code: 'S01', jd_address: 'S01.13.147' }],
+        ? { id: 148, title: 'Second private record', system_code: 'S02', jd_address: 'S02.13' }
+        : { id: 147, title: 'First private record', system_code: 'S01', jd_address: 'S01.13' }],
     } })
     if (url.pathname === '/api/jd/categories/') return route.fulfill({ json: {
       results: [{ id: code === 'S02' ? 213 : 113, code: 13, name: `${code || 'Original'} filing`,
@@ -7377,7 +7392,7 @@ test('filing systems derives a legacy numeric deep link intrinsically, then scop
   const { requests } = await mockFilingSystems(page)
   await page.goto('/#/doc/148')
   await expect(page).toHaveURL(/#\/doc\/148\?system=S02$/)
-  await expect(page.getByLabel('Filing address', { exact: true })).toHaveValue('S02.13.148')
+  await expect(page.getByTitle('Filing category address', { exact: true })).toHaveText('S02.13')
   expect(requests.filter(item => item.path === '/api/documents/148').map(item => item.system)).toEqual([null, 'S02'])
   expect(requests.filter(item => item.path === '/api/jd/categories/').every(item => item.system === 'S02')).toBe(true)
   await expect(page.getByRole('link', { name: 'Download', exact: true })).toHaveAttribute('href', '/download/148?system=S02')
@@ -7390,7 +7405,7 @@ test('filing systems does not reload document detail when the sidebar tree arriv
   let tree
   await page.route('**/api/jd/categories/?*', route => { tree = route })
   await page.goto('/#/doc/148?system=S02')
-  await expect(page.getByLabel('Filing address', { exact: true })).toHaveValue('S02.13.148')
+  await expect(page.getByTitle('Filing category address', { exact: true })).toHaveText('S02.13')
   await page.getByRole('button', { name: 'Edit tags', exact: true }).click()
   await expect(page.getByRole('combobox', { name: 'Tag to add', exact: true })).toBeVisible()
   await expect.poll(() => !!tree).toBe(true)
@@ -7454,7 +7469,7 @@ test('filing systems keeps a continuing upload batch bound to its starting syste
     if (route.request().method() !== 'POST') return route.fallback()
     destinations.push(new URL(route.request().url()).searchParams.get('system'))
     if (destinations.length === 1) { first = route; return }
-    return route.fulfill({ json: { id: 902, system_code: 'S01', jd_address: 'S01.49.902' } })
+    return route.fulfill({ json: { id: 902, system_code: 'S01', jd_address: 'S01.49' } })
   })
   await page.goto('/#/upload?system=S01')
   await page.locator('input[type=file]').setInputFiles([
@@ -7464,30 +7479,59 @@ test('filing systems keeps a continuing upload batch bound to its starting syste
   await expect.poll(() => !!first).toBe(true)
   await chooseFilingSystem(page, 'S02')
   await expect(page.getByText('Second private record', { exact: true })).toBeVisible()
-  await first.fulfill({ json: { id: 901, system_code: 'S01', jd_address: 'S01.49.901' } })
+  await first.fulfill({ json: { id: 901, system_code: 'S01', jd_address: 'S01.49' } })
   await expect.poll(() => destinations).toEqual(['S01', 'S01'])
   await paintSettled(page)
-  await expect(page.getByText(/old-first|old-second|S01\.49\.90/)).toHaveCount(0)
+  await expect(page.getByText(/old-first|old-second|S01\.49/)).toHaveCount(0)
   await expect(page.getByText('Second private record', { exact: true })).toBeVisible()
 })
 
-test('filing systems resolves exact addresses but never treats a stale filing address as a search query', async ({ page }) => {
-  const { requests } = await mockFilingSystems(page)
-  await page.route('**/api/jd/resolve?*', route => {
-    const address = new URL(route.request().url()).searchParams.get('address')
-    return address === 'S02.13.148'
-      ? route.fulfill({ json: { id: 148, system_code: 'S02', jd_address: address } })
-      : route.fulfill({ status: 404, json: { code: 'not_found', error: 'Address unavailable' } })
+test('filing addresses navigate categories', async ({ page }) => {
+  const options = {
+    filingTreeChosen: true,
+    systems: { introduced: false, default_system_code: '', results: [] },
+    jdCategories: [{ id: 121, code: 21, name: 'Single filing', area_code: 20, area_name: 'Records' }],
+  }
+  await mockAPI(page, options)
+  const resolved = []
+  const searches = []
+  await page.route('**/api/**', route => {
+    const url = new URL(route.request().url())
+    if (url.pathname === '/api/jd/resolve') {
+      const address = url.searchParams.get('address')
+      resolved.push(address)
+      if (address === 'S02.13') {
+        return route.fulfill({ json: { system_code: 'S02', jd_category_id: 213, jd_address: address } })
+      }
+      return route.fulfill({ status: 404, json: { code: 'not_found', error: 'Address unavailable' } })
+    }
+    if (url.pathname === '/api/search/') searches.push(url.searchParams.get('q'))
+    return route.fallback()
   })
-  await page.goto('/#/documents?system=S01')
+
+  await page.goto('/#/dashboard')
   const omni = page.getByRole('searchbox', { name: 'Search or run a command' })
-  await omni.fill('S02.13.148')
+  // Before introduction there are no addresses, so AREA.AC-looking input is ordinary search text.
+  await omni.fill('20.21')
   await omni.press('Enter')
-  await expect(page).toHaveURL(/#\/doc\/148\?system=S02$/)
-  await expect(page.getByLabel('Filing address', { exact: true })).toHaveValue('S02.13.148')
-  await page.evaluate(() => { location.hash = '#/search?system=S02&q=S02.12.148' })
-  await expect(page.getByText('Address unavailable', { exact: true })).toBeVisible()
-  expect(requests.filter(item => item.path === '/api/search/')).toEqual([])
+  await expect.poll(() => searches).toContain('20.21')
+
+  options.systems = { introduced: true, default_system_code: 'S01', results: filingCabinets }
+  options.jdCategories = [{ id: 213, code: 13, name: 'Second filing', area_code: 10, area_name: 'Records' }]
+  await page.goto('/#/dashboard?system=S01')
+  await page.reload()
+  await page.goto('/#/search?system=S01&q=S02.13')
+  await expect(page).toHaveURL(/#\/documents\?system=S02&jd=213$/)
+
+  await page.goto('/#/search?system=S02&q=S02.12')
+  await expect.poll(() => searches).toContain('S02.12')
+  await expect(page.getByText('Address unavailable', { exact: true })).toHaveCount(0)
+
+  await page.goto('/#/search?system=S02&q=S01.21.147')
+  await expect.poll(() => searches).toContain('S01.21.147')
+  await page.goto('/#/search?system=S02&q=jd%3A21')
+  await expect.poll(() => searches).toContain('jd:21')
+  expect(resolved).toEqual(['S02.13', 'S02.12'])
 })
 
 test('filing systems first named Apply invalidates unnamed reads and selects the imported system', async ({ page }) => {
@@ -7504,7 +7548,7 @@ test('filing systems first named Apply invalidates unnamed reads and selects the
   await page.route('**/api/documents/**', route => {
     const url = new URL(route.request().url())
     if (!url.searchParams.has('system') && url.pathname === '/api/documents/') { oldRecent = route; return }
-    return route.fulfill({ json: { count: 1, results: [{ id: 148, title: 'New cabinet record', jd_address: 'S02.13.148' }] } })
+    return route.fulfill({ json: { count: 1, results: [{ id: 148, title: 'New cabinet record', jd_address: 'S02.13' }] } })
   })
   await page.goto('/#/dashboard')
   await expect.poll(() => !!oldRecent).toBe(true)
@@ -7610,7 +7654,7 @@ test('filing systems ignores a late share response and its clipboard effects aft
   await expect.poll(() => !!pending).toBe(true)
   expect(new URL(pending.request().url()).searchParams.get('system')).toBe('S01')
   await page.evaluate(() => { location.hash = '#/doc/148?system=S02' })
-  await expect(page.getByLabel('Filing address', { exact: true })).toHaveValue('S02.13.148')
+  await expect(page.getByTitle('Filing category address', { exact: true })).toHaveText('S02.13')
   await pending.fulfill({ json: { id: 9, public_url: 'https://archive.example.test/s/foreign-secret' } })
   await paintSettled(page)
   await expect(page.getByRole('dialog', { name: 'Share document' })).toHaveCount(0)
@@ -7792,7 +7836,7 @@ test('filing systems renames a display name without changing its code or documen
   expect(changes).toEqual([{ name: 'Renamed firm' }])
   await expect(page).toHaveURL(/system=S01$/)
   await page.evaluate(() => { location.hash = '#/doc/147?system=S01' })
-  await expect(page.getByLabel('Filing address', { exact: true })).toHaveValue('S01.13.147')
+  await expect(page.getByTitle('Filing category address', { exact: true })).toHaveText('S01.13')
 })
 
 test('Account subscription connects with device code and requires egress and model test', async ({ page }) => {

@@ -177,11 +177,11 @@
     <p class="sub" style="color:var(--muted);margin:0 0 10px">{plural("search.resultCount", count)}</p>
     <div class="index">
       {#each hits as h (h.id)}
-        <a class="irow" href={filingHref(`#/doc/${h.id}`)} style="align-items:flex-start">
+        <a class="irow filing-row" href={filingHref(`#/doc/${h.id}`)} style="align-items:flex-start">
           <span class="dot accent" style="margin-top:7px"></span>
+          <span class="filing-code filing-code-column" style="margin-top:2px">{h.jd_address || h.jd_category_code || ''}</span>
           <span class="grow">
             <span class="title" style="display:block">{h.title || translate("search.documentValue", { "id": h.id })}</span>
-            {#if h.jd_address}<span class="chip">{h.jd_address}</span>{/if}
             {#if h.archive_serial_number != null}<span class="chip">{translate("common.asnValue", { value: String(h.archive_serial_number) })}</span>{/if}
             {#if h.snippet}<span class="sub" style="white-space:normal">{@html safeSnippet(h.snippet)}</span>{/if}
           </span>

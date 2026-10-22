@@ -200,9 +200,9 @@
     {:else if recent.length}
       <div class="index">
         {#each recent as d (d.id)}
-          <a class="irow" href={filingHref(`#/doc/${d.id}`)}>
+          <a class="irow filing-row" href={filingHref(`#/doc/${d.id}`)}>
             <span class="dot {sensDot(d.sensitivity)}" class:accent={!d.sensitivity}></span>
-            {#if d.jd_address || d.jd_category_code}<span class="chip" title={d.jd_category_name}>{d.jd_address || d.jd_category_code}</span>{/if}
+            <span class="filing-code filing-code-column" title={d.jd_category_name}>{d.jd_address || d.jd_category_code || ''}</span>
             <span class="title grow">{d.title || translate("dashboard.documentValue", { "id": d.id })}</span>
             <span class="sub">{fmtDate(d.created_at)}</span>
           </a>
