@@ -1,6 +1,5 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
-  import { t as translate } from "./i18n.svelte.js";
   let {
     title,
     description = '',
@@ -12,7 +11,7 @@
   } = $props()
 </script>
 
-<section class={translate("ruleWorkspace.ruleWorkspaceValue", { "className": className })} aria-labelledby={headingId}>
+<section class="rule-workspace {className}" aria-labelledby={headingId}>
   <header class="rule-workspace-header">
     <div class="rule-workspace-title">
       <h2 id={headingId}>{title}</h2>

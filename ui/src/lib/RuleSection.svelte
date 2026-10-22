@@ -1,6 +1,5 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
-  import { t as translate } from "./i18n.svelte.js";
   let {
     title = '',
     headingId = '',
@@ -10,7 +9,7 @@
   } = $props()
 </script>
 
-<section class={translate("ruleSection.ruleSectionValue", { "className": className })} class:quiet={tone === 'quiet'} aria-labelledby={headingId || undefined}>
+<section class="rule-section {className}" class:quiet={tone === 'quiet'} aria-labelledby={headingId || undefined}>
   {#if title}<h3 id={headingId || undefined}>{title}</h3>{/if}
   {@render children?.()}
 </section>
