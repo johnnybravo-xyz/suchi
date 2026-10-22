@@ -164,7 +164,7 @@ func TestInitialPublicationPausedAcrossIntroductionConverges(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.HasPrefix(current, "S01/") || !strings.HasSuffix(current, "__S01.13.147.pdf") {
+			if !strings.HasPrefix(current, "S01/") || !strings.HasSuffix(current, "__147.pdf") {
 				t.Fatal(current)
 			}
 			assertProjection(t, r, current)
@@ -376,10 +376,10 @@ func TestTwoSystemsResolveIdenticalFilingCodesUsingTheirOwnMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(first, "S01/10-19 Records/13 Tax/") || !strings.HasSuffix(first, "__S01.13.147.pdf") {
+	if !strings.HasPrefix(first, "S01/10-19 Records/13 Tax/") || !strings.HasSuffix(first, "__147.pdf") {
 		t.Fatal(first)
 	}
-	if !strings.HasPrefix(second, "S02/Same client/") || !strings.HasSuffix(second, "__S02.13.148.pdf") {
+	if !strings.HasPrefix(second, "S02/Same client/") || !strings.HasSuffix(second, "__148.pdf") {
 		t.Fatal(second)
 	}
 	assertProjection(t, r, first)
@@ -401,6 +401,58 @@ func TestTwoSystemsResolveIdenticalFilingCodesUsingTheirOwnMode(t *testing.T) {
 	assertProjection(t, r, first)
 	if _, err := os.Lstat(filepath.Join(r.renderDir, second)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("old mode path remains", err)
+	}
+}
+
+func TestNamedSystemDefaultsKeepDocumentIdentitySeparateFromFilingAddress(t *testing.T) {
+	r, d, _ := recoveryRenderer(t)
+	secondRef, err := r.cas.Put(strings.NewReader("second immutable original"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.ExecWrite(t.Context(), `UPDATE jd_systems SET code='S01',name='Audit' WHERE id=1;
+		INSERT INTO documents(system_id,id,owner_id,original_blob,original_size,title,mime_type,jd_category_id,created_at,updated_at)
+		VALUES(1,148,1,?,25,'Receipt','application/pdf',1,0,0);
+	`, secondRef.SHA256); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := r.Render(t.Context(), 147)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := r.Render(t.Context(), 148)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second || !strings.HasSuffix(first, "__147.pdf") || !strings.HasSuffix(second, "__148.pdf") {
+		t.Fatalf("default paths are not document-specific: %q %q", first, second)
+	}
+	assertProjection(t, r, first)
+	data, err := os.ReadFile(filepath.Join(r.renderDir, second))
+	if err != nil || string(data) != "second immutable original" {
+		t.Fatalf("second projection %q: %q %v", second, data, err)
+	}
+
+	if _, err := d.ExecWrite(t.Context(), `INSERT INTO storage_paths(system_id,id,name,slug,path,created_at,updated_at)
+		VALUES(1,1,'Address','address','Custom/{{ jd.address }}',0,0);
+		UPDATE documents SET storage_path_id=1 WHERE id=147;
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Move(t.Context(), 147); err != nil {
+		t.Fatal(err)
+	}
+	explicit, _, err := r.resolveTarget(t.Context(), 147)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if explicit != filepath.Join("S01", "Custom", "S01.13.pdf") {
+		t.Fatalf("explicit address path = %q", explicit)
+	}
+	assertProjection(t, r, explicit)
+	if _, err := os.Lstat(filepath.Join(r.renderDir, second)); err != nil {
+		t.Fatalf("second default projection disappeared: %v", err)
 	}
 }
 
@@ -483,7 +535,7 @@ func TestSystemTemplateValuesRemainInsideEnforcedRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if actual != filepath.Join("S01", "S01", "Audit firm", "S01.13.147.pdf") {
+	if actual != filepath.Join("S01", "S01", "Audit firm", "S01.13.pdf") {
 		t.Fatalf("template replaced enforced system root: %q", actual)
 	}
 	assertProjection(t, r, actual)

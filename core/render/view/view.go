@@ -435,9 +435,6 @@ func (r *Renderer) buildContext(ctx context.Context, docID int64) (string, paths
 	} else {
 		tpl = DefaultTemplateJD
 	}
-	if systemCode != "" && (!storagePathTpl.Valid || storagePathTpl.String == "") {
-		tpl = strings.Replace(tpl, "{{ doc_pk }}", "{{ jd.address }}", 1)
-	}
 
 	// Read tags for the template context.
 	tags, err := r.docTags(ctx, docID)

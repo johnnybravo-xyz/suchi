@@ -139,7 +139,7 @@ func previewRenderedLayout(template string) (string, bool, error) {
 		Created: "2026-03-02", Added: "2026-03-03", Owner: "archive@example.com", ASN: "4021",
 		JDAreaCodeStart: 10, JDAreaCodeEnd: 19, JDAreaName: "Home",
 		JDCategoryCode: 13, JDCategoryName: "Utilities", JDSystemCode: "S01",
-		JDSystemName: "Home archive", JDAddress: "S01.13.1842",
+		JDSystemName: "Home archive", JDAddress: "S01.13",
 	})
 	if err != nil {
 		return "", false, err

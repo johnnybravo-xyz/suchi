@@ -147,7 +147,7 @@ func TestRenderedLayoutWritesRejectFileExtensions(t *testing.T) {
 	if err := json.Unmarshal(valid.Body.Bytes(), &sample); err != nil {
 		t.Fatal(err)
 	}
-	if sample.Path != "Archive/S01.13.1842.pdf" {
+	if sample.Path != "Archive/S01.13.pdf" {
 		t.Fatalf("dotted variable preview path = %q", sample.Path)
 	}
 
