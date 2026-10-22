@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"math"
 	"path/filepath"
 	"testing"
 
@@ -18,34 +17,32 @@ import (
 
 func TestCanonicalAddresses(t *testing.T) {
 	for _, tc := range []struct {
-		code     string
+		system   string
 		category int
-		id       int64
 		address  string
+		parsed   systems.FilingAddress
 	}{
-		{"S01", 13, 147, "S01.13.147"},
-		{"A00", 0, 1, "A00.00.1"},
-		{"Z99", 99, math.MaxInt64, "Z99.99.9223372036854775807"},
+		{"S01", 21, "S01.21", systems.FilingAddress{SystemCode: "S01", CategoryCode: 21}},
+		{"Z99", 99, "Z99.99", systems.FilingAddress{SystemCode: "Z99", CategoryCode: 99}},
 	} {
-		if got := systems.Address(tc.code, tc.category, tc.id); got != tc.address {
+		if got := systems.Address(tc.system, tc.category); got != tc.address {
 			t.Fatalf("address=%q, want %q", got, tc.address)
 		}
-		code, category, id, err := systems.ParseAddress(tc.address)
-		if err != nil || code != tc.code || category != tc.category || id != tc.id {
-			t.Fatalf("parse %q: %q %d %d %v", tc.address, code, category, id, err)
+		got, err := systems.ParseAddress(tc.address)
+		if err != nil || got != tc.parsed {
+			t.Fatalf("parse %q: %+v %v", tc.address, got, err)
 		}
 	}
 	for _, value := range []string{
-		"", "S01", "S01.13", "s01.13.147", "AUD.13.147", "S1.13.147",
-		"S001.13.147", "S01.1.147", "S01.013.147", "S01.13.0", "S01.13.0147",
-		"S01.13.-1", "S01.13.+1", " S01.13.147", "S01.13.147 ", "S01.13.147\n",
-		"S01.13.9223372036854775808", "S01.13.1.1", "S01.１３.147", "S01.13.١",
+		"", "20", "20.2", "2.21", "020.21", "21.21", "10.21", "20.21", "40.49", "00.00", "20.20.1",
+		"S01", "S01.2", "s01.21", "AUD.21", "S1.21", "S001.21", "S01.021",
+		"S01.21.147", " S01.21", "S01.21 ", "S01.21\n", "S01.２１", "２０.21",
 	} {
-		if _, _, _, err := systems.ParseAddress(value); !errors.Is(err, systems.ErrBadAddress) {
+		if _, err := systems.ParseAddress(value); !errors.Is(err, systems.ErrBadAddress) {
 			t.Errorf("accepted noncanonical address %q: %v", value, err)
 		}
 	}
-	if systems.Address("", 13, 147) != "" || systems.Address("S01", 13, 0) != "" || systems.Address("S01", 100, 147) != "" {
+	if systems.Address("", 21) != "" || systems.Address("s01", 13) != "" || systems.Address("S01", -1) != "" || systems.Address("S01", 100) != "" {
 		t.Fatal("generated an address without a valid filing identity")
 	}
 }

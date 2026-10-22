@@ -1113,7 +1113,7 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 	if jdCode.Valid {
 		d.JDCategoryCode = jdCode.Int64
 	}
-	d.JDAddress = systems.Address(d.SystemCode, int(d.JDCategoryCode), d.ID)
+	d.JDAddress = systems.Address(d.SystemCode, int(d.JDCategoryCode))
 	if jdName.Valid {
 		d.JDCategoryName = jdName.String
 	}

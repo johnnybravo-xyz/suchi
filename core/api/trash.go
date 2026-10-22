@@ -10,6 +10,7 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
 	"github.com/johnnybravo-xyz/suchi/core/trash"
 )
@@ -25,6 +26,7 @@ type TrashRow struct {
 	DeletesAt           int64  `json:"deletes_at"`
 	JDCategoryCode      int64  `json:"jd_category_code,omitempty"`
 	JDCategoryName      string `json:"jd_category_name,omitempty"`
+	JDAddress           string `json:"jd_address,omitempty"`
 	ArchiveSerialNumber *int64 `json:"archive_serial_number,omitempty"`
 }
 
@@ -54,11 +56,12 @@ func (s *Server) ListTrash(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pp := ParsePageParams(r, 50, 200)
-	query := `SELECT d.id, d.title, COALESCE(d.mime_type, ''), d.original_size,
+	query := `SELECT d.id, d.title, js.code, COALESCE(d.mime_type, ''), d.original_size,
 	              d.created_at, COALESCE(d.trashed_at, 0),
-	              COALESCE(jc.code, 0), COALESCE(jc.name, ''),
+	              jc.code, COALESCE(jc.name, ''),
 	              d.archive_serial_number
 	      FROM documents d
+	      JOIN jd_systems js ON js.id = d.system_id
 	      LEFT JOIN jd_categories jc ON jc.id = d.jd_category_id AND jc.system_id = d.system_id
 	      WHERE ` + where + `
 	      ORDER BY d.trashed_at DESC, d.id DESC
@@ -73,11 +76,16 @@ func (s *Server) ListTrash(w http.ResponseWriter, r *http.Request) {
 	var out []TrashRow
 	for rows.Next() {
 		var row TrashRow
-		var archiveNumber sql.NullInt64
-		if err := rows.Scan(&row.ID, &row.Title, &row.MIME, &row.Size,
-			&row.CreatedAt, &row.TrashedAt, &row.JDCategoryCode, &row.JDCategoryName, &archiveNumber); err != nil {
+		var systemCode string
+		var categoryCode, archiveNumber sql.NullInt64
+		if err := rows.Scan(&row.ID, &row.Title, &systemCode, &row.MIME, &row.Size,
+			&row.CreatedAt, &row.TrashedAt, &categoryCode, &row.JDCategoryName, &archiveNumber); err != nil {
 			s.serverErr(w, "trash.scan", err)
 			return
+		}
+		if categoryCode.Valid {
+			row.JDCategoryCode = categoryCode.Int64
+			row.JDAddress = systems.Address(systemCode, int(categoryCode.Int64))
 		}
 		row.DeletesAt = row.TrashedAt + int64(trash.Retention/time.Second)
 		if archiveNumber.Valid {

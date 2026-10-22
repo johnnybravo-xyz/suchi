@@ -344,93 +344,101 @@ func TestSystemsCollectionsFilterBeforeCountsPagesAndHydration(t *testing.T) {
 	}
 }
 
-func TestSystemsNumericAndAddressAccessRequireBothEntryAndACL(t *testing.T) {
+func TestSystemsNumericDocumentsAndCategoryAddressAccess(t *testing.T) {
 	s, mux := newSystemsBoundaryServer(t)
-	seedSystemsBoundary(t, s)
-	for _, id := range []int64{201, 202, 203, 204} {
-		w := systemsBoundaryRequest(mux, "GET", fmt.Sprintf("/api/documents/%d", id), "", memberPrincipal(5))
-		if w.Code != 404 {
-			t.Fatalf("owner/grant/assignment admitted %d: %d %s", id, w.Code, w.Body.String())
-		}
+	if _, err := s.DB.Write.Exec(`
+		INSERT INTO jd_areas(system_id,code_start,code_end,name,position) VALUES (1,20,29,'Single area',0);
+		INSERT INTO jd_categories(id,system_id,area_start,code,name,system) VALUES (91,1,20,21,'Single filing',1);
+	`); err != nil {
+		t.Fatal(err)
 	}
+
+	type resolvedAddress struct {
+		ID         *int64 `json:"id"`
+		SystemCode string `json:"system_code"`
+		CategoryID int64  `json:"jd_category_id"`
+		Address    string `json:"jd_address"`
+	}
+	resolve := func(address, suffix string, p *pluginapi.Principal, status int) resolvedAddress {
+		t.Helper()
+		w := systemsBoundaryRequest(mux, "GET", "/api/jd/resolve?address="+url.QueryEscape(address)+suffix, "", p)
+		if w.Code != status {
+			t.Fatalf("resolve %s: %d %s", address, w.Code, w.Body.String())
+		}
+		var out resolvedAddress
+		if status == http.StatusOK {
+			if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+				t.Fatalf("decode %s: %v", address, err)
+			}
+			if out.ID != nil {
+				t.Fatalf("resolver returned document identity: %s", w.Body.String())
+			}
+		}
+		return out
+	}
+
+	// The original archive has no address before introduction; AREA.AC is not an address.
+	resolve("20.21", "", memberPrincipal(5), http.StatusBadRequest)
+
+	seedSystemsBoundary(t, s)
+	resolve("S01.13.101", "", adminPrincipal(1), http.StatusBadRequest)
+	resolve("s01.13", "", adminPrincipal(1), http.StatusBadRequest)
+	resolve("S01.99", "", adminPrincipal(1), http.StatusNotFound)
+	resolve("S02.13", "", memberPrincipal(5), http.StatusNotFound)
+
 	if _, err := s.DB.Write.Exec(`INSERT INTO jd_system_members(system_id,user_id,created_at) VALUES (2,5,0)`); err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
-		address string
-		p       *pluginapi.Principal
-		status  int
+		address   string
+		principal *pluginapi.Principal
+		category  int64
 	}{
-		{"S02.13.201", memberPrincipal(5), 200},
-		{"S02.13.202", memberPrincipal(5), 200},
-		{"S02.13.203", memberPrincipal(5), 200},
-		{"S02.13.204", memberPrincipal(5), 404},
-		{"S01.13.102", memberPrincipal(5), 404},
-		{"S01.13.201", adminPrincipal(1), 404},
-		{"S01.14.101", adminPrincipal(1), 404},
-		{"S01.13.999999", adminPrincipal(1), 404},
-		{"S01.13.0101", adminPrincipal(1), 400},
-		{"s01.13.101", adminPrincipal(1), 400},
-		{"S01.13.9223372036854775808", adminPrincipal(1), 400},
+		{"S01.13", memberPrincipal(5), 101},
+		{"S01.14", memberPrincipal(5), 111},
+		{"S02.13", memberPrincipal(5), 201},
 	} {
-		w := systemsBoundaryRequest(mux, "GET", "/api/jd/resolve?address="+url.QueryEscape(tc.address), "", tc.p)
-		if w.Code != tc.status {
-			t.Fatalf("address %s: %d %s", tc.address, w.Code, w.Body.String())
-		}
-		if tc.status == 200 {
-			var out struct {
-				ID      int64  `json:"id"`
-				Address string `json:"jd_address"`
-			}
-			if json.Unmarshal(w.Body.Bytes(), &out) != nil || out.Address != tc.address || out.ID < 201 || out.ID > 203 {
-				t.Fatalf("wrong address identity: %s", w.Body.String())
-			}
+		got := resolve(tc.address, "", tc.principal, http.StatusOK)
+		if got.SystemCode != tc.address[:3] || got.CategoryID != tc.category || got.Address != tc.address {
+			t.Fatalf("named category identity: %+v", got)
 		}
 	}
+
 	adminToken := adminPrincipal(1)
 	adminToken.Kind = "token"
 	adminToken.TokenSystemID = 1
 	adminToken.Scopes = []string{auth.ScopeDocumentsRead}
-	for _, tc := range []struct {
-		path string
-		p    *pluginapi.Principal
-	}{
-		{"/api/documents/201?system=S01", adminPrincipal(1)},
-		{"/api/jd/resolve?address=S02.13.201&system=S01", adminPrincipal(1)},
-		{"/api/documents/201", adminToken},
-		{"/api/jd/resolve?address=S02.13.201", adminToken},
-	} {
-		w := systemsBoundaryRequest(mux, "GET", tc.path, "", tc.p)
-		if w.Code != 404 {
-			t.Fatalf("admin mismatch %s: %d %s", tc.path, w.Code, w.Body.String())
+	resolve("S01.13", "", adminToken, http.StatusOK)
+	resolve("S02.13", "", adminToken, http.StatusNotFound)
+	resolve("S02.13", "&system=S01", adminPrincipal(1), http.StatusNotFound)
+
+	for _, id := range []int64{101, 103} {
+		w := systemsBoundaryRequest(mux, "GET", fmt.Sprintf("/api/documents/%d?system=S01", id), "", memberPrincipal(5))
+		var detail struct {
+			ID        int64  `json:"id"`
+			JDAddress string `json:"jd_address"`
+		}
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &detail) != nil ||
+			detail.ID != id || detail.JDAddress != "S01.13" {
+			t.Fatalf("shared category address for %d: %d %s", id, w.Code, w.Body.String())
 		}
 	}
+
 	w := systemsBoundaryRequest(mux, "PATCH", "/api/documents/101", `{"jd_category_id":111}`, memberPrincipal(5))
-	if w.Code != 200 {
+	if w.Code != http.StatusOK {
 		t.Fatalf("refile: %d %s", w.Code, w.Body.String())
 	}
-	for _, tc := range []struct {
-		path   string
-		status int
-	}{
-		{"/api/jd/resolve?address=S01.13.101", 404},
-		{"/api/jd/resolve?address=S01.14.101", 200},
-		{"/api/documents/101", 200},
-	} {
-		w = systemsBoundaryRequest(mux, "GET", tc.path, "", memberPrincipal(5))
-		if w.Code != tc.status {
-			t.Fatalf("refiled identity %s: %d %s", tc.path, w.Code, w.Body.String())
-		}
-		if tc.status == 200 {
-			var out struct {
-				ID      int64  `json:"id"`
-				Address string `json:"jd_address"`
-			}
-			if json.Unmarshal(w.Body.Bytes(), &out) != nil || out.ID != 101 || out.Address != "S01.14.101" {
-				t.Fatalf("refile renumbered: %s", w.Body.String())
-			}
-		}
+	w = systemsBoundaryRequest(mux, "GET", "/api/documents/101?system=S01", "", memberPrincipal(5))
+	var detail struct {
+		ID        int64  `json:"id"`
+		JDAddress string `json:"jd_address"`
 	}
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &detail) != nil ||
+		detail.ID != 101 || detail.JDAddress != "S01.14" {
+		t.Fatalf("refile changed identity: %d %s", w.Code, w.Body.String())
+	}
+	resolve("S01.13", "", memberPrincipal(5), http.StatusOK)
+	resolve("S01.14", "", memberPrincipal(5), http.StatusOK)
 }
 
 func TestSystemsSimilarityAndChatExcludeForeignEvidenceAndPriorSources(t *testing.T) {
@@ -693,7 +701,7 @@ func TestSystemsRestartReplaysPersistedDocumentAndVersionReceipts(t *testing.T) 
 		if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &request.response) != nil || request.response.ID <= 0 || request.response.IdempotentReplay || request.response.SystemCode != "S01" {
 			t.Fatalf("initial upload %s: %d %s", request.path, w.Code, w.Body.String())
 		}
-		if request.response.JDAddress != fmt.Sprintf("S01.49.%d", request.response.ID) {
+		if request.response.JDAddress != "S01.49" {
 			t.Fatalf("receipt has wrong filing address: %+v", request.response)
 		}
 		request.location = w.Header().Get("Location")

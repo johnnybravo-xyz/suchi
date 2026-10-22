@@ -239,7 +239,7 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 			v := archiveNumber.Int64
 			row.ArchiveSerialNumber = &v
 		}
-		row.JDAddress = systems.Address(row.SystemCode, int(row.JDCategoryCode), row.ID)
+		row.JDAddress = systems.Address(row.SystemCode, int(row.JDCategoryCode))
 		row.Tags = []string{}
 		out = append(out, row)
 		ids = append(ids, row.ID)

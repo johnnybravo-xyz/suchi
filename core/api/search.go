@@ -23,6 +23,7 @@ type SearchHit struct {
 	ID                  int64   `json:"id"`
 	SystemCode          string  `json:"system_code,omitempty"`
 	JDAddress           string  `json:"jd_address,omitempty"`
+	JDCategoryCode      int     `json:"jd_category_code,omitempty"`
 	Title               string  `json:"title"`
 	Snippet             string  `json:"snippet"`
 	Rank                float64 `json:"rank"`
@@ -179,16 +180,15 @@ func (s *Server) Search(w http.ResponseWriter, r *http.Request) {
 	total := 0
 	for rows.Next() {
 		var hit SearchHit
-		var categoryCode int
 		var archiveNumber sql.NullInt64
 		if err := rows.Scan(&hit.ID, &hit.Title, &hit.Snippet, &hit.Rank,
-			&hit.CreatedAt, &hit.MIME, &hit.Sensitivity, &hit.SystemCode, &categoryCode,
+			&hit.CreatedAt, &hit.MIME, &hit.Sensitivity, &hit.SystemCode, &hit.JDCategoryCode,
 			&archiveNumber, &total); err != nil {
 			s.serverErr(w, "search.scan", err)
 			return
 		}
 		hit.Snippet = closeMarks(hit.Snippet)
-		hit.JDAddress = systems.Address(hit.SystemCode, categoryCode, hit.ID)
+		hit.JDAddress = systems.Address(hit.SystemCode, hit.JDCategoryCode)
 		if archiveNumber.Valid {
 			value := archiveNumber.Int64
 			hit.ArchiveSerialNumber = &value

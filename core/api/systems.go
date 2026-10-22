@@ -226,37 +226,42 @@ func (s *Server) ResolveJDAddress(w http.ResponseWriter, r *http.Request) {
 	if p == nil || !auth.RequireScope(w, r, auth.ScopeDocumentsRead) {
 		return
 	}
-	code, category, id, err := systems.ParseAddress(r.URL.Query().Get("address"))
+	address, err := systems.ParseAddress(r.URL.Query().Get("address"))
 	if err != nil {
-		s.writeError(w, http.StatusBadRequest, "bad_address", "invalid document address")
+		s.writeError(w, http.StatusBadRequest, "bad_address", "invalid filing address")
 		return
 	}
-	var systemID int64
-	err = s.DB.Read.QueryRowContext(r.Context(), `SELECT d.system_id FROM documents d
-		JOIN jd_systems s ON s.id = d.system_id
-		JOIN jd_categories c ON c.id = d.jd_category_id AND c.system_id = d.system_id
-		WHERE d.id = ? AND s.code = ? AND c.code = ? AND d.trashed_at IS NULL`, id, code, category).Scan(&systemID)
+	if !s.bindRequestSystem(w, r, p) {
+		return
+	}
+
+	var systemID, categoryID int64
+	err = s.DB.Read.QueryRowContext(r.Context(), `SELECT s.id, c.id
+		FROM jd_systems s JOIN jd_categories c ON c.system_id = s.id
+		WHERE s.code = ? AND c.code = ?`,
+		address.SystemCode, address.CategoryCode).Scan(&systemID, &categoryID)
 	if errors.Is(err, sql.ErrNoRows) {
-		s.writeError(w, http.StatusNotFound, "not_found", "document not found")
+		s.writeError(w, http.StatusNotFound, "not_found", "filing category not found")
 		return
 	}
 	if err != nil {
 		s.serverErr(w, "systems.address", err)
 		return
 	}
-	if !s.bindRequestSystem(w, r, p) {
-		return
-	}
-	allowed, err := s.authorized(r.Context(), nil, p, authz.KindDocument, id, authz.PermView)
+	allowed, err := s.canEnterSystem(r.Context(), s.DB.Read, p, systemID)
 	if err != nil {
 		s.serverErr(w, "systems.address.access", err)
 		return
 	}
 	if !allowed {
-		s.writeError(w, http.StatusNotFound, "not_found", "document not found")
+		s.writeError(w, http.StatusNotFound, "not_found", "filing category not found")
 		return
 	}
-	s.writeJSON(w, http.StatusOK, map[string]any{"id": id, "system_code": code, "jd_address": systems.Address(code, category, id)})
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"system_code":    address.SystemCode,
+		"jd_category_id": categoryID,
+		"jd_address":     systems.Address(address.SystemCode, address.CategoryCode),
+	})
 }
 
 func (s *Server) managedSystem(w http.ResponseWriter, r *http.Request) (*pluginapi.Principal, systems.System, bool) {
@@ -485,7 +490,7 @@ func documentAddress(ctx context.Context, q systems.Queryer, id int64) (string, 
 	if err != nil {
 		return "", "", err
 	}
-	return code, systems.Address(code, category, id), nil
+	return code, systems.Address(code, category), nil
 }
 
 // requireNamespaceObject resolves numeric metadata/workflow objects before

@@ -469,7 +469,7 @@ func (r *Renderer) buildContext(ctx context.Context, docID int64) (string, paths
 		JDCategoryName:  jdName,
 		JDSystemCode:    systemCode,
 		JDSystemName:    systemName,
-		JDAddress:       systems.Address(systemCode, jdCode, docID),
+		JDAddress:       systems.Address(systemCode, jdCode),
 	}
 	// Fallbacks use the recorded creation date, then added date, then an
 	// explicit undated prefix. Explicit user templates keep their old values.

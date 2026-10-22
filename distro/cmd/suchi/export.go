@@ -499,7 +499,7 @@ func dumpDocuments(ctx context.Context, zw *zip.Writer, d *db.DB, cas *blob.CAS,
 				return written, skipped, fmt.Errorf("load JD category for document %d: %w", id, err)
 			}
 			side.JDCategory = code
-			side.JDAddress = systems.Address(system.Code, code, id)
+			side.JDAddress = systems.Address(system.Code, code)
 		}
 
 		// Sidecar first (never fails), then the blob (may skip).

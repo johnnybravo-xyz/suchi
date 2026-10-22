@@ -8,7 +8,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -79,34 +78,34 @@ func validName(name string) bool {
 	return utf8.ValidString(name) && strings.TrimSpace(name) != "" && utf8.RuneCountInString(name) <= 80
 }
 
-// Address returns no address for the unnamed archive or an invalid identity.
-func Address(systemCode string, categoryCode int, documentID int64) string {
-	if !ValidCode(systemCode) || categoryCode < 0 || categoryCode > 99 || documentID <= 0 {
+// Address returns the SYS.AC category address. The original archive has no
+// address before system introduction (empty code); callers show the category code.
+func Address(systemCode string, categoryCode int) string {
+	if !ValidCode(systemCode) || categoryCode < 0 || categoryCode > 99 {
 		return ""
 	}
-	var buf [26]byte
-	copy(buf[:3], systemCode)
-	buf[3], buf[6] = '.', '.'
-	buf[4], buf[5] = byte(categoryCode/10)+'0', byte(categoryCode%10)+'0'
-	return string(strconv.AppendInt(buf[:7], documentID, 10))
+	return string([]byte{
+		systemCode[0], systemCode[1], systemCode[2], '.',
+		byte(categoryCode/10) + '0', byte(categoryCode%10) + '0',
+	})
+}
+
+type FilingAddress struct {
+	SystemCode   string
+	CategoryCode int
 }
 
 var ErrBadAddress = errors.New("invalid filing address")
 
-func ParseAddress(value string) (systemCode string, categoryCode int, documentID int64, err error) {
-	if len(value) < 8 || !ValidCode(value[:3]) || value[3] != '.' || value[6] != '.' || value[4] < '0' || value[4] > '9' || value[5] < '0' || value[5] > '9' || value[7] < '1' || value[7] > '9' {
-		return "", 0, 0, ErrBadAddress
+func ParseAddress(value string) (FilingAddress, error) {
+	if len(value) != 6 || !ValidCode(value[:3]) || value[3] != '.' ||
+		value[4] < '0' || value[4] > '9' || value[5] < '0' || value[5] > '9' {
+		return FilingAddress{}, ErrBadAddress
 	}
-	for i := 8; i < len(value); i++ {
-		if value[i] < '0' || value[i] > '9' {
-			return "", 0, 0, ErrBadAddress
-		}
-	}
-	id, parseErr := strconv.ParseInt(value[7:], 10, 64)
-	if parseErr != nil {
-		return "", 0, 0, ErrBadAddress
-	}
-	return value[:3], int(value[4]-'0')*10 + int(value[5]-'0'), id, nil
+	return FilingAddress{
+		SystemCode:   value[:3],
+		CategoryCode: int(value[4]-'0')*10 + int(value[5]-'0'),
+	}, nil
 }
 
 // Create leaves the deferred Inbox pointer NULL until the caller has seeded

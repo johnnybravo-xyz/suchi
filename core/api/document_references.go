@@ -195,7 +195,7 @@ func (s *Server) loadReferenceSummaries(ctx context.Context, p *pluginapi.Princi
 			rows.Close()
 			return nil, err
 		}
-		summary.JDAddress = systems.Address(summary.SystemCode, int(summary.JDCategoryCode), summary.ID)
+		summary.JDAddress = systems.Address(summary.SystemCode, int(summary.JDCategoryCode))
 		summary.IsLatest = true
 		out[summary.ID] = summary
 	}
@@ -330,7 +330,7 @@ func (s *Server) ListReferencedBy(w http.ResponseWriter, r *http.Request) {
 			s.serverErr(w, "references.scan", err)
 			return
 		}
-		item.JDAddress = systems.Address(item.SystemCode, int(item.JDCategoryCode), item.ID)
+		item.JDAddress = systems.Address(item.SystemCode, int(item.JDCategoryCode))
 		item.IsLatest = true
 		out = append(out, item)
 		summaries[item.ID] = item.DocumentReferenceSummary
