@@ -47,7 +47,6 @@
   const processingCount = $derived(queue.filter(entry => entry.state === 'processing' || entry.state === 'status_unknown').length)
   const failedCount = $derived(queue.filter(entry => entry.state === 'upload_failed' || entry.state === 'processing_failed').length)
   const settledTransfers = $derived(queue.length - waitingCount - uploadingCount)
-  const completedCount = $derived(queue.filter(entry => entry.state === 'ready' || entry.state === 'no_text' || entry.state === 'split').length)
   const summary = $derived.by(() => {
     if (!queue.length) return ''
     if (waitingCount || uploadingCount) {
@@ -417,7 +416,7 @@
     </section>
 
     <div class="queue-footer">
-      <button class="btn" disabled={!completedCount} onclick={clearCompleted}>{translate("uploadBox.clearCompleted")}</button>
+      <button class="btn" disabled={!readyCount} onclick={clearCompleted}>{translate("uploadBox.clearCompleted")}</button>
       <a class="btn" href={filingHref('#/documents')}>{translate("uploadBox.viewDocuments")}</a>
     </div>
   {/if}

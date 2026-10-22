@@ -185,7 +185,6 @@
     try {
       await renameDecryptionPassword(v.id, trimmed)
       v.label = trimmed
-      vault = vault
       notify?.(translate("accountSettings.labelUpdated"))
     } catch (ex) { notify?.(ex.message || translate("accountSettings.couldNotRename")) }
   }

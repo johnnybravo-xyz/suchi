@@ -38,7 +38,6 @@
   const hiddenDocumentGroupCount = $derived(Math.max(0, documentGroups.length - displayedDocumentGroups.length))
   const suggestionGroups = $derived(suggestionApprovalGroups(visibleMetadataTasks))
   const filterCounts = $derived(countApprovalFilters(metadataTasks))
-  const metadataDocumentCount = $derived(uniqueDocumentCount(metadataTasks))
   const displayedSuggestionGroups = $derived(suggestionGroups.slice(0, REVIEW_ENTRY_LIMIT))
   const hiddenSuggestionGroupCount = $derived(Math.max(0, suggestionGroups.length - displayedSuggestionGroups.length))
   const otherTasks = $derived(tasks.filter(task => !isMetadataTask(task)))
@@ -291,12 +290,6 @@
     return counts
   }
 
-  function uniqueDocumentCount(items) {
-    const ids = new Set()
-    for (const task of items) ids.add(task.doc_id)
-    return ids.size
-  }
-
   function addTaskToGroup(group, task) {
     group.tasks.push(task)
     const choices = taskChoices(task)
@@ -537,26 +530,18 @@
 
     {#if loading || metadataTasks.length}
       <div class="approval-filters" role="group" aria-label={translate("tasks.approvalFilters")}>
-        <button type="button" class:active={approvalFilter === 'all'} aria-pressed={approvalFilter === 'all'}
-                onclick={() => (approvalFilter = 'all')}>
-          <span>{translate("tasks.allSuggestionFilter")}</span>
-          <span class="filter-count">{formatNumber(filterCounts.all)}</span>
-        </button>
-        <button type="button" class:active={approvalFilter === 'tags'} aria-pressed={approvalFilter === 'tags'}
-                onclick={() => (approvalFilter = 'tags')}>
-          <span>{translate("tasks.tagSuggestionFilter")}</span>
-          <span class="filter-count">{formatNumber(filterCounts.tags)}</span>
-        </button>
-        <button type="button" class:active={approvalFilter === 'filing'} aria-pressed={approvalFilter === 'filing'}
-                onclick={() => (approvalFilter = 'filing')}>
-          <span>{translate("tasks.filingSuggestionFilter")}</span>
-          <span class="filter-count">{formatNumber(filterCounts.filing)}</span>
-        </button>
-        <button type="button" class:active={approvalFilter === 'fields'} aria-pressed={approvalFilter === 'fields'}
-                onclick={() => (approvalFilter = 'fields')}>
-          <span>{translate("tasks.fieldSuggestionFilter")}</span>
-          <span class="filter-count">{formatNumber(filterCounts.fields)}</span>
-        </button>
+        {#each [
+          ['all', translate("tasks.allSuggestionFilter")],
+          ['tags', translate("tasks.tagSuggestionFilter")],
+          ['filing', translate("tasks.filingSuggestionFilter")],
+          ['fields', translate("tasks.fieldSuggestionFilter")],
+        ] as [filter, label] (filter)}
+          <button type="button" class:active={approvalFilter === filter} aria-pressed={approvalFilter === filter}
+                  onclick={() => (approvalFilter = filter)}>
+            <span>{label}</span>
+            <span class="filter-count">{formatNumber(filterCounts[filter])}</span>
+          </button>
+        {/each}
       </div>
     {/if}
 

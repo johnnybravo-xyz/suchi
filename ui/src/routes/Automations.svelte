@@ -104,10 +104,11 @@
     type: 2, filter_filename: '', filter_path: '', filter_title_matching: '', filter_content_matching: '',
     filter_has_tag: 0, filter_has_correspondent: 0,
   })
+  const newAction = () => ({ type: 'assign_tags', params: { tag_ids: [] } })
   const blank = () => ({
     name: '', enabled: true, order: items.length,
     triggers: [newTrigger()],
-    actions: [{ type: 'assign_tags', params: { tag_ids: [] } }],
+    actions: [newAction()],
   })
 
   async function load() {
@@ -160,7 +161,7 @@
     loadFacets()
     editing = a ? JSON.parse(JSON.stringify(a)) : blank()
     editing.triggers = editing.triggers?.length ? editing.triggers : [newTrigger()]
-    editing.actions = editing.actions?.length ? editing.actions : [{ type: 'assign_tags', params: { tag_ids: [] } }]
+    editing.actions = editing.actions?.length ? editing.actions : [newAction()]
     visibleFilters = filters || editing.triggers.map(configuredFilters)
     mode = 'builder'
     draftErr = ''
@@ -207,7 +208,7 @@
       try {
         editing = JSON.parse(jsonDraft)
         editing.triggers = editing.triggers?.length ? editing.triggers : [newTrigger()]
-        editing.actions = editing.actions?.length ? editing.actions : [{ type: 'assign_tags', params: { tag_ids: [] } }]
+        editing.actions = editing.actions?.length ? editing.actions : [newAction()]
         visibleFilters = editing.triggers.map(configuredFilters)
         mode = 'builder'
       } catch { draftErr = translate("automations.fixTheJsonBeforeSwitchingBackToThe") }
@@ -557,7 +558,7 @@
 {#snippet automationRow(a)}
   <RuleRow class="automation-row"
            id={`automation-${a.id}`}
-           title={a.name || translate("automations.automationValue", { "id": a.id })}
+           title={automationLabel(a)}
            summary={summary(a)}
            disabled={!a.enabled}
            actionText={readOnly ? (peekID === a.id ? translate("automations.hideJson") : translate("automations.viewJson")) : translate("automations.edit")}

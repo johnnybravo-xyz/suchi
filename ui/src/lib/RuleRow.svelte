@@ -8,9 +8,7 @@
     disabled = false,
     class: className = '',
     leading,
-    titleMeta,
     trailing,
-    details,
     actionText = '',
     actionLabel = '',
     detailText = '',
@@ -36,7 +34,6 @@
     <a class="rule-main" {href}>
       <span class="rule-title">
         <strong>{title}</strong>
-        {@render titleMeta?.()}
       </span>
       {#if summary}<span class="rule-sentence">{summary}</span>{/if}
     </a>
@@ -44,7 +41,6 @@
     <div class="rule-main">
       <span class="rule-title">
         <strong>{title}</strong>
-        {@render titleMeta?.()}
       </span>
       {#if summary}<span class="rule-sentence">{summary}</span>{/if}
     </div>
@@ -62,10 +58,9 @@
     </div>
   {/if}
 
-  {#if details || detailText}
+  {#if detailText}
     <div class="rule-details">
-      {#if detailText}<pre class="rule-detail">{detailText}</pre>{/if}
-      {@render details?.()}
+      <pre class="rule-detail">{detailText}</pre>
     </div>
   {/if}
 </div>

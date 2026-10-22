@@ -27,7 +27,7 @@
     : PEOPLE_TABS.includes(initialPeople) ? initialPeople : 'users')
 
   function navigatePeople(nextTab, nextMetadata = 'tags') {
-    if (tagDeleteBusy || taxMutationBusy || tagDeleteRequest || deleteBusy || deleteRequest) return
+    if (tagDeleteLocked || deleteLocked) return
     const section = nextTab === 'metadata' ? 'metadata' : 'users'
     const params = new URLSearchParams({ tab: 'archive', section })
     if (nextTab !== 'metadata') params.set('people', nextTab)
@@ -292,18 +292,18 @@
   })
 
   function toggleTag(id, checked) {
-    if (tagDeleteBusy || tagDeleteRequest || taxMutationBusy) return
+    if (tagDeleteLocked) return
     const next = new Set(selectedTagIDs)
     if (checked) next.add(id)
     else next.delete(id)
     selectedTagIDs = next
   }
   function selectMatchingTags() {
-    if (tagDeleteBusy || tagDeleteRequest || taxMutationBusy || !matchingTags.length || matchingTags.length > 500) return
+    if (tagDeleteLocked || !matchingTags.length || matchingTags.length > 500) return
     selectedTagIDs = new Set([...selectedTagIDs, ...matchingTags.map(row => row.id)])
   }
   function requestTagDelete(ids, name = '') {
-    if (tagDeleteBusy || tagDeleteRequest || taxMutationBusy || !ids.length || ids.length > 500) return
+    if (tagDeleteLocked || !ids.length || ids.length > 500) return
     tagDeleteError = ''
     tagDeleteSuccess = ''
     tagDeleteRequest = { ids: [...ids], name, scope: captureScope() }
@@ -369,7 +369,7 @@
   }
   async function addTaxon(e) {
     e.preventDefault()
-    if (!ntName.trim() || taxMutationBusy || tagDeleteBusy || tagDeleteRequest) return
+    if (!ntName.trim() || tagDeleteLocked) return
     const kind = taxon
     const scope = captureScope()
     taxMutationBusy = true
@@ -384,7 +384,7 @@
     finally { taxMutationBusy = false }
   }
   async function renameTaxon(row, name) {
-    if (!name.trim() || name === row.name || taxMutationBusy || tagDeleteBusy || tagDeleteRequest) return
+    if (!name.trim() || name === row.name || tagDeleteLocked) return
     const kind = taxon
     const scope = captureScope()
     taxMutationBusy = true
@@ -403,7 +403,7 @@
   }
 
   function requestDelete(kind, item, metadataKind = '') {
-    if (deleteBusy || deleteRequest) return
+    if (deleteLocked) return
     deleteRequest = { kind, item, metadataKind, scope: captureScope() }
   }
 
@@ -414,6 +414,9 @@
     return request.kind === 'taxon' && tab === 'metadata' && taxon === request.metadataKind
   }
 
+  // Controls that would race an in-flight or pending delete stay disabled.
+  const tagDeleteLocked = $derived(tagDeleteBusy || taxMutationBusy || !!tagDeleteRequest)
+  const deleteLocked = $derived(deleteBusy || !!deleteRequest)
   const deleteDialog = $derived.by(() => {
     const request = deleteRequest
     if (!request) return null
@@ -605,8 +608,8 @@
           <div class="group-entry">
             <div class="irow">
               <span class="title grow">{g.name}</span>
-              <button class="btn sm" disabled={deleteBusy || !!deleteRequest} onclick={() => toggleMembers(g)} aria-expanded={openGroup?.id === g.id} aria-controls={`group-members-${g.id}`}>{openGroup?.id === g.id ? translate("peopleSettings.hideMembers") : translate("peopleSettings.members")}</button>
-              <button class="btn sm danger" disabled={deleteBusy || !!deleteRequest} onclick={() => rmGroup(g)} title={translate("peopleSettings.deleteGroup")} aria-label={translate("peopleSettings.deleteValue2", { "name": g.name })}><Icon name="trash" size={13} /></button>
+              <button class="btn sm" disabled={deleteLocked} onclick={() => toggleMembers(g)} aria-expanded={openGroup?.id === g.id} aria-controls={`group-members-${g.id}`}>{openGroup?.id === g.id ? translate("peopleSettings.hideMembers") : translate("peopleSettings.members")}</button>
+              <button class="btn sm danger" disabled={deleteLocked} onclick={() => rmGroup(g)} title={translate("peopleSettings.deleteGroup")} aria-label={translate("peopleSettings.deleteValue2", { "name": g.name })}><Icon name="trash" size={13} /></button>
             </div>
             {#if openGroup?.id === g.id}
               <div class="group-members" id={`group-members-${g.id}`}>
@@ -649,7 +652,7 @@
   <header class="panel-heading metadata-heading">
     <div><h3>{translate("peopleSettings.metadata")}</h3><p>{translate("peopleSettings.manageTheLabelsAndExtraDetailsUsed")}</p></div>
     <label class="field">{translate("peopleSettings.metadataType")}
-      <select class="input" value={taxon} disabled={tagDeleteBusy || taxMutationBusy || !!tagDeleteRequest || deleteBusy || !!deleteRequest} onchange={(event) => navigatePeople('metadata', event.currentTarget.value)}>
+      <select class="input" value={taxon} disabled={tagDeleteLocked || deleteLocked} onchange={(event) => navigatePeople('metadata', event.currentTarget.value)}>
         {#each TAXA as t}<option value={t.kind}>{t.label}</option>{/each}
       </select>
     </label>
@@ -696,9 +699,9 @@
         </label>
         <div class="tag-selection">
           <span role="status">{translate("peopleSettings.valueSelected", { "size": selectedTagIDs.size })}</span>
-          <button class="btn sm" type="button" disabled={!taxRowsLoaded || taxRowsKind !== 'tags' || taxRowsLoading || matchingTags.length === 0 || matchingTags.length > 500 || tagDeleteBusy || taxMutationBusy || !!tagDeleteRequest} onclick={selectMatchingTags}>{translate("peopleSettings.selectMatching")}</button>
-          <button class="btn sm danger" type="button" disabled={!selectedTagIDs.size || selectedTagIDs.size > 500 || tagDeleteBusy || taxMutationBusy || !!tagDeleteRequest} onclick={() => requestTagDelete([...selectedTagIDs])}>{translate("peopleSettings.deleteSelected")}</button>
-          <button class="btn sm" type="button" disabled={!selectedTagIDs.size || tagDeleteBusy || taxMutationBusy || !!tagDeleteRequest} onclick={() => (selectedTagIDs = new Set())}>{translate("peopleSettings.clearSelection")}</button>
+          <button class="btn sm" type="button" disabled={!taxRowsLoaded || taxRowsKind !== 'tags' || taxRowsLoading || matchingTags.length === 0 || matchingTags.length > 500 || tagDeleteLocked} onclick={selectMatchingTags}>{translate("peopleSettings.selectMatching")}</button>
+          <button class="btn sm danger" type="button" disabled={!selectedTagIDs.size || selectedTagIDs.size > 500 || tagDeleteLocked} onclick={() => requestTagDelete([...selectedTagIDs])}>{translate("peopleSettings.deleteSelected")}</button>
+          <button class="btn sm" type="button" disabled={!selectedTagIDs.size || tagDeleteLocked} onclick={() => (selectedTagIDs = new Set())}>{translate("peopleSettings.clearSelection")}</button>
         </div>
         {#if taxRowsLoaded && taxRowsKind === 'tags' && matchingTags.length > 500}
           <p class="quiet">{translate("peopleSettings.moreThan500TagsMatchNarrowThe")}</p>
@@ -736,7 +739,7 @@
                 {#if f.managed_by}
                   <span class="pill managed-field-pill">{translate("peopleSettings.managed")}</span>
                 {:else}
-                  <button class="btn sm danger" disabled={deleteBusy || !!deleteRequest}
+                  <button class="btn sm danger" disabled={deleteLocked}
                           onclick={() => rmField(f)} title={translate("peopleSettings.deleteField")} aria-label={translate("peopleSettings.deleteValue2", { "name": f.name })}><Icon name="trash" size={13} /></button>
                 {/if}
               </div>
@@ -771,16 +774,16 @@
           <div class="irow tag-row">
             {#if taxon === 'tags'}
               <input type="checkbox" class="tag-checkbox" aria-label={translate("peopleSettings.selectTagValue", { "name": row.name })}
-                     checked={selectedTagIDs.has(row.id)} disabled={tagDeleteBusy || taxMutationBusy || !!tagDeleteRequest}
+                     checked={selectedTagIDs.has(row.id)} disabled={tagDeleteLocked}
                      onchange={(e) => toggleTag(row.id, e.currentTarget.checked)} />
             {/if}
             <span class="dot" style={row.color ? `background:${row.color}` : ''}></span>
             <span class="grow"><input class="inline-edit" aria-label={translate("peopleSettings.renameValue", { "name": row.name })} value={row.name}
-                                    disabled={tagDeleteBusy || taxMutationBusy || !!tagDeleteRequest || deleteBusy || !!deleteRequest}
+                                    disabled={tagDeleteLocked || deleteLocked}
                                     onchange={(e) => renameTaxon(row, e.target.value)} /></span>
             {#if row.child_count}<span class="quiet">{plural("peopleSettings.childCount", row.child_count)}</span>{/if}
             {#if row.document_count != null}<span class="quiet">{plural("peopleSettings.documentCount", row.document_count)}</span>{/if}
-            <button class="btn sm danger" disabled={tagDeleteBusy || taxMutationBusy || !!tagDeleteRequest || deleteBusy || !!deleteRequest}
+            <button class="btn sm danger" disabled={tagDeleteLocked || deleteLocked}
                     onclick={() => rmTaxon(row)} title={translate("peopleSettings.deleteEntry")} aria-label={translate("peopleSettings.deleteValue2", { "name": row.name })}><Icon name="trash" size={13} /></button>
           </div>
         {:else}
@@ -797,7 +800,7 @@
     onClose={closeTwoFactorReset} onReset={twoFactorReset} />
 {/if}
 
-{#if deleteRequest && deleteDialog}
+{#if deleteDialog}
   <ConfirmDialog
     title={deleteDialog.title}
     message={deleteDialog.message}

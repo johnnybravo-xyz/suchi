@@ -70,7 +70,6 @@
   let view = $state((() => { try { return localStorage.getItem('suchi.docs.view') || 'list' } catch { return 'list' } })())
   function setView(v) { view = v; try { localStorage.setItem('suchi.docs.view', v) } catch {} }
   const pageSize = 50
-  const isInbox = $derived(inboxMode)
   const jdFilter = $derived(route.query.get('jd') || '')
   const canShareLinks = $derived(hasCapability(session.user, 'share_links'))
   const publicShareAvailable = $derived(!!session.user?.public_share_available)
@@ -197,7 +196,7 @@
     activeController = undefined
     if (!background) loading = true
     err = ''
-    if (isInbox && !inbox?.id) {
+    if (inboxMode && !inbox?.id) {
       docs = []
       count = 0
       loading = !taxonomyLoaded
@@ -212,7 +211,7 @@
         q: fQuery, document_ids: fDocumentIDs,
         tags__id__in: fTag, correspondents__id__in: fCorr,
         correspondents__isnull: fCorrMissing ? 'true' : '',
-        sensitivity: fSens, jd_category_id: isInbox ? inbox?.id : jdFilter,
+        sensitivity: fSens, jd_category_id: inboxMode ? inbox?.id : jdFilter,
         created_at__gte: dateFrom ? Math.floor(new Date(dateFrom) / 1000) : '',
         created_at__lte: dateTo ? Math.floor(new Date(dateTo) / 1000) + 86399 : '',
         share_link: fShareLink,
@@ -220,7 +219,7 @@
       const csvIDs = (value) => [...new Set(String(value || '').split(',')
         .map(item => Number(item.trim())).filter(item => Number.isInteger(item) && item > 0))]
       onScopeChange?.({
-        label: isInbox ? translate("documents.inboxDocuments") : translate("documents.documentsShownHere"),
+        label: inboxMode ? translate("documents.inboxDocuments") : translate("documents.documentsShownHere"),
         query: params.q || '',
         document_ids: csvIDs(params.document_ids),
         jd_category_id: Number(params.jd_category_id) || 0,
@@ -289,7 +288,8 @@
   let bulkBusy = $state(false)
   let shareURL = $state('')
   let bulkShareOpen = $state(false)
-  let bulkShareInput = $state({ visibility: 'network', expiry: '0', password: '' })
+  const blankShareInput = () => ({ visibility: 'network', expiry: '0', password: '' })
+  let bulkShareInput = $state(blankShareInput())
   let bulkShareVersion = 0
   let bulkTagOpen = $state(false)
   let bulkTags = $state([])
@@ -316,7 +316,7 @@
   }
 
   async function openBulkTags() {
-    if (bulkBusy || !sel.size || isInbox) return
+    if (bulkBusy || !sel.size || inboxMode) return
     if (bulkTagOpen && !bulkTagLoadError) { closeBulkTags(); return }
     bulkTagOpen = true
     bulkTagLoading = true
@@ -410,14 +410,14 @@
   function openBulkShare() {
     if (bulkBusy || !sel.size) return
     bulkShareVersion++
-    bulkShareInput = { visibility: 'network', expiry: '0', password: '' }
+    bulkShareInput = blankShareInput()
     bulkShareOpen = true
   }
 
   function closeBulkShare() {
     bulkShareVersion++
     bulkShareOpen = false
-    bulkShareInput = { visibility: 'network', expiry: '0', password: '' }
+    bulkShareInput = blankShareInput()
     bulkBusy = false
   }
 
@@ -437,7 +437,7 @@
       if (disposed || !bulkShareOpen || session.user !== user || version !== bulkShareVersion) return
       shareURL = res?.public_url || `${location.origin}/s/${res?.token}`
       bulkShareOpen = false
-      bulkShareInput = { visibility: 'network', expiry: '0', password: '' }
+      bulkShareInput = blankShareInput()
       await copyShareLink()
     } catch (ex) {
       if (!disposed && bulkShareOpen && session.user === user && version === bulkShareVersion) {
@@ -498,7 +498,7 @@
   let bulkDecInput = $state()
   $effect(() => { if (bulkDecOpen && bulkDecInput) bulkDecInput.focus() })
   const anyLockedSelected = $derived(
-    [...sel].some(id => docs.find(d => d.id === id)?.encryption_state === 'encrypted')
+    docs.some(d => sel.has(d.id) && d.encryption_state === 'encrypted')
   )
   async function runBulkDecrypt() {
     const password = bulkDecPw.trim()
@@ -579,7 +579,7 @@
         <option value={option.value}>{option.label}</option>
       {/each}
     </select>
-    {#if !isInbox}
+    {#if !inboxMode}
       <button class="btn sm" disabled={bulkBusy} aria-expanded={bulkTagOpen}
               onclick={openBulkTags}>{translate("documents.addTags")}</button>
       <select class="input" style="max-width:190px" aria-label={translate("documents.setCorrespondentForSelection")}
@@ -617,7 +617,7 @@
       <Icon name="zap" size={12} /> {translate("documents.rescan")}
     </button>
     <button class="btn sm" disabled={bulkBusy} onclick={clearSel}>{translate("documents.clear")}</button>
-    {#if bulkTagOpen && !isInbox}
+    {#if bulkTagOpen && !inboxMode}
       <div class="bulk-tag-editor" role="group" aria-label={translate("documents.addTagsToSelectedDocuments")}>
         {#if bulkTagLoading}
           <span class="sub">{translate("documents.loadingTags")}</span>
@@ -667,7 +667,7 @@
 
 {#if err}<div class="err">{err}</div>{/if}
 
-{#if !isInbox}
+{#if !inboxMode}
   <div class="document-controls" onchangecapture={(e) => { if (e.target.matches('select')) e.target.blur() }}>
     <div class="toolbar document-search-toolbar" role="group" aria-label={translate("documents.documentSearch")}>
       <input class="input" type="search" value={fQuery} placeholder={translate("documents.searchOrUseJdTagFrom")}
@@ -778,8 +778,8 @@
   <div class="index">{#each Array(6) as _}<div class="irow"><div class="skel" style="width:60%"></div></div>{/each}</div>
 {:else if docs.length === 0}
   <div class="empty">
-    <Icon name={isInbox ? 'inbox' : 'docs'} size={56} />
-    {#if isInbox}
+    <Icon name={inboxMode ? 'inbox' : 'docs'} size={56} />
+    {#if inboxMode}
       <b>{translate("documents.inboxZero")}</b><span>{translate("documents.everythingIsFiledNewDocumentsThatNeed")}</span>
     {:else if fShareLink === 'active'}
       <b>{translate("documents.noActivelySharedDocuments")}</b><span>{translate("documents.documentsAppearHereWhileOneOfYour")}</span>
@@ -788,7 +788,7 @@
     {/if}
   </div>
 {:else}
-  {#if view === 'grid' && !isInbox}
+  {#if view === 'grid' && !inboxMode}
     <div class="dgrid">
       {#each docs as d, i (d.id)}
         <article class="card gcard document-card" class:selected={sel.has(d.id)}>
@@ -848,7 +848,7 @@
               </button>
               {#if unlockErr[d.id]}<span class="sub" style="color:var(--danger)">{unlockErr[d.id]}</span>{/if}
             </span>
-          {:else if isInbox && jdCategories.length}
+          {:else if inboxMode && jdCategories.length}
             <select class="input" style="padding:3px 8px;font-size:.76rem;max-width:150px"
                     aria-label={translate("documents.fileValueUnder", { "id": d.title || 'document ' + d.id })}
                     onchange={(e) => { if (e.target.value) fileTo(d, e.target.value) }}>

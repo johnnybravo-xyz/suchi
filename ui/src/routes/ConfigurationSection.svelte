@@ -273,10 +273,8 @@
   })
   const activeLoading = $derived(requiredLoadKeys.some((key) => loading.has(key) || !loaded.has(key)))
 
+  // A key enters loaded only on success, so a failed key can load again.
   function retryLoad(key) {
-    const next = new Set(loaded)
-    next.delete(key)
-    loaded = next
     loadOnce(key, loadFunctions[key])
   }
 
@@ -385,12 +383,7 @@
   async function saveMatching() {
     const payload = matchingPayload()
     const result = await saveArchiveMatchingSettings(payload)
-    llmStatus = {
-      ...llmStatus,
-      archive_enabled: payload.archive_enabled,
-      archive_review_threshold: payload.archive_review_threshold,
-      archive_auto_threshold: payload.archive_auto_threshold,
-    }
+    llmStatus = { ...llmStatus, ...payload }
     return result
   }
 

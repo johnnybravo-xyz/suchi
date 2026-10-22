@@ -42,8 +42,8 @@
   const canUseArchiveChat = $derived(hasCapability(session.user, 'archive_chat') && !demoVisitor)
   const canReviewIntelligence = $derived(hasCapability(session.user, 'archive_intelligence') && !demoVisitor)
   const canViewCalendar = $derived(canReviewIntelligence || demoVisitor)
-  let chatEnabled = $state(false)
   let chatStatusInfo = $state({ enabled: false, provider: '', local: false })
+  const chatEnabled = $derived(!!chatStatusInfo?.enabled)
   let chatOpen = $state(false)
   let chatParked = $state(false)
   let ChatDrawer = $state(null)
@@ -269,7 +269,6 @@
   async function pollChatStatus() {
     const scope = captureScope()
     if (!canUseArchiveChat) {
-      chatEnabled = false
       chatStatusInfo = { enabled: false, provider: '', local: false }
       return
     }
@@ -277,10 +276,8 @@
       const result = await chatStatus()
       if (!scopeCurrent(scope)) return
       chatStatusInfo = result
-      chatEnabled = !!chatStatusInfo?.enabled
     } catch {
       if (!scopeCurrent(scope)) return
-      chatEnabled = false
       chatStatusInfo = { enabled: false, provider: '', local: false }
     }
   }
@@ -301,11 +298,6 @@
         recentError = ex.message || translate("app.couldNotLoadRecentDocuments")
       }
     }
-  }
-
-  function refreshVisibleData() {
-    pollStats()
-    if (page === 'dashboard') loadRecentDocuments({ background: true })
   }
 
   function globalDrop(e) {
@@ -409,7 +401,6 @@
     uploadFiles = []
     dragDepth = 0
     toast = ''
-    chatEnabled = false
     chatStatusInfo = { enabled: false, provider: '', local: false }
     chatOpen = false
     chatParked = false

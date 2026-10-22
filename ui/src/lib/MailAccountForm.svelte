@@ -228,7 +228,6 @@
       for (const k of Object.keys(body)) {
         if ((body[k] === '' && k !== 'processed_folder') || body[k] === null || body[k] === undefined) delete body[k]
       }
-      if (!isEdit && !body.tls_ca_file) delete body.tls_ca_file
       // sync_since is always sent (0 = "sync all"), otherwise a cleared
       // input on PATCH would be indistinguishable from "leave alone".
       body.sync_since = localInputToUnix(form.sync_since)

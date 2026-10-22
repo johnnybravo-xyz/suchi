@@ -1,13 +1,11 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
   import { t as translate } from '../lib/i18n.svelte.js'
-  import { compareLocalized, customFieldLabel } from '../lib/format.js'
-  import { scopedHash as filingHref } from '../lib/systems.svelte.js'
-  import { captureScope, scopeCurrent } from '../lib/systems.svelte.js'
+  import { scopedHash as filingHref, captureScope, scopeCurrent } from '../lib/systems.svelte.js'
   import { onDestroy, tick, untrack } from 'svelte'
   import { getDocument, getDocumentIntrinsic, patchDocument, deleteDocument, restoreDocument, permanentlyDeleteDocument, documentVersions, documentBacklinks, uploadDocumentVersion, setDocumentCustomField, clearDocumentCustomField, createDocumentNote, updateDocumentNote, deleteDocumentNote, createShareLink, listShareLinks, deleteShareLink, previewPath, downloadPath, similarDocs, listGrants, putGrant, deleteGrant, listAllTags, listCorrespondents, listCustomFields, listDocuments, bulkEdit } from '../lib/api.js'
   import { go } from '../lib/router.svelte.js'
-  import { SENSITIVITY_OPTIONS, fmtDate, fmtBytes, formatLabel, isHighSensitivity, sensDot, sensitivityLabel } from '../lib/format.js'
+  import { SENSITIVITY_OPTIONS, compareLocalized, customFieldLabel, fmtDate, fmtBytes, formatLabel, isHighSensitivity, sensDot, sensitivityLabel } from '../lib/format.js'
   import { originalNames, sourceGroups } from '../lib/documentSources.js'
   import { session } from '../lib/session.svelte.js'
   import { hasCapability } from '../lib/capabilities.js'
@@ -123,10 +121,6 @@
     if (tab === 'backlinks') return linkedDocumentCount
     if (tab === 'notes') return doc?.notes?.length || 0
     return Math.max(0, versionHistory.count - 1)
-  }
-
-  function selectRelatedTab(tab) {
-    relatedTab = tab
   }
 
   function handleRelatedTabKey(event) {
@@ -1425,7 +1419,7 @@
 
 {#if loading}
   <div class="detail" aria-label={translate("documentDetail.loadingDocument")}>
-    <div class="preview"><div class="skel" style="width:28%;height:14px"></div></div>
+    <div class="preview"><div class="skel" style="width:28%"></div></div>
     <div class="card" style="align-self:start">
       <div class="skel" style="width:55%;height:18px;margin-bottom:18px"></div>
       <div class="skel" style="width:82%;margin-bottom:10px"></div>
@@ -1786,16 +1780,7 @@
             <span class="more-fields-chevron" class:open={showMoreFields} aria-hidden="true">▾</span>
           </button>
         {/if}
-        {#if shareURL}
-          <div class="field" style="margin-top:12px;margin-bottom:0">
-            <label for="share">{translate("documentDetail.shareLink")}</label>
-            <input id="share" class="input mono" style="font-size:.76rem" readonly value={shareURL}
-                   onclick={(event) => event.currentTarget.select()} />
-          </div>
-        {/if}
       </div>
-
-
 
       <section class="card related-card" aria-label={translate("documentDetail.documentContext")}>
         <div class="related-tabs" role="tablist" aria-label={translate("documentDetail.documentContext")}>
@@ -1807,7 +1792,7 @@
                       aria-controls={`related-panel-${tab.id}`}
                       tabindex={relatedTab === tab.id ? 0 : -1}
                       class:on={relatedTab === tab.id}
-                      onclick={() => selectRelatedTab(tab.id)}
+                      onclick={() => (relatedTab = tab.id)}
                       onkeydown={handleRelatedTabKey}>
                 {tab.shortLabel}
                 {#if count > 0}<span class="pill">{count}</span>{/if}
@@ -2155,7 +2140,7 @@
             {@const principal = principalFor(grant)}
             <div class="irow" style="padding:7px 2px;cursor:default">
               <span class="dot" class:accent={grant.principal_kind === 'group'}></span>
-              <span class="grow" style="min-width:0">
+              <span class="grow">
                 <span class="title" style="display:block;font-size:.82rem">{principal?.name || translate("documentDetail.valueValue2", { "principal_kind": grant.principal_kind, "principal_id": grant.principal_id })}</span>
                 <span class="sub" style="display:block;overflow:hidden;text-overflow:ellipsis">{principal?.email || (grant.principal_kind === 'group' ? translate("documentDetail.group") : '')}</span>
               </span>

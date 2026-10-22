@@ -100,7 +100,7 @@
   }
 
   const remaining = $derived(flow ? Math.max(0, flow.expires_at - now) : 0)
-  const mm = $derived(String(Math.floor(remaining / 60)).padStart(1, '0'))
+  const mm = $derived(String(Math.floor(remaining / 60)))
   const ss = $derived(String(remaining % 60).padStart(2, '0'))
 
   $effect(() => { begin(); return stop })

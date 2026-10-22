@@ -161,10 +161,7 @@
   }
 
   function clearConversation() {
-    invalidateRequest()
-    turns = []
-    draft = ''
-    includeSensitive = false
+    resetSession()
     queueMicrotask(() => composer?.focus())
   }
 

@@ -25,7 +25,7 @@ export function originalNames(sources) {
 // sourcePlace is where within a channel a source was seen. File names are
 // shown with the original instead, so watched folders keep only the
 // directory and uploads, API calls, and imports have no place.
-export function sourcePlace(source) {
+function sourcePlace(source) {
   const detail = source.detail?.trim() || ''
   if (source.kind === 'watched_folder') return splitPath(detail).slice(0, -1).join('/')
   if (source.kind !== 'mailbox') return ''

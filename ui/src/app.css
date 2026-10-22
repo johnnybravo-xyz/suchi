@@ -623,20 +623,11 @@ textarea.input { resize: vertical; font-family: ui-monospace, monospace; font-si
 .deadline-soon { color: var(--warn); font-weight: 600; }
 
 /* ---------- automations builder ---------- */
-.brow {
-  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
-  padding: 9px 0; border-bottom: 1px dashed var(--line);
-}
-.brow:last-child { border-bottom: 0; }
-.brow .input { max-width: 200px; }
 .seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; }
 .seg button { border: 0; background: var(--surface); padding: 5px 12px; font-size: .78rem; font-weight: 550; color: var(--muted); }
 .seg button.on { background: var(--tint); color: var(--accent); }
 
-/* ---------- upload details / drag veil / thumbs / grid / hover ---------- */
-.up-card { padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
-.up-detail { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.ellip::after { content: '…'; animation: pulse 1.2s infinite; }
+/* ---------- drag veil / thumbs / grid / hover ---------- */
 .dropveil {
   position: fixed; inset: 0; z-index: 100; pointer-events: none;
   background: color-mix(in srgb, var(--accent) 10%, transparent);
@@ -716,7 +707,6 @@ textarea.input { resize: vertical; font-family: ui-monospace, monospace; font-si
   border: 0; background: none; font: inherit; color: var(--ink); padding: 8px 10px; border-radius: 8px; cursor: pointer; }
 .omni-row:hover, .omni-row.hot { background: var(--tint); }
 .omni-row .grow { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .86rem; }
-.omni-row .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
 .omni-row.all { border-top: 1px solid var(--line); border-radius: 0 0 8px 8px; margin-top: 4px; color: var(--accent); }
 @media (max-width: 700px) {
   .omni-shortcut { display: none; }

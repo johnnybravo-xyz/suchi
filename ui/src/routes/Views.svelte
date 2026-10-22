@@ -101,6 +101,13 @@
     return selected
   })
 
+  function resetEditor() {
+    editorOpen = false
+    editing = null
+    visibleFilters = []
+    nv = emptyView()
+  }
+
   function emptyView() {
     return { name: '', q: '', tag: '', corr: '', jd: '', sens: '', dateFrom: '', dateTo: '', dateRole: '', fieldPresence: '', ids: [], shared: false }
   }
@@ -275,11 +282,8 @@
     if (saving) return
     matchController?.abort()
     clearTimeout(matchTimer)
-    editorOpen = false
-    editing = null
+    resetEditor()
     saveError = ''
-    visibleFilters = []
-    nv = emptyView()
     if (startCreate) go('#/views')
   }
 
@@ -332,10 +336,7 @@
         })
       }
       notify?.(editing ? translate("views.viewUpdated") : translate("views.viewSaved"))
-      nv = emptyView()
-      editing = null
-      editorOpen = false
-      visibleFilters = []
+      resetEditor()
       if (startCreate) go('#/views')
       await load()
     } catch (ex) { saveError = ex.message || translate("views.couldNotSaveTheView") }
@@ -354,12 +355,7 @@
     try {
       await deleteSavedView(view.id)
       views = views.filter(candidate => candidate.id !== view.id)
-      if (editing?.id === view.id) {
-        editorOpen = false
-        editing = null
-        visibleFilters = []
-        nv = emptyView()
-      }
+      if (editing?.id === view.id) resetEditor()
       notify?.(translate("views.viewDeleted"))
       deleteRequest = null
     } catch (ex) {
