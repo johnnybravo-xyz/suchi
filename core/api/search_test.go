@@ -85,6 +85,40 @@ func TestSearchFTSPaginationKeepsStableSnippets(t *testing.T) {
 	}
 }
 
+func TestSearchTotalsCoverEveryPage(t *testing.T) {
+	s := newChatTestServer(t)
+	for id := int64(1); id <= 3; id++ {
+		seedChatDoc(t, s, id, 1, fmt.Sprintf("Record %d", id), "needle evidence", "public", false)
+	}
+	for _, tc := range []struct {
+		name, query string
+		page, rows  int
+	}{
+		{"text first page", "needle", 1, 1},
+		{"text past the end", "needle", 9, 0},
+		{"filters only", "version:all", 2, 1},
+		{"filters only past the end", "version:all", 9, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, fmt.Sprintf(
+				"/api/search/?q=%s&page=%d&page_size=1", url.QueryEscape(tc.query), tc.page), nil)
+			req = req.WithContext(auth.WithPrincipal(req.Context(), adminPrincipal(1)))
+			rec := httptest.NewRecorder()
+			s.Search(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			var out Envelope[SearchHit]
+			if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+				t.Fatal(err)
+			}
+			if out.Count != 3 || len(out.Results) != tc.rows {
+				t.Fatalf("count=%d rows=%d, want 3 and %d", out.Count, len(out.Results), tc.rows)
+			}
+		})
+	}
+}
+
 func TestSearchMatchesOnlySelectedVersionRows(t *testing.T) {
 	s := newChatTestServer(t)
 	seedChatDoc(t, s, 40, 1, "Older", "historicalneedle", "public", false)

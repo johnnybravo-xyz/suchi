@@ -134,14 +134,6 @@ func (s *Server) Search(w http.ResponseWriter, r *http.Request) {
 		extraArgs = append(extraArgs, versionArgs...)
 	}
 	whereSQL := " WHERE " + strings.Join(where, " AND ") + extra
-	countArgs := append([]any{}, args...)
-	countArgs = append(countArgs, extraArgs...)
-	var total int
-	if err := s.DB.Read.QueryRowContext(r.Context(),
-		"SELECT COUNT(*) FROM documents d"+whereSQL, countArgs...).Scan(&total); err != nil {
-		s.serverErr(w, "search.count", err)
-		return
-	}
 
 	p := ParsePageParams(r, 25, 100)
 	var pageSQL string
@@ -150,7 +142,7 @@ func (s *Server) Search(w http.ResponseWriter, r *http.Request) {
 		pageSQL = `
 			SELECT d.id, d.title, '', 0.0, d.created_at,
 			       COALESCE(d.mime_type, ''), COALESCE(d.sensitivity, ''), sys.code,
-			       COALESCE(category.code,0), d.archive_serial_number
+			       COALESCE(category.code,0), d.archive_serial_number, COUNT(*) OVER ()
 			FROM documents d` + searchAddressJoins + whereSQL + `
 			ORDER BY d.created_at DESC, d.id DESC
 			LIMIT ? OFFSET ?`
@@ -184,13 +176,14 @@ func (s *Server) Search(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	out := make([]SearchHit, 0, p.PageSize)
+	total := 0
 	for rows.Next() {
 		var hit SearchHit
 		var categoryCode int
 		var archiveNumber sql.NullInt64
 		if err := rows.Scan(&hit.ID, &hit.Title, &hit.Snippet, &hit.Rank,
 			&hit.CreatedAt, &hit.MIME, &hit.Sensitivity, &hit.SystemCode, &categoryCode,
-			&archiveNumber); err != nil {
+			&archiveNumber, &total); err != nil {
 			s.serverErr(w, "search.scan", err)
 			return
 		}
@@ -205,6 +198,17 @@ func (s *Server) Search(w http.ResponseWriter, r *http.Request) {
 	if err := rows.Err(); err != nil {
 		s.serverErr(w, "search.iterate", err)
 		return
+	}
+	// The page query counts its own matches, which saves repeating the
+	// full-text match. A page past the end returns no rows to carry that
+	// count, so only then is the total counted separately.
+	if len(out) == 0 && p.Offset() > 0 {
+		countArgs := append(append([]any{}, args...), extraArgs...)
+		if err := s.DB.Read.QueryRowContext(r.Context(),
+			"SELECT COUNT(*) FROM documents d"+whereSQL, countArgs...).Scan(&total); err != nil {
+			s.serverErr(w, "search.count", err)
+			return
+		}
 	}
 	s.writeJSON(w, http.StatusOK, BuildEnvelope(r, total, p, out))
 }
@@ -234,7 +238,8 @@ func searchFTSPageSQL(whereSQL string, trigram bool) string {
 		)` + trigramCTE + `, ranked AS MATERIALIZED (
 			SELECT d.id, word_hits.id IS NULL AS tier,
 			       COALESCE(word_hits.score, ` + trigramScore + `, 0)
-			         - ? / (1.0 + (CAST(unixepoch() - d.created_at AS REAL) / ?)) AS match_rank
+			         - ? / (1.0 + (CAST(unixepoch() - d.created_at AS REAL) / ?)) AS match_rank,
+			       COUNT(*) OVER () AS total
 			FROM documents d
 			LEFT JOIN word_hits ON word_hits.id = d.id` + trigramJoin + whereSQL + `
 			ORDER BY tier, match_rank, d.id
@@ -248,7 +253,7 @@ func searchFTSPageSQL(whereSQL string, trigram bool) string {
 		              ` + trigramPassage + `, '') END,
 		       ranked.match_rank, d.created_at,
 		       COALESCE(d.mime_type, ''), COALESCE(d.sensitivity, ''), sys.code,
-		       COALESCE(category.code,0), d.archive_serial_number
+		       COALESCE(category.code,0), d.archive_serial_number, ranked.total
 		FROM ranked
 		JOIN documents d ON d.id = ranked.id` + searchAddressJoins + `
 		ORDER BY ranked.tier, ranked.match_rank, ranked.id`
