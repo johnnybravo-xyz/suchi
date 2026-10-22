@@ -271,8 +271,9 @@ func TestSystemsCollectionsFilterBeforeCountsPagesAndHydration(t *testing.T) {
 		var out struct {
 			Count   int `json:"count"`
 			Results []struct {
-				ID      int64  `json:"id"`
-				Snippet string `json:"snippet"`
+				ID        int64  `json:"id"`
+				Snippet   string `json:"snippet"`
+				JDAddress string `json:"jd_address"`
 			} `json:"results"`
 		}
 		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &out) != nil || out.Count != 2 {
@@ -281,6 +282,9 @@ func TestSystemsCollectionsFilterBeforeCountsPagesAndHydration(t *testing.T) {
 		ids := make([]int64, 0, len(out.Results))
 		for _, row := range out.Results {
 			ids = append(ids, row.ID)
+			if row.JDAddress != "S01.13" {
+				t.Fatalf("category projection %s: %+v", tc.path, row)
+			}
 		}
 		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 		if !reflect.DeepEqual(ids, tc.ids) {
@@ -379,6 +383,23 @@ func TestSystemsNumericDocumentsAndCategoryAddressAccess(t *testing.T) {
 
 	// The original archive has no address before introduction; AREA.AC is not an address.
 	resolve("20.21", "", memberPrincipal(5), http.StatusBadRequest)
+	ref, err := s.CAS.Put(strings.NewReader("single filing document"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Write.Exec(`INSERT INTO documents(system_id,id,owner_id,original_blob,original_size,title,jd_category_id,created_at,updated_at)
+		VALUES(1,91,5,?,22,'Single document',91,0,0)`, ref.SHA256); err != nil {
+		t.Fatal(err)
+	}
+	w := systemsBoundaryRequest(mux, "GET", "/api/documents/91", "", memberPrincipal(5))
+	var singleDetail struct {
+		ID        int64  `json:"id"`
+		JDAddress string `json:"jd_address"`
+	}
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &singleDetail) != nil ||
+		singleDetail.ID != 91 || singleDetail.JDAddress != "" {
+		t.Fatalf("single document projection: %d %s", w.Code, w.Body.String())
+	}
 
 	seedSystemsBoundary(t, s)
 	resolve("S01.13.101", "", adminPrincipal(1), http.StatusBadRequest)
@@ -424,7 +445,7 @@ func TestSystemsNumericDocumentsAndCategoryAddressAccess(t *testing.T) {
 		}
 	}
 
-	w := systemsBoundaryRequest(mux, "PATCH", "/api/documents/101", `{"jd_category_id":111}`, memberPrincipal(5))
+	w = systemsBoundaryRequest(mux, "PATCH", "/api/documents/101", `{"jd_category_id":111}`, memberPrincipal(5))
 	if w.Code != http.StatusOK {
 		t.Fatalf("refile: %d %s", w.Code, w.Body.String())
 	}

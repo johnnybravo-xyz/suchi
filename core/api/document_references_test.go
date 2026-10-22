@@ -108,7 +108,8 @@ func TestDocumentDetailProjectsTypedCustomFieldsWithoutHiddenTargets(t *testing.
 	if err := json.Unmarshal(values["Related"], &target); err != nil {
 		t.Fatal(err)
 	}
-	if target.ID != 202 || target.Title != "Needle foreign direct" || target.IsLatest {
+	if target.ID != 202 || target.Title != "Needle foreign direct" ||
+		target.JDAddress != "S02.13" || target.IsLatest {
 		t.Fatalf("visible exact target = %+v", target)
 	}
 }
@@ -126,11 +127,13 @@ func TestReferencedByCountsVisibleCrossSystemSourcesBeforePaging(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
 		t.Fatal(err)
 	}
-	if page.Count != 2 || len(page.Results) != 1 || page.Results[0].ID != 103 || page.Results[0].FieldName != "Related" {
+	if page.Count != 2 || len(page.Results) != 1 || page.Results[0].ID != 103 ||
+		page.Results[0].JDAddress != "S01.13" || page.Results[0].FieldName != "Related" {
 		t.Fatalf("first page = %+v body=%s", page, w.Body.String())
 	}
 	w = systemsBoundaryRequest(mux, http.MethodGet, "/api/documents/202/referenced-by/?page_size=1&page=2", "", memberPrincipal(5))
-	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &page) != nil || len(page.Results) != 1 || page.Results[0].ID != 101 || page.Results[0].IsLatest {
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &page) != nil || len(page.Results) != 1 ||
+		page.Results[0].ID != 101 || page.Results[0].JDAddress != "S01.13" || page.Results[0].IsLatest {
 		t.Fatalf("second page: %d %s", w.Code, w.Body.String())
 	}
 

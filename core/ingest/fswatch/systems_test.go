@@ -117,7 +117,7 @@ func TestIntakeSystemIsolationAndWriterMembership(t *testing.T) {
 	if err != nil || !duplicate || id != ids[1] {
 		t.Fatalf("same-system retry: id=%d duplicate=%v err=%v", id, duplicate, err)
 	}
-	if _, _, err := watchers[0].ingest(ctx, path, &sidecar.V1{Version: 1, JDSystem: "S02", JDAddress: "S02.49.123"}); err == nil {
+	if _, _, err := watchers[0].ingest(ctx, path, &sidecar.V1{Version: 1, JDSystem: "S02", JDAddress: "S02.49"}); err == nil {
 		t.Fatal("sidecar routed or replayed across configured system")
 	}
 	if _, err := New(ctx, Config{Dir: dir, OwnerID: 1, System: "S99"}, d, cas, nil, log); err == nil {

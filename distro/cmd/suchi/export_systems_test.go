@@ -103,7 +103,7 @@ func TestNativeTakeoutAllOwnersStaysInSelectedSystem(t *testing.T) {
 			if err := json.Unmarshal(data, &side); err != nil {
 				t.Fatal(err)
 			}
-			sidecars[side.JDAddress] = side
+			sidecars[side.Title] = side
 		case entry.Name == "taxonomy/tags.json":
 			var tags []map[string]any
 			if err := json.Unmarshal(data, &tags); err != nil {
@@ -120,18 +120,19 @@ func TestNativeTakeoutAllOwnersStaysInSelectedSystem(t *testing.T) {
 	if len(sidecars) != 2 {
 		t.Fatalf("all owners did not export both target documents: %+v", sidecars)
 	}
-	for address, want := range map[string]struct {
-		title string
-		owner string
+	for title, want := range map[string]struct {
+		owner  string
+		hasASN bool
 	}{
-		"S02.13.148": {"First owner", "rule"},
-		"S02.13.149": {"Second owner", "human"},
+		"First owner":  {"rule", true},
+		"Second owner": {"human", false},
 	} {
-		side, ok := sidecars[address]
-		if !ok || side.Title != want.title || side.TitleOwner != want.owner || side.Version != 1 || side.JDSystem != "S02" || side.JDCategory != 13 || side.SHA256 != ref.SHA256 {
-			t.Fatalf("wrong source provenance: %+v", side)
+		side, ok := sidecars[title]
+		if !ok || side.TitleOwner != want.owner || side.Version != 1 || side.JDSystem != "S02" ||
+			side.JDCategory != 13 || side.JDAddress != "S02.13" || side.SHA256 != ref.SHA256 {
+			t.Fatalf("wrong source provenance for %q: %+v", title, side)
 		}
-		if address == "S02.13.148" {
+		if want.hasASN {
 			if side.ArchiveSerialNumber == nil || *side.ArchiveSerialNumber != 4021 {
 				t.Fatalf("archive serial number missing from sidecar: %+v", side)
 			}
@@ -372,6 +373,7 @@ func TestExportSidecarsCarryCustomFieldValues(t *testing.T) {
 		}
 		var side struct {
 			Title        string         `json:"title"`
+			JDAddress    string         `json:"jd_address"`
 			CustomFields map[string]any `json:"custom_fields"`
 		}
 		err = json.NewDecoder(rc).Decode(&side)
@@ -380,6 +382,9 @@ func TestExportSidecarsCarryCustomFieldValues(t *testing.T) {
 			t.Fatal(err)
 		}
 		sidecars[side.Title] = side.CustomFields
+		if side.JDAddress != "" {
+			t.Fatalf("%s single-archive address = %q, want none before system introduction", side.Title, side.JDAddress)
+		}
 	}
 	want := map[string]any{
 		"Note":   "Kitchen",
