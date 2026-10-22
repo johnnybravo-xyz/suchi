@@ -37,6 +37,25 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Changed
 
+- **Breaking:** filing addresses now identify categories with exactly two
+  components. Introduced filing systems use `SYS.AC` (for example `S01.21`)
+  instead of `SYS.AC.documentID`; the original single archive has no address
+  and shows the category code (`21`). The resolver rejects former
+  three-component values and returns `jd_category_id`; Search and Omnibox open
+  the filtered Documents view, or search the text when no such category exists.
+  `jd_address` and native-export values can repeat across documents, while numeric
+  IDs/URLs remain exact identity and default filenames keep an independent
+  `__<documentID>` suffix. API version 1, Companion v1, takeout manifest 3,
+  sidecar format 1, and private `suchi-taxonomy/v1` remain unchanged. This clean
+  cutover provides no parser alias, schema/cached-receipt/template rewrite,
+  rendered-output sweep, fallback, or maintenance command for prior multi-system
+  projections. In the web app, Dashboard, Documents, and Search rows show the
+  address (or category code) and ASN as aligned blue chips that deepen on row
+  hover or keyboard focus; document cards pair it with the category name,
+  and a single-category Documents view or the Inbox omits it. Document Detail
+  shows it as a blue chip beside the title in place of the read-only toolbar
+  field and its copy button.
+
 - New email attachment documents use the enclosing message's `Date` as their
   created date while retaining the ingestion time as their added date, so their
   generated filing paths sort by the message date. A missing or invalid `Date`
@@ -87,11 +106,12 @@ Notable user-visible changes to Suchi are recorded here.
 
 - Trash now uses the shared workspace card. Its header holds the retention
   explanation and counted **Empty trash** action; like Documents rows, each row
-  highlights and opens its document anywhere outside its controls, and its
-  compact metadata line ends with the prior filing category. A day countdown to
-  deletion turns into an amber pill in the final week, beside a safer-looking
-  **Restore** action and a plain permanent-delete action. The zero-count action
-  disables and the empty state stays in the card.
+  highlights and opens its document anywhere outside its controls, leads with the
+  prior filing address chip, and ends its compact metadata line with the prior
+  category name. A day countdown to deletion turns into an amber pill in the
+  final week, beside a safer-looking **Restore** action and a plain
+  permanent-delete action. The zero-count action disables and the empty state
+  stays in the card.
 
 - Saved decryption passwords now separate their editable label, last-used date,
   and most recently unlocked document into labeled columns. Labels remain plain

@@ -34,9 +34,10 @@ route state without creating Back-button loops. Verify with:
 Trash uses `RuleWorkspace.svelte` inside the same 1,400-pixel content cap as
 Approvals. Its card header owns the retention explanation and disabled-at-zero
 **Empty trash** count action. Each row's document link covers the whole row and
-highlights it on hover; the deadline and recovery controls sit above it. The
-line under the title combines format, size, trash date, and the retained filing
-category. The deletion deadline is a day countdown with the date as its tooltip,
+highlights it on hover; the deadline and recovery controls sit above it. Like
+Documents and Search rows, the retained address chip precedes the title;
+the line below combines format, size, trash date, and the retained category
+name. The deletion deadline is a day countdown with the date as its tooltip,
 shown as an amber pill only during the final week. The empty state remains
 inside the card. Trash links use `#/doc/{id}` and the same detail owner. Server
 `trashed_at`, `deletes_at` and `owner_id` select read-only recovery; skip
@@ -68,6 +69,17 @@ and retained-value conflicts stay inline without discarding the draft. List,
 ranked Search, Trash, detail, and version rows consume the server projection and
 render one canonical **ASN _n_** chip; the browser does not reconstruct values
 from QR payloads or folder paths.
+Document Detail shows `jd_address` as the filing category address, or the
+category code before system introduction, in a blue chip beside the title,
+outside the rename control, using the server value without reconstructing it
+from IDs. Dashboard, Documents, Search, upload/version
+receipts, outgoing references, and backlinks may show the same address for
+multiple rows. Collection rows render it and the ASN as aligned blue chips that
+deepen with row hover or keyboard focus; grid cards pair it with the
+category name in their metadata line. A single-category Documents view (`?jd=`)
+or the Inbox omits it, since every row shares one address. Title links continue
+to use each numeric document ID and resolved system code; address text is never
+a document key.
 
 Verify the ASN editor, projection chips, and split-upload receipt with
 `cd ui && bun run e2e --grep 'archive serial numbers|split scan'`.

@@ -74,7 +74,8 @@ access.
   QR-label scan splitting, version notes, typed custom fields, named
   exact-document links, saved Views, and folder layouts.
 - Filing systems with permanent codes, direct membership plus document ACLs,
-  and `SYS.AC.documentID` addresses using installation-wide document IDs.
+  and `SYS.AC` category addresses after introduction; a single archive shows
+  category codes. Numeric document IDs remain separate.
 - Browser, watched-folder, IMAP, and mobile intake; takeout exports, supported
   third-party imports, document versions, backups, and restore tooling.
 - Automations, approvals, selective rescans, optional model classification, Ask

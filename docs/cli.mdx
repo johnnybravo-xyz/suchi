@@ -465,10 +465,11 @@ informational and ignored on ingest.
 MIME and SHA-256 are recomputed from the bytes, and sensitivity uses the target
 instance default.
 An input `jd_system` must match the watcher's configured target; it cannot route
-or create a system. `jd_address` is informational source metadata, not a
-requested new identity. To retain IDs, memberships, ACLs and relationships
-exactly, use a [whole-instance backup](/backup-restore), not native takeout or
-Paperless import.
+or create a system. `jd_address` is an informational category address, can repeat
+across documents, and is ignored for routing and identity. Takeout manifest
+version 3 and sidecar format 1 are unchanged. To retain IDs, memberships, ACLs
+and relationships exactly, use a [whole-instance backup](/backup-restore), not
+native takeout or Paperless import.
 
 **Not included** in this version:
 

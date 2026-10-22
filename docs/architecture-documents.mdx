@@ -205,6 +205,13 @@ bulk method and ACL kind are `set_rendered_layout` and `rendered_layout`. A
 document with no selection uses the default filing-tree projection. Document
 PATCH, bulk actions, automations, template edits, and layout deletion enqueue
 rendered moves in the same transaction as their state change.
+`core/jd/systems.Address` owns the derived filing-category projection: `SYS.AC`
+after introduction, and empty while the original archive is unnamed.
+`core/api` applies that value consistently to detail, list, search, receipt,
+version, reference, and backlink rows. The value is intentionally non-unique;
+numeric document IDs and URLs own exact identity. `/api/jd/resolve` authorizes an
+existing category and returns its runtime ID for Documents filtering, without
+performing or granting document ACL access.
 
 `archive_serial_number` is system-scoped physical-filing metadata. A document
 PATCH accepts a positive JSON-safe integer or `null`; assignment is limited to

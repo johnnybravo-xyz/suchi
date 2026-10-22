@@ -128,6 +128,13 @@ owns CAS-link validation shared with Trash; targets come from
 validated `CAS.Path`, not duplicated shard logic. Same-path jobs repair missing/
 stale links to the selected archive/original blob. Startup does not rewrite the
 whole document projection; repair occurs on render/refile.
+`core/render/view` derives category address and path at render time. Default JD
+and flat templates always retain `__{{ doc_pk }}` for uniqueness; introduction
+adds the immutable `<SYS>/` root but never substitutes `jd.address` for document
+identity. Explicit `jd.address` templates receive `SYS.AC` (empty before
+introduction), a non-unique category value, and rely on the existing refusal to overwrite another
+document or foreign artifact. The address cutover does not rewrite stored
+templates, historical links, or the whole archive.
 
 `core/render/index` refreshes a current tree-only `core/taxonomy` snapshot at
 startup/tree changes. After introduction its path is

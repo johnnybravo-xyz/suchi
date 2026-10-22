@@ -388,8 +388,9 @@ and sidecars are reconsidered; unchanged failures retry after five minutes.
 Sidecars (`<name>.json`) remain read-only and apply metadata. Failures stay at
 their source path and appear in logs and archive events; Suchi never moves them
 into the old `errors/` directory. Intake rechecks owner entry; sidecars cannot
-redirect the configured system. Optional sidecar `jd_system` must agree, and
-`jd_address` never allocates or routes a document.
+redirect the configured system. Optional sidecar `jd_system` must agree.
+`jd_address` is informational, category-level, and potentially repeated; it
+never allocates, identifies, or routes a document.
 
 The API and UI continue to accept and display the owner's current email, but the
 database setting is `ingest.fs_watch_owner_id`. Because the running watcher owns

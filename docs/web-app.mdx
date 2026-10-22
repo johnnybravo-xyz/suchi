@@ -171,9 +171,16 @@ failures show **Retry** rather than an empty archive.
 
 Combine `system=CODE` with other filters after introduction. Reload, Back/Forward,
 copied links and new tabs retain it. An old unqualified numeric document URL first
-resolves its authorized document, then updates system context. Full addresses such
-as `S01.13.147` use the resolver; stale addresses are not aliases or broad searches.
-The API/saved-view field `jd_category_id` translates to browser `jd`; it is not a
+resolves its authorized document, then updates system context. Search and Omnibox
+resolve `SYS.AC` category addresses and open Documents with the runtime `jd`
+category ID; an address with no reachable category searches as text. Numeric IDs
+and document links remain the exact-document mechanism. Collection rows show the
+category address, or the category code in a single archive, as an aligned blue
+chip that deepens with the hovered or focused row, and cards pair it with the
+category name in their metadata line. A view of one category, including the
+Inbox, leaves it out because every row would repeat it. Document Detail shows it
+as a blue chip beside the title. The API/saved-view field `jd_category_id`
+translates to browser `jd`; it is not a
 supported browser parameter itself.
 
 Documents/Inbox keep pagination in the URL. Opening detail and using Back restores
@@ -463,12 +470,14 @@ read-only; removing an override reveals the previously stored value.
 **Advanced > Folder layouts** controls paths in the local rendered filesystem.
 The editor shows supported variables and a server-rendered sample before save.
 Leave the file extension out: preview and save reject it because Suchi appends
-each linked file's own extension. Saved rows can be edited or deleted; deleting
+each linked file's own extension. `jd.address` is a category address and can
+repeat; include `doc_pk` for a collision-safe custom layout, or `asn` only when
+that layout requires a unique archive serial number. Default layouts always keep
+the independent document-ID suffix. Saved rows can be edited or deleted; deleting
 returns assigned documents to the default filing-tree projection. Suchi refuses
 the delete while an automation still assigns the layout and names those rules,
 so remove the action from them first. Both **Automations** entry points open the
-same
-list-first workspace. Compact rows summarize each rule as a sentence, expose its
+same list-first workspace. Compact rows summarize each rule as a sentence, expose its
 enabled state, and run from top to bottom; drag the handle or focus it and use
 the arrow keys to reorder custom rules. An empty list offers starter patterns,
 while **New automation** or **Edit** replaces the list with a focused builder.

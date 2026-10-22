@@ -48,11 +48,13 @@ automatically installed by the restore process.
 Manifest version `"3"` identifies the selected system code/name; `--all` means
 all owners there, not all systems. Sidecar format stays 1 with optional
 `title_owner`, `jd_system`, `jd_address`, `custom_fields`, and
-`archive_serial_number`. Those preserve naming precedence, typed values, the
-available physical identifier, and source-system context; they are not an
-ID-preserving restore protocol. `custom_fields` leaves out document-link values,
-whose target IDs change, and extraction-managed `invoice_*` fields, which intake
-reads again from the original.
+`archive_serial_number`. `jd_address` is an informational category address and
+can repeat across sidecars; intake routes with `jd_system` and files with
+`jd_category`, not the address. These fields preserve naming precedence, typed
+values, the available physical identifier, and source-system context; they are
+not an ID-preserving restore protocol. `custom_fields` leaves out document-link
+values, whose target IDs change, and extraction-managed `invoice_*` fields,
+which intake reads again from the original.
 
 ## Prepare the fresh instance
 

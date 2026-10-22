@@ -45,8 +45,10 @@ system's `00-09 System index` namespace is reserved. Original blobs and
 extraction/classification state are unchanged.
 First prefixed import already queues render-only moves for the original system;
 it does not rerun classification. Refile changes category/location within a system,
-not system ownership. `S01.13.147` can become `S01.14.147`, never S02 via category
-assignment; the installation-global ID stays 147 and the old address becomes stale.
+not system ownership. Document 147 can move from category address `S01.13` to
+`S01.14`, never S02 through category assignment; its installation-global ID and
+`__147` default filename suffix stay stable. `S01.13` remains the address of
+category 13 rather than a stale document alias.
 
 ## Admin API
 

@@ -138,9 +138,12 @@ screens offer profile/sign-out without document-bearing settings requests.
 
 An unqualified numeric document link loads the authorized document intrinsically;
 its returned `system_code` binds the route, sidebar and subsequent metadata/blob
-requests. Full addresses use `/api/jd/resolve`; stale addresses are errors, never
-aliases or broad searches. Display the server's `jd_address`; address and private
-numeric links are copyable. Category pickers stay two-level within the system.
+requests. Search and Omnibox alone recognize canonical `SYS.AC`
+category addresses through `filing-address.js`, call `/api/jd/resolve`, and route
+to Documents with the returned runtime category ID. A 404 and noncanonical text
+both follow ordinary Search.
+Display the server's non-unique `jd_address`, while private numeric links remain
+the exact-document route. Category pickers stay two-level within the system.
 
 Native links and `go()` use the scoped hash helper. Switching drops foreign
 filters/IDs and increments generation. The shell keys its scoped subtree by that

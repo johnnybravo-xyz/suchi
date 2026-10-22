@@ -26,10 +26,14 @@ never explicit request/token systems. Name/code completion, counts, snippets,
 scores and pagination cannot return foreign-system rows. Public-demo exceptions
 apply only to the unnamed original demo archive. See [Permissions](/permissions).
 
-Whole canonical addresses such as `S01.13.147` in Search/Omnibox use
-`/api/jd/resolve`; stale locations fail, not alias to a new category or fall back
-to broad text search. `jd:13` remains a category filter within the current system.
-The final address component is an existing installation-global document ID.
+Canonical `SYS.AC` category addresses such as `S01.21` in Search/Omnibox use
+`/api/jd/resolve` after system introduction. A successful resolution opens
+Documents filtered by the runtime category ID and resolved system. A canonical
+address with no category the user can enter runs as ordinary ranked search.
+Before introduction there are no addresses, so input such as `20.21` or a price
+such as `10.15` is ordinary search text. Former three-component input such as
+`S01.21.147` is ordinary query text, not compatibility syntax. `jd:21` remains a
+local category filter within the current selected system.
 
 ## FTS5 indexes
 

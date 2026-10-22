@@ -94,14 +94,22 @@ introduction the list may be empty. Afterwards it contains only enterable system
 original system is unavailable. Both this route and address resolution accept
 `documents:read` tokens.
 
-`GET /api/jd/resolve?address=S01.13.147` returns
-`{id,system_code,jd_address}` only for the authorized live document's current
-system/category. Invalid address syntax or ID overflow is 400 `bad_address`;
-unknown, stale or inaccessible locations are 404. `.ID` is the existing positive
-installation-global document ID, not an authored/category-local counter.
-Document projections and upload receipts expose `system_code` and `jd_address`
-after introduction; category `system_code` is distinct from its protected `system`
-boolean. Numeric API IDs do not change.
+`GET /api/jd/resolve?address=S01.21` returns
+`{system_code,jd_category_id,jd_address}` for an enterable existing category in
+an introduced filing system. The original archive has no addresses before
+introduction, so numeric forms such as `20.21` are 400 `bad_address`; use the
+`jd_category_id` filter or `jd:21` instead. Resolution requires membership, the
+token's system ceiling, and any explicit `?system=` to agree. Invalid syntax,
+including former `SYS.AC.documentID` values, is 400 `bad_address`; missing or
+inaccessible systems/categories are 404 without foreign labels. Resolution grants
+no document access; the subsequent Documents query applies visibility in SQL.
+
+Document, search, reference, upload/version-receipt, MCP-relayed search, and
+native-export projections expose `system_code` plus category-level `jd_address`.
+Introduced systems use `SYS.AC`; before introduction the field is omitted and
+clients show `jd_category_code`. The field can repeat across documents and versions. Numeric `id`, document URLs, and titled
+document links remain exact identity. Category `system_code` is distinct from its
+protected `system` boolean. API version 1 is unchanged.
 
 Session admins manage direct membership with
 `GET/PUT /api/admin/jd/systems/{code}/members`, representation `{"user_ids":[...]}`.
@@ -922,7 +930,7 @@ The normal sensitivity-reveal and raw-original download restrictions still apply
       "value": {
         "id": 84,
         "system_code": "S01",
-        "jd_address": "S01.31.84",
+        "jd_address": "S01.31",
         "title": "Payment receipt March 2026",
         "mime_type": "application/pdf",
         "jd_category_code": 31,
@@ -1337,8 +1345,8 @@ trashed document returns `404` and remains eligible for automatic purge.
 Returns a paginated envelope of trashed documents in the selected system.
 Members see their own documents; administrators see all owners there, never
 other systems. Each row includes `trashed_at`, `deletes_at` (the Unix timestamp
-30 days later), retained `jd_category_code` and `jd_category_name`, and
-`archive_serial_number` when retained.
+30 days later), retained `jd_category_code`, `jd_category_name`, and category
+`jd_address`, and `archive_serial_number` when retained.
 
 ### `DELETE /api/trash/{id}`
 
@@ -1391,7 +1399,7 @@ changing authorization or ranking.
 
 **Response shape** — `{count, next, previous, results}` DRF envelope.
 Each hit carries `{id, title, snippet, rank, created_at, mime_type,
-sensitivity}` plus `archive_serial_number` when assigned. `snippet` wraps a
+sensitivity, jd_category_code}` plus `archive_serial_number` when assigned. `snippet` wraps a
 matching span in `<mark>...</mark>` for non-sensitive documents. Confidential
 and Restricted hits still participate in ranking but return an empty snippet;
 clients must render a sensitivity placeholder rather than hidden OCR text.
@@ -1653,7 +1661,7 @@ source document ID descending and then field name:
   "results": [{
     "id": 91,
     "system_code": "S01",
-    "jd_address": "S01.31.91",
+    "jd_address": "S01.31",
     "title": "Electricity bill March 2026",
     "mime_type": "application/pdf",
     "jd_category_code": 31,

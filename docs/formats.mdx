@@ -717,7 +717,7 @@ Version, split and attachment documents inherit their source system.
 | `jd_category`      | int               | JD code (e.g. `31` = "Utilities" under area 30–39). Falls through to inbox when unresolved.                                                                  |
 | `jd_system`        | string, optional  | Source/expected system code. When supplied, must match the configured intake target; never routes or creates a system.                                       |
 | `archive_serial_number` | int, optional     | Positive integer no greater than `9007199254740991`. Unique within the intake filing system across live, trashed, and historical versions; a conflict rejects the intake atomically. |
-| `jd_address`       | string, optional  | Informational source location. Does not request a document ID or override current filing.                                                                    |
+| `jd_address`       | string, optional  | Informational source category address (`SYS.AC`; absent before system introduction), potentially repeated. Does not request a document ID or override current filing. |
 | `notes`            | string            | Creates an attributed note owned by the intake owner on this exact document revision.                                                                        |
 | `custom_fields`    | object            | Map of exact custom-field name → typed value. The field must already exist (`/api/custom_fields/`); API validation follows its declared type.                |
 
@@ -742,9 +742,11 @@ portable and extraction reads managed values again from the original.
 MIME and SHA-256 are recomputed from the file.
 Native takeout manifest version `"3"` identifies one selected system and
 includes these optional source fields while sidecar format remains 1.
-Reingestion preserves available ASNs but can allocate new installation-global
-document IDs; source addresses are not immutable aliases. Full DB/blob/key
-backup, not a sidecar, preserves membership and document relationships.
+`jd_address` is a potentially repeated category address; fs-watch ignores it for
+routing and identity, using `jd_system` and `jd_category` instead. Reingestion
+preserves available ASNs but can allocate new installation-global document IDs.
+Full DB/blob/key backup, not a sidecar, preserves membership and document
+relationships.
 
 ## Docker image matrix
 

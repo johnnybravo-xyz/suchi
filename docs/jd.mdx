@@ -39,22 +39,27 @@ New systems initially admit only active instance administrators. Administrators
 grant direct user memberships separately from document permissions. There are
 no system roles, deletion, merge or document-transfer controls.
 
-Official [SYS.AC.ID notation](https://johnnydecimal.com/documentation/acid-notation)
-uses an assigned, category-local [ID folder](https://johnnydecimal.com/documentation/ids).
-Suchi deliberately uses the existing **installation-global document number**
-as `.ID`, not a folder counter, authored seed ID or new per-system counter.
-Assuming an upload has returned document 147 in S01/category 13, its address is
-`S01.13.147`. Refiling it to category 14 gives `S01.14.147`; the number and numeric
-document URL remain stable, while the old address no longer resolves. New versions
-and split children receive their own document IDs. There is no 99-document limit.
-Automatic allocation does not reuse IDs allocated after the taxonomy upgrade.
-IDs that survive from earlier archives are preserved, but numbers purged before the upgrade have no
-retained allocation history and may be reused.
+Official [AC.ID notation](https://johnnydecimal.com/documentation/acid-notation)
+and [multiple-system notation](https://johnnydecimal.com/documentation/multiple-systems-overview)
+add an assigned, category-local ID layer. Suchi deliberately adapts that model:
+its filing address identifies a category and always has two components.
 
-Canonical addresses require a two-digit category and an unpadded positive decimal
-document ID in the signed 64-bit range. Spaces, signs, lowercase codes and padded
-IDs such as `S01.13.0147` are invalid. A syntactically valid address still needs an
-existing live document in that exact current location and permission to view it.
+- Before system introduction there is no address. The category code (`21`)
+  already names the category, and its first digit places it in area `20–29`.
+- After introduction, `SYS.AC` adds the permanent system code: category 21 in
+  S01 is `S01.21`.
+
+The numeric document ID is separate installation-global API identity. Documents
+147 and 148 filed in S01/category 21 both project `S01.21` while keeping distinct
+numeric URLs. Refiling document 147 to category 22 changes its projection to
+`S01.22` without renumbering it; both category addresses remain resolvable while
+the categories exist. New versions and split children receive their own IDs.
+
+Addresses require an uppercase A00–Z99 system code and a two-digit category.
+Area-prefixed forms such as `20.21` are not addresses. Spaces, width variations, Unicode lookalikes,
+lowercase codes, and former three-component values such as `S01.21.147` are invalid.
+A syntactically valid address still needs an existing category and system entry;
+document visibility is applied when the resulting Documents view runs.
 
 Selecting a system is Suchi's simple “choose a filing cabinet” model, not a claim
 to reproduce every upstream JD convention. System entry **and** existing document
@@ -270,14 +275,16 @@ for an illustrative already-returned document is:
 rendered/S01/
   00-09 System index/00.00 archive.huml
   10-19 Client document kinds/
-    13 GST filings/2026/2026-07-31 GST return__S01.13.147.pdf
+    13 GST filings/2026/2026-07-31 GST return__147.pdf
   40-49 System/49 Inbox/...
 ```
 
 Default JD and runtime-flat filenames use created date, then added date, otherwise
-`undated`, title, and the full address suffix after introduction. Explicit
-templates retain relative behavior; `jd.system.code`, `jd.system.name`, and
-`jd.address` are available.
+`undated`, title, and the independent `__<doc_pk>` suffix in both single and
+multi-system archives. Explicit templates retain relative behavior;
+`jd.system.code`, `jd.system.name`, and category-level `jd.address` are available.
+Because `jd.address` can repeat, a collision-safe explicit layout must also use
+`doc_pk`, or `asn` where that layout already requires a unique archive serial number.
 Renaming a system does not move its root. New and edited templates cannot carry a
 file extension: preview, create, and update reject one because Suchi appends the
 linked file's own, `.pdf` for the searchable copy and otherwise the original's
@@ -300,8 +307,9 @@ rerunning OCR or classification.
 `q` and `area` filters within the selected system. Category `system` remains a
 protected-row boolean; `system_code` identifies its filing system. Set a document's
 category with `{"jd_category_id":17}`: the row must belong to that document's
-system, and runtime row IDs differ from portable category codes. Full addresses
-resolve through `GET /api/jd/resolve?address=S01.13.147`; numeric IDs are unchanged.
+system, and runtime row IDs differ from portable category codes. Category addresses
+resolve through `GET /api/jd/resolve?address=S01.13`; the response opens a filtered
+Documents view while numeric document IDs and URLs remain exact identity.
 Mobile uses ordinary bound-system APIs; taxonomy administration is session-admin web/CLI.
 See [API](/api) and [Automations](/automations).
 
