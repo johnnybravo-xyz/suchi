@@ -27,6 +27,9 @@
   let expandedSuggestionGroups = $state(new Set())
   let expandedReviewContext = $state(new Set())
   let suggestionGroupsOpen = $state(false)
+  // The hovered or focused side of the synchronized queues and its task IDs;
+  // the opposite side highlights the same decisions.
+  let linkedHover = $state(null)
   let suggestionGroupsToggle = $state()
   const metadataTasks = $derived(tasks.filter(isMetadataTask))
   const visibleMetadataTasks = $derived(metadataTasks.filter(task => matchesApprovalFilter(task, approvalFilter)))
@@ -72,6 +75,21 @@
     finally { loading = false }
   }
 
+  // Decided items fade out of both queues together so their shared state is
+  // visible. The Web Animations API keeps Svelte's transition runtime out of
+  // the initial bundle.
+  async function fadeOutDecided(ids) {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    const leaving = [...document.querySelectorAll('.approvals-workspace [data-task-id]')]
+      .filter(node => ids.has(Number(node.dataset.taskId)))
+    for (const card of document.querySelectorAll('.document-review-card, .suggestion-card')) {
+      const rows = [...card.querySelectorAll('[data-task-id]')]
+      if (rows.length && rows.every(row => ids.has(Number(row.dataset.taskId)))) leaving.push(card)
+    }
+    await Promise.all(leaving.map(node =>
+      node.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 150, fill: 'forwards' }).finished))
+  }
+
   async function resolve(t, choice) {
     await resolveMany([t], choice)
   }
@@ -94,7 +112,10 @@
           failures[task.id] = reviewFailure(ex)
         }
       }
-      if (resolved.size) tasks = tasks.filter(task => !resolved.has(task.id))
+      if (resolved.size) {
+        await fadeOutDecided(resolved)
+        tasks = tasks.filter(task => !resolved.has(task.id))
+      }
       taskErrors = failures
       onCount?.(tasks.length + jobs.length + intelligence.length)
       notify?.(resolutionNotice(choice, resolved.size, eligible.length))
@@ -358,6 +379,14 @@
     }[task.vars?.field] || translate("tasks.unsupportedActionReadOnly")
   }
 
+  function linkHover(side, groupTasks) {
+    linkedHover = { side, taskIDs: new Set(groupTasks.map(task => task.id)) }
+  }
+
+  function clearLinkHover() {
+    linkedHover = null
+  }
+
   function toggleSuggestionGroup(key) {
     const next = new Set(expandedSuggestionGroups)
     if (next.has(key)) next.delete(key)
@@ -509,13 +538,25 @@
     {#if loading || metadataTasks.length}
       <div class="approval-filters" role="group" aria-label={translate("tasks.approvalFilters")}>
         <button type="button" class:active={approvalFilter === 'all'} aria-pressed={approvalFilter === 'all'}
-                onclick={() => (approvalFilter = 'all')}>{translate("tasks.allSuggestionFilter", { count: filterCounts.all })}</button>
+                onclick={() => (approvalFilter = 'all')}>
+          <span>{translate("tasks.allSuggestionFilter")}</span>
+          <span class="filter-count">{formatNumber(filterCounts.all)}</span>
+        </button>
         <button type="button" class:active={approvalFilter === 'tags'} aria-pressed={approvalFilter === 'tags'}
-                onclick={() => (approvalFilter = 'tags')}>{translate("tasks.tagSuggestionFilter", { count: filterCounts.tags })}</button>
+                onclick={() => (approvalFilter = 'tags')}>
+          <span>{translate("tasks.tagSuggestionFilter")}</span>
+          <span class="filter-count">{formatNumber(filterCounts.tags)}</span>
+        </button>
         <button type="button" class:active={approvalFilter === 'filing'} aria-pressed={approvalFilter === 'filing'}
-                onclick={() => (approvalFilter = 'filing')}>{translate("tasks.filingSuggestionFilter", { count: filterCounts.filing })}</button>
+                onclick={() => (approvalFilter = 'filing')}>
+          <span>{translate("tasks.filingSuggestionFilter")}</span>
+          <span class="filter-count">{formatNumber(filterCounts.filing)}</span>
+        </button>
         <button type="button" class:active={approvalFilter === 'fields'} aria-pressed={approvalFilter === 'fields'}
-                onclick={() => (approvalFilter = 'fields')}>{translate("tasks.fieldSuggestionFilter", { count: filterCounts.fields })}</button>
+                onclick={() => (approvalFilter = 'fields')}>
+          <span>{translate("tasks.fieldSuggestionFilter")}</span>
+          <span class="filter-count">{formatNumber(filterCounts.fields)}</span>
+        </button>
       </div>
     {/if}
 
@@ -539,17 +580,20 @@
             {/if}
             <div class="document-review-list">
               {#each displayedDocumentGroups as group (group.key)}
-                <article class="approval-card document-review-card">
-                  <header class="approval-card-header document-header">
+                <article class="document-review-card"
+                         onmouseenter={() => linkHover('document', group.tasks)} onmouseleave={clearLinkHover}
+                         onfocusin={() => linkHover('document', group.tasks)} onfocusout={clearLinkHover}>
                     <a class="task-thumb" class:placeholder={!group.document.doc_has_thumbnail} class:blurred={isHighSensitivity(group.document.doc_sensitivity)}
                        href={filingHref(`#/doc/${group.document.doc_id}`)}
                        aria-label={translate("tasks.openValue2", { "doc_id": group.document.doc_title || `document ${group.document.doc_id}` })}>
                       {#if group.document.doc_has_thumbnail}
                         <img src={thumbPath(group.document.doc_id, isHighSensitivity(group.document.doc_sensitivity))} alt="" loading="lazy" />
                       {:else}
-                        <Icon name="docs" size={20} />
+                        <Icon name="docs" size={16} />
                       {/if}
                     </a>
+                  <div class="document-review-body">
+                  <header class="document-header">
                     <div class="document-identity">
                       <div class="document-title-line">
                         <a href={filingHref(`#/doc/${group.document.doc_id}`)}>
@@ -559,7 +603,8 @@
                         {#if filingLabel(group.document)}<span class="filing-pill">{filingLabel(group.document)}</span>{/if}
                       </div>
                     </div>
-                    {#if group.rejectTasks.length || group.applyTasks.length}
+                    <!-- A single suggestion's row controls already settle the document. -->
+                    {#if group.tasks.length > 1 && (group.rejectTasks.length || group.applyTasks.length)}
                       <div class="document-bulk-actions">
                         {#if group.rejectTasks.length}
                           <button class="btn sm" disabled={tasksAreBusy(group.tasks) || tasksHaveErrors(group.tasks)}
@@ -578,16 +623,21 @@
                       </div>
                     {/if}
                   </header>
-                  <div class="approval-card-body document-decisions">
+                  <div class="document-decisions">
                     {#each group.tasks as t (t.id)}
                       {@const choices = taskChoices(t)}
                       {@const dl = deadline(t)}
                       {@const reviewContextOpen = expandedReviewContext.has(t.id)}
-                      <section class="decision-row document-decision" data-task-id={t.id}>
+                      <section class="decision-row document-decision" data-task-id={t.id}
+                               class:linked={linkedHover?.side === 'suggestion' && linkedHover.taskIDs.has(t.id)}>
                         <div class="decision-kind">{suggestionActionLabel(t)}</div>
                         <div class="metadata-transition">
-                          <span>{typeof t.vars?.current_value === 'string' ? (t.vars.current_value || translate("tasks.notSet")) : translate("tasks.unavailable")}</span>
-                          <span class="transition-arrow" aria-hidden="true">→</span>
+                          {#if t.vars?.field === 'tag'}
+                            <span class="addition-mark" aria-hidden="true">+</span>
+                          {:else}
+                            <span>{typeof t.vars?.current_value === 'string' ? (t.vars.current_value || translate("tasks.notSet")) : translate("tasks.unavailable")}</span>
+                            <span class="transition-arrow" aria-hidden="true">→</span>
+                          {/if}
                           <strong>{suggestionValue(t.vars)}</strong>
                         </div>
                         {#if t.vars?.source}
@@ -637,6 +687,7 @@
                       </section>
                     {/each}
                   </div>
+                  </div>
                 </article>
               {/each}
             </div>
@@ -647,24 +698,30 @@
 
           {#if suggestionGroupsOpen}
             <section id="suggestion-review-pane" class="suggestion-review-pane" aria-label={translate("tasks.bySuggestion")}>
+              <div class="suggestion-review-sticky">
               <header class="pane-heading">
                 <div class="pane-heading-label">
                   <h2>{translate("tasks.bySuggestion")}</h2>
                   <span>{plural("tasks.groupCount", suggestionGroups.length)}</span>
                 </div>
+                <span class="sync-mark" role="img"
+                      aria-label={translate("tasks.suggestionGroupsExplanation", { count: visibleMetadataTasks.length })}
+                      title={translate("tasks.suggestionGroupsExplanation", { count: visibleMetadataTasks.length })}>
+                  <Icon name="sync" size={14} />
+                </span>
               </header>
-              <p class="suggestion-review-hint">
-                {translate("tasks.suggestionGroupsExplanation", { count: visibleMetadataTasks.length })}
-              </p>
               <div class="suggestion-review-list">
                 {#each displayedSuggestionGroups as group (group.key)}
                   {@const representative = group.representative}
                   {@const expanded = expandedSuggestionGroups.has(group.key)}
-                  <article class="approval-card suggestion-card">
+                  <article class="approval-card suggestion-card"
+                           class:linked={linkedHover?.side === 'document' && group.tasks.some(task => linkedHover.taskIDs.has(task.id))}
+                           onmouseenter={() => linkHover('suggestion', group.tasks)} onmouseleave={clearLinkHover}
+                           onfocusin={() => linkHover('suggestion', group.tasks)} onfocusout={clearLinkHover}>
                     <header class="approval-card-header suggestion-card-header">
                       <div>
                         <span>{suggestionActionLabel(representative)}</span>
-                        <strong class:tag-suggestion={representative.vars?.field === 'tag'}>{suggestionValue(representative.vars)}</strong>
+                        <strong>{#if representative.vars?.field === 'tag'}<span class="addition-mark" aria-hidden="true">+</span>{/if}{suggestionValue(representative.vars)}</strong>
                       </div>
                       {#if representative.vars?.source}
                         <span class="source-pill">
@@ -677,7 +734,7 @@
                     <div class="suggestion-documents">
                       {#each group.tasks as task, index (task.id)}
                         {#if expanded || index < 3}
-                          <a href={filingHref(`#/doc/${task.doc_id}`)}>
+                          <a href={filingHref(`#/doc/${task.doc_id}`)} data-task-id={task.id}>
                             <strong>{task.doc_title || translate("tasks.documentValue", { "doc_id": task.doc_id })}</strong>
                             <span>#{task.doc_id}</span>
                           </a>
@@ -717,6 +774,7 @@
                 {#if hiddenSuggestionGroupCount}
                   <p class="review-overflow">{plural("tasks.moreSuggestionGroupsBelow", hiddenSuggestionGroupCount)}</p>
                 {/if}
+              </div>
             </section>
           {/if}
         </div>
@@ -897,33 +955,54 @@
     border-bottom:1px solid var(--line);overflow-x:auto
   }
   .approval-filters button {
-    position:relative;flex:none;margin-bottom:-1px;padding:14px 12px;border:0;border-bottom:2px solid transparent;
-    background:transparent;color:var(--muted);font:inherit;font-size:.74rem;font-weight:650;cursor:pointer
+    position:relative;display:flex;align-items:center;gap:6px;flex:none;margin-bottom:-1px;padding:13px 12px;
+    border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);
+    font:inherit;font-size:.74rem;font-weight:650;cursor:pointer
   }
   .approval-filters button:hover { color:var(--ink) }
   .approval-filters button.active { border-bottom-color:var(--accent);color:var(--accent) }
+  .filter-count {
+    display:inline-grid;place-items:center;box-sizing:border-box;min-width:19px;height:19px;padding:0 5px;
+    border:1px solid var(--line);border-radius:999px;background:var(--surface-2);
+    color:var(--muted);font-size:.61rem;font-variant-numeric:tabular-nums;line-height:1
+  }
+  .approval-filters button.active .filter-count {
+    border-color:color-mix(in srgb,var(--accent) 28%,var(--line));background:var(--tint);color:var(--accent)
+  }
   .review-skeleton { display:grid }
   .approval-loading-row { padding:24px 28px;border-bottom:1px solid var(--line) }
   .approval-loading-row:last-child { border-bottom:0 }
   .approval-loading-row .skel { width:68% }
   .filtered-empty { margin:0;padding:32px 22px;color:var(--muted);text-align:center }
-  .review-panes { display:grid;grid-template-columns:minmax(0,1fr);width:100%;margin:0 }
+  .review-panes { display:grid;grid-template-columns:minmax(0,1fr);width:100%;margin:0;background:var(--surface) }
   .review-panes.with-suggestion-groups { grid-template-columns:minmax(0,1fr) 400px }
-  .document-review-pane { min-width:0 }
+  /* overflow:hidden on the shared card would stop the sticky pane; clip keeps
+     the rounded corners without creating a scroll container. */
+  :global(.rule-workspace.approvals-workspace) { overflow:clip }
+  /* Beside a long document table, the groups stay in view within .content,
+     scrolling on their own when taller than the viewport. The height leaves
+     room for the topbar and .content's bottom padding so the pane still fits
+     when the table ends. */
+  .suggestion-review-sticky { position:sticky;top:0;max-height:calc(100dvh - 112px);overflow-y:auto }
+  .document-review-pane { min-width:0;background:var(--surface) }
   .suggestion-review-pane {
     min-width:0;border-left:1px solid var(--line);
-    background:color-mix(in srgb,var(--surface-2) 58%,var(--surface))
+    background:color-mix(in srgb,var(--surface-2) 28%,var(--surface))
   }
   .pane-heading { display:flex;align-items:center;min-height:40px;padding:9px 28px;border-bottom:1px solid var(--line) }
   .pane-heading-label { display:flex;align-items:baseline;gap:9px;min-width:0 }
   .pane-heading h2 { margin:0;color:var(--muted);font-size:.7rem;font-weight:750;letter-spacing:.08em;text-transform:uppercase }
   .pane-heading span { color:var(--muted);font-size:.68rem }
-  .suggestion-review-hint {
-    margin:12px 14px;padding:10px 12px;border:1px solid var(--line);border-radius:9px;
-    background:color-mix(in srgb,var(--accent) 5%,var(--surface));color:var(--muted);font-size:.72rem;line-height:1.45
+  .sync-mark { display:inline-flex;margin-left:auto;color:var(--muted);cursor:help }
+  .document-review-card .decision-row,.suggestion-card { transition:background-color .15s,box-shadow .15s,border-color .15s }
+  .document-review-card .decision-row.linked {
+    border-radius:6px;background:color-mix(in srgb,var(--accent) 7%,var(--surface));
+    box-shadow:0 0 0 5px color-mix(in srgb,var(--accent) 7%,var(--surface))
   }
+  .suggestion-card.linked .suggestion-card-header,.suggestion-card.linked .suggestion-card-actions { background:transparent }
+  .suggestion-card.linked { border-color:color-mix(in srgb,var(--accent) 40%,var(--line));background:color-mix(in srgb,var(--accent) 5%,var(--surface)) }
   .document-review-list { display:block }
-  .suggestion-review-list { display:grid;gap:12px;padding:0 14px 16px }
+  .suggestion-review-list { display:grid;gap:12px;padding:14px 14px 16px }
   .review-overflow { margin:0;padding:14px 28px;border-top:1px solid var(--line);color:var(--muted);font-size:.72rem }
   .approval-section-title { margin:20px 20px 8px;color:var(--muted);font-size:.9rem }
   .section-title-row { display:flex;align-items:center;justify-content:space-between;gap:12px;margin:20px 20px 8px }
@@ -934,14 +1013,13 @@
     min-width:0;border:1px solid var(--line);border-radius:11px;overflow:hidden;
     background:var(--bg);box-shadow:0 10px 24px color-mix(in srgb,var(--ink) 4%,transparent)
   }
-  .document-review-card {
-    border:0;border-radius:0;background:var(--surface);box-shadow:none
-  }
+  .document-review-card { display:flex;gap:12px;align-items:flex-start;padding:16px 28px;background:var(--surface) }
   .document-review-card + .document-review-card { border-top:1px solid var(--line) }
+  .document-review-card .task-thumb { flex-basis:32px;width:32px;border-radius:5px }
+  .document-review-body { display:grid;gap:4px;flex:1;min-width:0 }
   .approval-card-header { border-bottom:1px solid var(--line);background:var(--surface-2) }
   .approval-card-body { background:var(--bg) }
-  .document-review-card .approval-card-body { background:var(--surface) }
-  .document-header { display:flex;gap:11px;align-items:center;padding:11px 28px }
+  .document-header { display:flex;gap:11px;align-items:center;min-height:26px }
   .document-identity { flex:1;min-width:0 }
   .document-identity > a { color:var(--ink);font-weight:650;overflow-wrap:anywhere }
   .document-title-line { display:flex;align-items:baseline;gap:8px;min-width:0 }
@@ -953,7 +1031,8 @@
     background:var(--bg);color:var(--muted);font-size:.61rem;font-weight:600;overflow-wrap:anywhere
   }
   .document-bulk-actions { display:flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:wrap }
-  .document-decisions { padding:0 28px }
+  .document-decisions { display:grid }
+  .document-review-card .decision-row { padding:2px 0;border-bottom:0 }
   .document-decision {
     display:grid;grid-template-columns:126px minmax(0,1fr) 148px 96px 68px;
     column-gap:14px;align-items:center
@@ -966,6 +1045,7 @@
   .metadata-transition > span:first-child { min-width:0;color:var(--muted);text-decoration:line-through }
   .metadata-transition > strong { min-width:0;color:var(--ink);font-weight:700 }
   .transition-arrow { flex:none;color:var(--faint) }
+  .metadata-transition > span.addition-mark { flex:none;color:var(--accent);font-weight:700;text-decoration:none }
   .decision-source { grid-column:3;justify-self:start;max-width:100% }
   .review-rationale-toggle {
     grid-column:4;justify-self:start;max-width:100%;padding:3px 0;border:0;background:transparent;
@@ -987,19 +1067,20 @@
   .intelligence-evidence { margin:0 0 6px;color:var(--muted);font-size:.78rem;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere }
   .review-sources { margin:0;padding-left:18px;font-size:.78rem;overflow-wrap:anywhere }
   .review-error { color:var(--danger);font-size:.75rem;line-height:1.45;overflow-wrap:anywhere }
-  .suggestion-card-header { display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 13px }
+  .suggestion-card { background:var(--surface) }
+  .suggestion-card-header { display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 13px;background:var(--surface) }
   .suggestion-card-header > div { display:flex;min-width:0;align-items:baseline;gap:9px;overflow:hidden }
   .suggestion-card-header > div > span { flex:none;color:var(--ink);font-size:.74rem;font-weight:700 }
   .suggestion-card-header strong { min-width:0;font-size:.76rem;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
-  .suggestion-card-header strong.tag-suggestion { padding:2px 6px;border-radius:5px;background:var(--tint);color:var(--accent);font-family:"Spline Sans Mono",ui-monospace,monospace }
+  .suggestion-card-header .addition-mark { margin-right:6px;color:var(--accent) }
   .source-pill { display:inline-flex;flex:none;max-width:46%;padding:3px 8px;border:1px solid var(--line);border-radius:999px;color:var(--muted);font-size:.59rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
   .source-pill.decision-source { max-width:100% }
   .suggestion-documents { display:grid;padding:4px 13px }
-  .suggestion-documents a { display:flex;align-items:baseline;justify-content:space-between;gap:9px;padding:9px 0;border-bottom:1px solid var(--line);color:var(--ink);font-size:.74rem }
+  .suggestion-documents a { display:flex;align-items:baseline;justify-content:space-between;gap:9px;padding:6px 0;color:var(--ink);font-size:.74rem }
   .suggestion-documents a strong { min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
   .suggestion-documents a span { flex:none;color:var(--faint);font-family:"Spline Sans Mono",ui-monospace,monospace;font-size:.58rem }
   .more-documents { justify-self:start;padding:8px 0;border:0;background:transparent;color:var(--accent);font:inherit;font-size:.68rem;font-weight:650;cursor:pointer }
-  .suggestion-card-actions { display:flex;align-items:center;justify-content:flex-end;gap:7px;padding:10px 13px;border-top:1px solid var(--line);background:var(--surface-2) }
+  .suggestion-card-actions { display:flex;align-items:center;justify-content:flex-end;gap:7px;padding:6px 13px 13px;background:var(--surface) }
   .suggestion-error { margin:8px 13px }
   .date-value { display:flex;align-items:center;gap:7px;flex-wrap:wrap }
   .decision { font-size:1rem;line-height:1.35;overflow-wrap:anywhere }
@@ -1042,6 +1123,7 @@
 
   @media (max-width:1050px) {
     .review-panes.with-suggestion-groups { grid-template-columns:1fr }
+    .suggestion-review-sticky { position:static;max-height:none;overflow:visible }
     .suggestion-review-pane { border-top:1px solid var(--line);border-left:0 }
     .review-panes.with-suggestion-groups .document-decision {
       grid-template-columns:126px minmax(0,1fr) 148px 96px 68px
@@ -1070,10 +1152,10 @@
   @media (max-width:620px) {
     .review-toolbar { width:100%;justify-content:space-between }
     .approval-filters { padding-inline:8px }
-    .document-header { align-items:flex-start;padding-inline:16px;flex-wrap:wrap }
-    .document-identity { flex:1 1 calc(100% - 60px) }
-    .document-bulk-actions { width:100%;padding-left:57px;justify-content:flex-start }
-    .document-decisions { padding-inline:16px }
+    .document-review-card { padding-inline:16px }
+    .document-decisions { gap:14px }
+    .document-header { flex-wrap:wrap }
+    .document-bulk-actions { width:100%;justify-content:flex-start }
     .document-decision,
     .review-panes.with-suggestion-groups .document-decision {
       grid-template-columns:minmax(0,1fr) 68px

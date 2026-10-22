@@ -34,9 +34,11 @@ Calendar, and Views. Its header keeps the page description, refresh action, and
 and **Fields** tabs are the only suggestion counts.
 
 The screen opens with one **By document** table, keeping each document's current
-and proposed values together. Document strips and hairlines provide the
-hierarchy without nested cards. Each decision reads left to right as one change:
-the struck current value, an arrow, and the emphasized new value. Rows share
+and proposed values together. Each document is one block: a small thumbnail
+beside its title and its suggestions, with a hairline only between documents.
+Each decision reads left to right as one change: the struck current value, an
+arrow, and the emphasized new value. An added tag reads **+ _tag_** because it
+replaces nothing, in both projections. Rows share
 fixed action, change, reason, similar-document, and decision columns so
 different suggestion types retain the same edges. The reason is a quiet chip;
 supporting documents use a compact **_n_ similar** disclosure.
@@ -46,13 +48,20 @@ workspace card. The header control becomes **Hide suggestion groups** without
 moving, and the **By document** and **By suggestion** captions appear only while
 both projections are visible. Each projection shows at most 100 entries and
 states how many remain; settling visible entries brings the next queued entries
-into view. On narrower screens the sidecar stacks after the document table. The
+into view. Beside the document table the sidecar stays in view while the table
+scrolls, scrolling on its own when its groups are taller than the window. On
+narrower screens the sidecar stacks after the document table. The
 workspace is capped at 1,400 pixels so the change sentence and its actions
 remain connected on very wide displays.
 
-Applying or dismissing a decision updates both views immediately. Document
-strips offer per-decision controls plus **Approve** and **Dismiss** in the strip
-header; documents with several decisions use **Approve all** and **Dismiss all**.
+Applying or dismissing a decision updates both views immediately, and the item
+fades out of both at once (instantly when reduced motion is requested). While
+both projections are open, pointing at or focusing a suggestion group tints its
+decisions in the document table, and pointing at a document tints its groups.
+The link icon in the **By suggestion** caption states the same relationship for
+screen readers and on hover. Each decision
+row has its own dismiss and approve controls; documents with several decisions
+also offer **Approve all** and **Dismiss all** beside the title.
 Suggestion cards can apply or dismiss the grouped decision for every listed
 document. Expand a grouped card's document list before a bulk action when you
 need to inspect every affected item. A partially failed bulk action removes

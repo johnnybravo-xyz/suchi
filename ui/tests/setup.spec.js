@@ -5322,7 +5322,7 @@ test('starts with the document table and reveals synchronized suggestion groups 
   await expect(page.getByRole('heading', { name: 'By suggestion' })).toHaveCount(0)
   await expect(page.locator('.document-review-card')).toHaveCount(1)
   await expect(page.locator('.suggestion-card')).toHaveCount(0)
-  await expect(page.locator('.suggestion-review-hint')).toHaveCount(0)
+  await expect(page.locator('.sync-mark')).toHaveCount(0)
   const showSuggestionGroups = page.getByRole('button', { name: 'Show suggestion groups · 2', exact: true })
   await expect(workspace.locator('.rule-workspace-header').getByRole('button', { name: 'Show suggestion groups · 2' })).toBeVisible()
   await expect(showSuggestionGroups).toHaveAttribute('aria-expanded', 'false')
@@ -5330,7 +5330,7 @@ test('starts with the document table and reveals synchronized suggestion groups 
   await expect(page.getByRole('heading', { name: 'By document' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'By suggestion' })).toBeVisible()
   await expect(page.locator('.suggestion-card')).toHaveCount(2)
-  await expect(page.getByText('The same 2 suggestions, grouped the other way. Settle a whole group at once; both sides update together.', { exact: true })).toBeVisible()
+  await expect(page.getByRole('img', { name: 'The same 2 suggestions, grouped the other way. Settle a whole group at once; both sides update together.', exact: true })).toBeVisible()
   const hideSuggestionGroups = page.getByRole('button', { name: 'Hide suggestion groups', exact: true })
   await expect(hideSuggestionGroups).toBeFocused()
   await expect(workspace.locator('.rule-workspace-header').getByRole('button', { name: 'Hide suggestion groups' })).toBeVisible()
@@ -5363,7 +5363,7 @@ test('uses the standard capped page card and requests the queue for bounded proj
   const workspaceHeader = workspace.locator('.rule-workspace-header')
   await expect(workspace).toBeVisible()
   await expect(workspaceHeader.getByRole('heading', { name: 'Approvals', exact: true })).toBeVisible()
-  await expect(workspaceHeader.getByText('Suggested changes to your documents, waiting for a yes.', { exact: true })).toBeVisible()
+  await expect(workspaceHeader.getByText('Suggested changes to your documents.', { exact: true })).toBeVisible()
   await expect(page.locator('.topbar .topbar-page-meta')).toHaveCount(0)
   await expect(page.locator('.review-summary')).toHaveCount(0)
   await expect(workspace.getByRole('group', { name: 'Suggestion filters' })).toBeVisible()
@@ -5379,7 +5379,7 @@ test('uses the standard capped page card and requests the queue for bounded proj
   expect(approvalsIndex).toBe(inboxIndex + 1)
 })
 
-test('shows at most 100 document and suggestion-group entries', async ({ page }) => {
+test('shows at most 100 document and suggestion-group entries', async ({ page }, testInfo) => {
   const approvalTasks = Array.from({ length: 102 }, (_, index) => ({
     id: 300 + index,
     run_id: 600 + index,
@@ -5408,7 +5408,19 @@ test('shows at most 100 document and suggestion-group entries', async ({ page })
   await expect(page.getByText('2 more documents below', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Show suggestion groups · 102', exact: true }).click()
   await expect(page.locator('.suggestion-card')).toHaveCount(100)
-  await expect(page.getByText('2 more suggestion groups below', { exact: true })).toBeVisible()
+  await expect(page.getByText('2 more suggestion groups below', { exact: true })).toBeAttached()
+  if (testInfo.project.name === 'desktop') {
+    // The groups stay in view beside a long document table.
+    const contentBox = await page.locator('.content').boundingBox()
+    for (const position of ['middle', 'end']) {
+      await page.locator('.content').evaluate((content, position) => {
+        content.scrollTop = position === 'end' ? content.scrollHeight : content.scrollHeight / 2
+      }, position)
+      const pane = await page.locator('.suggestion-review-sticky').boundingBox()
+      expect(pane.y).toBeGreaterThanOrEqual(contentBox.y - 1)
+      expect(pane.y + pane.height).toBeLessThanOrEqual(contentBox.y + contentBox.height + 1)
+    }
+  }
 })
 
 test('keeps filing reviews compact and explains sources on demand', async ({ page }) => {
@@ -5576,7 +5588,7 @@ test('keeps document and suggestion queues synchronized and responsive', async (
   await expect(panes).toBeVisible()
   await expect(documentPane.locator('.document-review-card')).toHaveCount(4)
   await expect(suggestionPane).toHaveCount(0)
-  await expect(page.locator('.suggestion-review-hint')).toHaveCount(0)
+  await expect(page.locator('.sync-mark')).toHaveCount(0)
   await expect(showSuggestionGroups).toHaveAttribute('aria-expanded', 'false')
   if (testInfo.project.name === 'desktop') {
     const workspaceBox = await page.locator('.approvals-workspace').boundingBox()
@@ -5590,7 +5602,7 @@ test('keeps document and suggestion queues synchronized and responsive', async (
   }
   await showSuggestionGroups.click()
   await expect(suggestionPane.locator('.suggestion-card')).toHaveCount(1)
-  await expect(page.getByText('The same 4 suggestions, grouped the other way. Settle a whole group at once; both sides update together.', { exact: true })).toBeVisible()
+  await expect(page.getByRole('img', { name: 'The same 4 suggestions, grouped the other way. Settle a whole group at once; both sides update together.', exact: true })).toBeVisible()
   const hideSuggestionGroups = page.getByRole('button', { name: 'Hide suggestion groups', exact: true })
   await expect(hideSuggestionGroups).toBeFocused()
   await expect(page.locator('.rule-workspace-header').getByRole('button', { name: 'Hide suggestion groups' })).toBeVisible()
@@ -5621,10 +5633,17 @@ test('keeps document and suggestion queues synchronized and responsive', async (
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   await hideSuggestionGroups.click()
   await expect(suggestionPane).toHaveCount(0)
-  await expect(page.locator('.suggestion-review-hint')).toHaveCount(0)
+  await expect(page.locator('.sync-mark')).toHaveCount(0)
   await expect(showSuggestionGroups).toBeFocused()
   await showSuggestionGroups.click()
   await expect(suggestionPane).toBeVisible()
+  await suggestionPane.locator('.suggestion-card').hover()
+  await expect(documentPane.locator('.decision-row.linked')).toHaveCount(4)
+  await documentPane.locator('.document-review-card').first().hover()
+  await expect(suggestionPane.locator('.suggestion-card.linked')).toHaveCount(1)
+  await expect(documentPane.locator('.decision-row.linked')).toHaveCount(0)
+  await page.mouse.move(0, 0)
+  await expect(suggestionPane.locator('.suggestion-card.linked')).toHaveCount(0)
   await page.screenshot({ path: `/tmp/suchi-synchronized-approvals-${testInfo.project.name}.png`, fullPage: true })
   await suggestionPane.getByRole('button', { name: '+ 1 more documents', exact: true }).click()
   await expect(suggestionPane.locator('.suggestion-documents a')).toHaveCount(4)

@@ -59,8 +59,14 @@ Notable user-visible changes to Suchi are recorded here.
 
 - Approvals now use the same centered workspace card as Automations, Calendar,
   and Views. The card header owns the description, refresh action, and stable
-  suggestion-group toggle; count tabs sit directly below it. Document reviews
-  use edge-to-edge strips and aligned old-to-new rows instead of nested cards.
+  suggestion-group toggle; count tabs sit directly below it. Each document is
+  one block with its suggestions under the title and no internal dividers, and
+  only documents with several suggestions repeat **Approve all** and **Dismiss
+  all**. Added tags read **+ _tag_** instead of crossing out "Not set".
+  With both projections open, hovering or focusing one side tints the matching
+  decisions on the other, decided items fade out of both together, and a link
+  icon replaces the explanatory paragraph. The **By suggestion** sidecar stays
+  in view while a long document table scrolls.
   Opening **By suggestion** adds a 400-pixel sidecar inside the card. Both
   projections show at most 100 entries, report the remainder, stay synchronized,
   and stack document-first on narrow screens.
