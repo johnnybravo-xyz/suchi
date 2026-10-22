@@ -108,6 +108,14 @@ Optional integrations must preserve useful local operation.
   abstraction only when the simpler path cannot meet a current requirement.
 - Delete unused code before adding abstractions. Keep ACL, recovery, retry,
   and wire-contract tests; prefer observable assertions over source-text checks.
+- Put every user-visible string in the message catalogs, never inline:
+  `ui/src/i18n/locales/<locale>.json` for the web app and
+  `core/i18n/strings/<locale>.yaml` for server-rendered pages. When wording is
+  added or changed, update the English entry and translate the same key in
+  every other locale catalog in that change; a catalog missing any English key
+  is rejected at load. Keep a key stable when only its wording changes, and
+  delete keys nothing references. Key naming, plurals, and placeholders follow
+  the Localization section of `docs/spa-architecture.mdx`.
 - Update the relevant public guide and changelog for user-visible changes.
 - For architecture changes, update the affected architecture guides in the
   same commit: responsibilities, entry points, data/request/job flow, storage,
