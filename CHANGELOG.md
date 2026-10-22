@@ -38,8 +38,7 @@ Notable user-visible changes to Suchi are recorded here.
 ### Changed
 
 - Text search counts its matches in the same query that ranks them instead of
-  repeating the full-text match, making searches over a 20,000-document
-  archive 15–55% faster.
+  repeating the full-text match.
 
 - A human-owned title now shows **Title pinned** with an **Unpin** button under
   the heading, replacing the lock icon and **Let Suchi rename this**. The lock

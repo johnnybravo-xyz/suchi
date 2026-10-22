@@ -150,3 +150,30 @@ func BenchmarkSearchLanguages(b *testing.B) {
 		})
 	}
 }
+
+// Run with: go test ./core/api -run '^$' -bench ListDocumentsQuery -benchtime 5x
+// Saved views and filtered lists page through ListDocuments; plain lists stay
+// in the set so a text-query change cannot slow the index-ordered path.
+func BenchmarkListDocumentsQuery(b *testing.B) {
+	s := openBenchServer(b, true)
+	benchCorpus(b, s.DB, benchDocs)
+	ctx := auth.WithPrincipal(context.Background(), adminPrincipal(1))
+	for _, tc := range []struct{ name, query string }{
+		{"plain", ""},
+		{"filters_only", "version:all"},
+		{"english_word", "insurance"},
+		{"english_rare", "warranty landlord"},
+		{"japanese_two_chars", "税金"},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			for range b.N {
+				recorder := httptest.NewRecorder()
+				request := httptest.NewRequest("GET", "/api/documents/?q="+url.QueryEscape(tc.query), nil).WithContext(ctx)
+				s.ListDocuments(recorder, request)
+				if recorder.Code != 200 {
+					b.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+				}
+			}
+		})
+	}
+}

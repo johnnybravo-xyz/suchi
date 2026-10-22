@@ -171,7 +171,10 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 		orderBy = listOrderingAllow["-created_at"]
 	}
 
-	// COUNT — envelope carries the total pre-limit.
+	// COUNT — envelope carries the total pre-limit. Keep it separate: the page
+	// query can stop after one ordered page, while COUNT(*) OVER () in it would
+	// build every matching row first. On the 10,000-document benchmark archive
+	// that made text-filtered lists 3-7x slower (hack/bench/read).
 	var total int
 	fromSQL := "documents d"
 	countSQL := "SELECT COUNT(*) FROM " + fromSQL + " WHERE " + whereSQL
