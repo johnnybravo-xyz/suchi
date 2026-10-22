@@ -6,7 +6,7 @@
   import { route, go, scrollMemory } from './lib/router.svelte.js'
   import { session, refreshSession, initTheme, setTheme, signOut } from './lib/session.svelte.js'
   import { refreshSystems, enterRoute } from './lib/system-routing.js'
-  import { listJDCategories, listDocuments, setupState, stats as fetchStats, getDemoMode, mintDemoSession, chatStatus } from './lib/api.js'
+  import { listJDCategories, listDocuments, setupState, stats as fetchStats, getDemoMode, mintDemoSession, chatStatus } from './lib/api-core.js'
   import { hasCapability } from './lib/capabilities.js'
   import Icon from './lib/Icon.svelte'
   import Omnibox from './lib/Omnibox.svelte'

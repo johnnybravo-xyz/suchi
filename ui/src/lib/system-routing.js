@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { getDocumentIntrinsic, listSystems } from './api.js'
+import { getDocumentIntrinsic, listSystems } from './api-core.js'
 import { systems, captureScope, scopeCurrent, unavailableSystem } from './systems.svelte.js'
 import { t } from './i18n.svelte.js'
 

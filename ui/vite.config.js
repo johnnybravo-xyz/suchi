@@ -23,11 +23,11 @@ export default defineConfig({
         codeSplitting: {
           groups: [{
             name: 'shell',
-            test: /[\\/]src[\\/](?:App\.svelte(?:\?|$)|lib[\\/](?:api|systems\.svelte)\.js$)/,
+            test: /[\\/]src[\\/](?:App\.svelte(?:\?|$)|lib[\\/](?:api-core|systems\.svelte)\.js$)/,
             includeDependenciesRecursively: true,
           }, {
             name: 'document-controls',
-            test: /[\\/]src[\\/]lib[\\/](?:(?:ConfirmDialog|ISODateInput|LinkQR|DocumentUnlockStatus|ShareLinkForm|TypeaheadPicker)\.svelte(?:\?|$)|(?:clipboard|queryAssist|upload_bus\.svelte|format|configuration)\.js$)/,
+            test: /[\\/]src[\\/]lib[\\/](?:(?:ConfirmDialog|ISODateInput|LinkQR|DocumentUnlockStatus|ShareLinkForm|TypeaheadPicker)\.svelte(?:\?|$)|(?:api|clipboard|queryAssist|upload_bus\.svelte|format|configuration)\.js$)/,
             // Shared controls stay lazy; their shell dependencies keep their existing owner.
             includeDependenciesRecursively: false,
           }],

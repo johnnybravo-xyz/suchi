@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { logout, whoami } from './api.js'
+import { logout, whoami } from './api-core.js'
 import { getLoginPath, usesExternalLogin } from './login.js'
 import { resetSystems } from './systems.svelte.js'
 import { setLocale } from './i18n.svelte.js'

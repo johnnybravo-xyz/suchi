@@ -11,7 +11,8 @@ Part of the [architecture guides](/architecture). Suchi's primary UI is a Svelte
 ui/src/
   App.svelte                  shell, navigation, route selection
   app.css                     global tokens and component styles
-  lib/api.js                  transport, errors, named API operations
+  lib/api-core.js             transport, errors, first-paint API operations
+  lib/api.js                  screen API operations; re-exports api-core.js
   lib/system-routing.js       filing-system catalog and route entry
   lib/router.svelte.js        sole hash router
   lib/session.svelte.js       principal, session, theme
@@ -81,11 +82,14 @@ source version line when no release version was injected.
 
 `App.svelte` loads every route, including login and dashboard, through the existing
 `Lazy.svelte` component. There are no route
-re-export wrappers. A native Rolldown group keeps the shell, API client, filing
-context and their static dependencies together. A separate group combines small
-document controls (including the shared type-to-select picker), link display,
-clipboard/query helpers, upload-list refresh state and the shared configuration
-link inventory; other shared dependencies use normal chunking.
+re-export wrappers. A native Rolldown group keeps the shell, the API transport
+and first-paint operations (`api-core.js`), filing context and their static
+dependencies together. Shell modules import from `api-core.js`; screens import
+from `api.js`, which re-exports it. A separate group combines small document
+controls (including the shared type-to-select picker), the screen API operations
+(`api.js`), link display, clipboard/query helpers, upload-list refresh state and
+the shared configuration link inventory; other shared dependencies use normal
+chunking.
 The shared password-unlock indicator belongs to this group and reads the
 existing encryption state exposed by document list and detail responses.
 The QR encoder remains a separate on-demand import. My account defers archive configuration and loads
@@ -153,7 +157,8 @@ the surface. Continuing upload or pairing-cleanup errors from a previous system
 cannot invalidate the current one. All new upload entry points, including window
 drops, require the route's system to be ready.
 
-Dependencies stay one-way: `system-routing.js` → `api.js` → `systems.svelte.js`.
+Dependencies stay one-way: `api.js` → `api-core.js` → `systems.svelte.js`, and
+`system-routing.js` → `api-core.js`.
 Catalog refresh/route entry live in the first module; synchronous scope helpers
 live in the last, which has no API dependency. Browser guards prevent stale
 display; the server enforces access.
@@ -170,8 +175,9 @@ Screen-level behavior lives in [document screens](/spa-document-screens) and
 
 ## API conventions
 
-Components call named `api.js` operations, which own fetch and error parsing;
-`net.js` handles local-endpoint validation. Add and test new server contracts
+Components call named `api.js` operations, which own fetch and error parsing
+through `api-core.js`. Add an operation to `api-core.js` only when a shell module
+needs it on first paint. `net.js` handles local-endpoint validation. Add and test new server contracts
 before using them in a screen. API field names may stay technical; visible labels
 follow [Web app](/web-app).
 

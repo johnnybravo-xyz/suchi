@@ -3,7 +3,7 @@
   import { t as translate } from "./i18n.svelte.js";
   // Combined command palette and query entry point.
   import { go } from './router.svelte.js'
-  import { resolveAddress } from './api.js'
+  import { resolveAddress } from './api-core.js'
   import { captureScope, scopeCurrent } from './systems.svelte.js'
   import Icon from './Icon.svelte'
 
