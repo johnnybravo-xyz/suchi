@@ -4,6 +4,7 @@
   import { scopedHash as filingHref } from '../lib/systems.svelte.js'
   import { onDestroy, untrack } from 'svelte'
   import { search, listLanguages, resolveAddress } from '../lib/api.js'
+  import { isCanonicalFilingAddress, resolvedFilingAddressHash } from '../lib/filing-address.js'
   import { route, go } from '../lib/router.svelte.js'
   import { fmtDate, plural } from '../lib/format.js'
   import Icon from '../lib/Icon.svelte'
@@ -67,10 +68,14 @@
     activeController = controller
     loading = true; searched = true
     try {
-      if (/^[A-Z][0-9]{2}\.[0-9]{2}\.[1-9][0-9]*$/.test(query)) {
-        const document = await resolveAddress(query)
-        if (version === runVersion) go(`#/doc/${query.split('.')[2]}?system=${document.system_code}`)
-        return
+      if (isCanonicalFilingAddress(query)) {
+        // A missing category is ordinary text, such as the price 10.15.
+        const result = await resolveAddress(query).catch(ex => { if (ex?.status === 404) return null; throw ex })
+        if (version !== runVersion) return
+        if (result) {
+          go(resolvedFilingAddressHash(result))
+          return
+        }
       }
       const params = { page: requestPage, page_size: 25 }
       if (requestLang) params.lang = requestLang

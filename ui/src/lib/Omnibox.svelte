@@ -4,6 +4,7 @@
   // Combined command palette and query entry point.
   import { go } from './router.svelte.js'
   import { resolveAddress } from './api-core.js'
+  import { isCanonicalFilingAddress, resolvedFilingAddressHash } from './filing-address.js'
   import { captureScope, scopeCurrent } from './systems.svelte.js'
   import Icon from './Icon.svelte'
 
@@ -40,17 +41,21 @@
       else if (it.href) go(it.href)
     } else if (q.trim()) {
       const value = q.trim()
-      if (/^[A-Z][0-9]{2}\.[0-9]{2}\.[1-9][0-9]*$/.test(value)) {
+      if (isCanonicalFilingAddress(value)) {
         const version = ++queryVersion
         const scope = captureScope()
+        let result = null
         try {
-          const document = await resolveAddress(value)
-          if (!scopeCurrent(scope) || version !== queryVersion) return
-          go(`#/doc/${value.split('.')[2]}?system=${document.system_code}`)
+          result = await resolveAddress(value)
         } catch (ex) {
-          if (scopeCurrent(scope) && version === queryVersion) error = ex.message || translate("omnibox.addressUnavailable")
-          return
+          // A missing category is ordinary text, such as the price 10.15.
+          if (ex?.status !== 404) {
+            if (scopeCurrent(scope) && version === queryVersion) error = ex.message || translate("omnibox.addressUnavailable")
+            return
+          }
         }
+        if (!scopeCurrent(scope) || version !== queryVersion) return
+        go(result ? resolvedFilingAddressHash(result) : `#/search?q=${encodeURIComponent(value)}`)
       } else go(`#/search?q=${encodeURIComponent(value)}`)
     }
     close()

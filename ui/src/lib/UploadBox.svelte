@@ -135,7 +135,6 @@
       const result = await uploadDocument(entry.file, entry.system, entry.key)
       if (session.user !== user) return
       markUploaded(scope)
-      entry.address = result?.jd_address || ''
       entry.id = result?.id
       entry.receipt = result?.restored ? 'restored' : result?.deduplicated ? 'duplicate' : 'uploaded'
       entry.file = null
