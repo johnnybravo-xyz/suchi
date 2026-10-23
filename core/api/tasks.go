@@ -28,6 +28,7 @@ type Task struct {
 	State     string `json:"state"`
 	Attempts  int    `json:"attempts"`
 	DocID     int64  `json:"doc_id,omitempty"`
+	DocTitle  string `json:"doc_title,omitempty"`
 	LastError string `json:"last_error,omitempty"`
 	CreatedAt int64  `json:"created_at"`
 	UpdatedAt int64  `json:"updated_at"`
@@ -358,7 +359,7 @@ func (s *Server) taskRows(r *http.Request, filters taskFilters, visibility strin
 	args = append(args, filters.Limit)
 
 	q := `
-		SELECT j.id, j.kind, j.state, j.attempts, COALESCE(j.doc_id, 0),
+		SELECT j.id, j.kind, j.state, j.attempts, COALESCE(j.doc_id, 0), COALESCE(d.title, ''),
 		       COALESCE(j.last_error, ''), j.created_at, j.updated_at, j.next_run_at
 		` + from + `
 		` + where + `
@@ -376,7 +377,7 @@ func (s *Server) taskRows(r *http.Request, filters taskFilters, visibility strin
 		var t Task
 		var lastErr sql.NullString
 		if err := rows.Scan(&t.ID, &t.Kind, &t.State, &t.Attempts,
-			&t.DocID, &lastErr, &t.CreatedAt, &t.UpdatedAt, &t.NextRunAt); err != nil {
+			&t.DocID, &t.DocTitle, &lastErr, &t.CreatedAt, &t.UpdatedAt, &t.NextRunAt); err != nil {
 			return nil, err
 		}
 		if lastErr.Valid {

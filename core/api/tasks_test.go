@@ -61,7 +61,7 @@ func TestListTasksScopesJobsToVisibleDocuments(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &member); err != nil {
 		t.Fatal(err)
 	}
-	if len(member.Results) != 1 || member.Results[0].DocID != 101 {
+	if len(member.Results) != 1 || member.Results[0].DocID != 101 || member.Results[0].DocTitle != "Mine" {
 		t.Fatalf("member jobs = %+v", member.Results)
 	}
 	if member.Counts["pending"] != 1 || member.Counts["dead"] != 0 {
