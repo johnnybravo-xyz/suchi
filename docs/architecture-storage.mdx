@@ -175,11 +175,13 @@ whole-directory snapshot; a database-only copy is incomplete.
 
 The active catalog in `core/db/migrations/` starts from an immutable baseline
 for stable schema 1 (v0.1.0) and adds each release's migrations in order; the
-current checkout reaches schema version 4. The v0.2.0 migrations convert
+current checkout reaches schema version 5. The v0.2.0 migrations convert
 document types to namespaced tags, add version-family currentness, and add
-classifier-backed automation questions. The current unreleased migration adds
-title ownership, conservatively marks existing curated and imported titles as
-human-owned, and extends title revision tracking to owner changes. The one-row
+classifier-backed automation questions. The v0.3.0 migration adds title
+ownership, conservatively marks existing curated and imported titles as
+human-owned, and extends title revision tracking to owner changes. The v0.4.0
+migration adds two-factor sign-in, source file names and client labels, and
+stops rewriting the search indexes when a write leaves text unchanged. The one-row
 `schema_lineage = 'stable-v1'` identity is unchanged. Frozen pre-v0.1.0 SQL and
 the final account-identity rebuild live separately as compatibility migrations;
 the active catalog cannot discover them by path. Migration file names and

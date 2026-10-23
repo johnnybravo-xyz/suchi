@@ -26,7 +26,7 @@ import (
 
 var loadedConfigFile string
 
-const developmentVersion = "v0.3.0-dev"
+const developmentVersion = "v0.4.0-dev"
 
 // Release builds inject these with -X; Docker builds have no .git metadata.
 var version string

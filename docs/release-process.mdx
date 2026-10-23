@@ -58,8 +58,8 @@ v0.1.0 embeds frozen compatibility SQL in
 `0001_baseline.sql`, `user_version = 1`, lineage `stable-v1`. v0.2.0 adds active
 `0002_metadata_cleanup.sql` and `0003_automation_asks.sql` and targets
 `user_version = 3`. v0.3.0 adds `0004_product_foundations.sql` and targets
-`user_version = 4`. The current unreleased catalog adds `0005_product_refinements.sql`
-and targets `user_version = 5` without changing that lineage.
+`user_version = 4`. v0.4.0 adds `0005_product_refinements.sql` and targets
+`user_version = 5` without changing that lineage.
 
 The exact stable schema-1 fingerprint is
 `9d2a6320eae1582b0f294caa6ed518b5a73ab3dbe6597c9ca1a36cc563e03240`.
@@ -243,7 +243,7 @@ do not duplicate them here.
    the exact commit and tag to GitHub:
 
    ```sh
-   export VERSION=v0.3.0
+   export VERSION=v0.4.0
    git tag -s "$VERSION" -m "suchi ${VERSION#v}"
    ./hack/verify-release-tag.sh "$VERSION"
    git push gh main
@@ -303,7 +303,7 @@ the release artifacts to verify and deploy.
 Set the release coordinates on every build machine:
 
 ```sh
-export VERSION=v0.3.0
+export VERSION=v0.4.0
 export IMAGE=ghcr.io/johnnybravo-xyz/suchi
 export CACHE_AMD64="$IMAGE:buildcache-amd64"
 export CACHE_ARM64="$IMAGE:buildcache-arm64"

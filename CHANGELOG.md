@@ -4,62 +4,62 @@ Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-23
+
 ### Added
 
-- Press **?** for a keyboard shortcut overview. Search offers example rich
-  queries before the first search, and the empty archive's getting-started card
-  links to watched folders, mailboxes and phone pairing. Processing issues name
-  their documents, offer **Retry all**, and open directly from the Dashboard's
-  **Failed jobs** card; job rows in `/api/tasks/` now carry `doc_title`.
-- The ⌘K / Ctrl K menu now finds documents and saved views as you type, lists
-  recently opened documents, and adds **New view**, **Pair a phone** and **Add a
-  mailbox** commands.
-- The Dashboard's **Coming up** card lists accepted due, expiry and renewal
-  dates in the next 30 days, and Document Detail shows a document's accepted
-  dates with **Add to calendar**. Exported `.ics` events now remind a day before
-  a due date and a week before an expiry or renewal.
-- Inbox rows offer a pending filing suggestion as a one-click button beside
-  **File under…**, applying the same decision as Approvals. Filing suggestions
-  in `/api/tasks/` now carry `proposed_id`.
-- Filing, refiling and moving documents to Trash can be undone from a notice in
-  the top bar, or with **⌘ Z** / **Ctrl Z**. Notices replace the dark toast at the
-  bottom of the screen and no longer cover the page. Refiling on Document Detail
-  also updates the filing chip straight away.
-
-- Native archive serial numbers can now be assigned from retained QR labels,
-  split feeder scans into atomically created documents, edited from Document
-  Detail, searched with `asn:`, and preserved across replacement versions,
-  filesystem sidecars, and manifest-v3 takeouts. Administrators can change ASN
-  mode, QR prefix, and scan-analysis DPI live under **Advanced > Scan
-  processing**; deployment-managed values are marked read-only.
-- The Upload screen explains a rejected ASN scan on the file's row, such as a
-  number already used by another document or repeated within the batch, with
-  the page and number involved. A conflict names the document that holds the
-  number when the uploader can open it.
-- Demo corpus manifests can give a fixture an `archive_serial_number`, so the
-  public demo can show retained originals found with `asn:`.
-- The MCP adapter can now list custom fields and set or clear a document's
-  custom-field values, so an agent can record an odometer reading or link a
-  service invoice to its purchase invoice. Writes use the existing API checks
-  for type, permission, Trash, self-links and version history.
-- A **Processing N of M** marker in the top bar shows that documents you can see
-  are still being read or classified, and how far the current run has got. It
-  updates every 5 seconds while work remains, and selecting it lists those
-  documents with the new `is:processing` query term; that list refreshes as
-  each one finishes. `/api/stats/` now returns
-  `processing_reading` and `processing_classifying`, and document details report
-  `processing`. An open document that is still processing says so and refreshes
-  when it finishes. Upload re-checks its rows only when that status reports
-  finished work, replacing its own 2.5-second polling and the "checks paused"
-  state.
-- Local-password accounts can enable authenticator-based two-factor
-  authentication, use one-time recovery codes, regenerate or disable the factor,
-  and complete browser or API-token credential exchange with the same second
-  factor. Administrators can reset another user's factor after reauthentication;
-  host operators have a stopped-server `suchi auth reset-two-factor` recovery
-  command. Wrong codes back off from 30 seconds to an hour and lock after 100
-  in a row; changing the sign-in email also asks for the code; six-digit codes
-  sign in on their own; and Security warns when recovery codes run low.
+- Two-factor sign-in for local-password accounts: authenticator codes with
+  one-time recovery codes, which can be regenerated or turned off. Browser
+  sign-in, API-token exchange and sign-in email changes ask for the second
+  factor. Wrong codes back off from 30 seconds to an hour and lock after 100 in
+  a row, six-digit codes submit on their own, and Security warns when recovery
+  codes run low. Administrators can reset another user's factor after
+  reauthenticating; host operators can run `suchi auth reset-two-factor` with
+  the server stopped.
+- Native archive serial numbers. Suchi can assign them from QR labels, split a
+  feeder scan into one document per label, and keep the number across
+  replacement versions, filesystem sidecars and manifest-v3 takeouts. Edit it on
+  Document Detail and search it with `asn:`. Administrators set ASN mode, QR
+  prefix and scan-analysis DPI live under **Advanced > Scan processing**;
+  deployment-managed values are read-only. A rejected scan is explained on its
+  Upload row with the page and number, naming the document that already holds
+  the number when the uploader can open it. Demo corpus manifests can set
+  `archive_serial_number`.
+- Document dates you can act on. The Dashboard's **Coming up** card lists
+  accepted due, expiry and renewal dates for the next 30 days. Document Detail
+  lists a document's accepted dates with how far away they are and **Add to
+  calendar**. Exported `.ics` events remind a day before a due date and a week
+  before an expiry or renewal.
+- Faster everyday work:
+  - Inbox rows offer a pending filing suggestion as a one-click button beside
+    **File under…**, applying the same decision as Approvals.
+  - Filing, refiling and moving to Trash can be undone from a notice in the top
+    bar, or with **⌘ Z** / **Ctrl Z**. Notices replace the dark toast at the
+    bottom of the screen and no longer cover the page.
+  - The **⌘ K** / **Ctrl K** menu finds documents and saved views as you type,
+    lists recently opened documents, and adds **New view**, **Pair a phone**,
+    **Add a mailbox** and **Keyboard shortcuts** commands. **?** shows the
+    shortcuts anywhere outside a text field.
+  - Search offers two example rich queries before the first search, and the
+    empty archive's getting-started card links to watched folders, mailboxes
+    and phone pairing.
+- Processing you can follow. A **Processing N of M** marker in the top bar shows
+  how far the current run has got; selecting it lists those documents with the
+  new `is:processing` query term, and the list refreshes as each one finishes.
+  An open document that is still processing says so and refreshes when it
+  finishes. Upload re-checks its rows only when that status reports finished
+  work, replacing its own 2.5-second polling and "checks paused" state.
+  Processing issues name their documents, offer **Retry all**, and open
+  directly from the Dashboard's **Failed jobs** card.
+- The MCP adapter can list custom fields and set or clear a document's values,
+  so an agent can record an odometer reading or link a service invoice to its
+  purchase invoice. Writes use the existing checks for type, permission, Trash,
+  self-links and version history.
+- API additions: `/api/stats/` returns `processing_reading` and
+  `processing_classifying`; document details report `processing`; job rows in
+  `/api/tasks/` carry `doc_title`; filing, correspondent and tag suggestions
+  carry `proposed_id`; search hits carry `jd_category_code`; and
+  `sources[].client` reports `companion_app` for Suchi Companion uploads.
 
 ### Changed
 
@@ -67,137 +67,102 @@ Notable user-visible changes to Suchi are recorded here.
   components. Introduced filing systems use `SYS.AC` (for example `S01.21`)
   instead of `SYS.AC.documentID`; the original single archive has no address
   and shows the category code (`21`). The resolver rejects former
-  three-component values and returns `jd_category_id`; Search and Omnibox open
-  the filtered Documents view, or search the text when no such category exists.
-  `jd_address` and native-export values can repeat across documents, while numeric
-  IDs/URLs remain exact identity and default filenames keep an independent
-  `__<documentID>` suffix. API version 1, Companion v1, takeout manifest 3,
-  sidecar format 1, and private `suchi-taxonomy/v1` remain unchanged. This clean
-  cutover provides no parser alias, schema/cached-receipt/template rewrite,
-  rendered-output sweep, fallback, or maintenance command for prior multi-system
-  projections. In the web app, Dashboard, Documents, and Search rows show the
-  address (or category code) and ASN as aligned blue chips that deepen on row
-  hover or keyboard focus; document cards pair it with the category name,
-  and a single-category Documents view or the Inbox omits it. Document Detail
-  shows it as a blue chip beside the title in place of the read-only toolbar
-  field and its copy button.
-
-- New email attachment documents use the enclosing message's `Date` as their
-  created date while retaining the ingestion time as their added date, so their
-  generated filing paths sort by the message date. A missing or invalid `Date`
-  falls back to the ingestion time.
-
-- Text search counts its matches in the same query that ranks them instead of
-  repeating the full-text match.
-
-- A human-owned title now shows **Title pinned** with an **Unpin** button under
-  the heading, replacing the lock icon and **Let Suchi rename this**. The lock
-  stays reserved for password status.
-
-- Uploads from Suchi Companion now show **Suchi Companion · name** under
-  **Added from**, recognised by the pairing token rather than anything the app
-  sends. Manually created tokens remain labeled as API uploads, and
-  `sources[].client` reports `companion_app` to API clients.
-
-- Document Detail and Trash name file formats in plain words, such as PDF,
-  Word, or Email, instead of MIME types. The exact type remains on hover.
-
-- Document Detail groups the original file's facts in one **Original** row: the
-  name it was added under, its type and size, and its own file date. Other
-  names the same file arrived under are folded beneath it. Email attachments
-  now keep their attachment file name, and filename filters on consumption
-  automations match it. **Added from** now
-  shows one line per source, folding older mailbox folders under the current
-  one.
-
-- Approvals now use the same centered workspace card as Automations, Calendar,
-  and Views. The card header owns the description, refresh action, and stable
-  suggestion-group toggle. Tabs below it show one kind of work at a time:
-  **All**, **Tags**, **Filing** and **Fields**, then **Dates**, **Decisions**
-  when present and, for administrators, a right-aligned **Processing issues**
-  tab, instead of sections stacked below the suggestions. Each document is one
-  block with its suggestions under the title and no internal dividers; only
-  documents with several suggestions repeat **Approve all** and **Dismiss all**,
-  and single-document suggestion groups read **Approve** and **Dismiss** without
-  a count. Added tags read **+ _tag_** instead of crossing out "Not set".
-  Opening **By suggestion** adds a 400-pixel sidecar inside the card that lists
-  its groups in document order and shortens long document names so their numbers
-  stay visible. On wide screens the card fits the window, keeping its header,
-  tabs and pane captions in place while each projection scrolls on its own; on
-  narrow screens the projections stack document-first. Both show at most 100
-  entries and report the remainder. Hovering or focusing one side tints the
-  matching document cards or groups on the other and, once the pointer rests,
-  scrolls the first one level with it when none is visible. Decided items fade
-  out of both together, and a link icon replaces the explanatory paragraph.
-
-- Trash now uses the shared workspace card. Its header holds the retention
-  explanation and counted **Empty trash** action; like Documents rows, each row
-  highlights and opens its document anywhere outside its controls, leads with the
-  prior filing address chip, and ends its compact metadata line with the prior
-  category name. A day countdown to deletion turns into an amber pill in the
-  final week, beside a safer-looking **Restore** action and a plain
-  permanent-delete action. The zero-count action disables, and the empty state
-  now shows only **Trash is empty.**
-
-- Saved decryption passwords now separate their editable label, last-used date,
-  and most recently unlocked document into labeled columns. Labels remain plain
-  text until the pencil action opens inline editing.
-
-- Searches for common words return about a quarter faster: the substring index
-  no longer scores documents the word index already found. Results, order and
-  scores are unchanged.
-
-- One- and two-character Chinese, Japanese, Korean and Thai terms now check only
-  the documents left by the selected system, filters and permissions instead of
-  reading the whole archive first. Such a search in a small system or a filtered
-  Documents list is many times faster.
-
-- Writing back a document's unchanged title and text, as reprocessing often
-  does, no longer rewrites both search indexes. Revision counters still advance.
+  three-component values and returns `jd_category_id`; Search and the ⌘ K menu
+  open the filtered Documents view, or search the text when no such category
+  exists. `jd_address` and native-export values can repeat across documents,
+  while numeric IDs and URLs remain exact identity and default filenames keep an
+  independent `__<documentID>` suffix. API version 1, Companion v1, takeout
+  manifest 3, sidecar format 1 and private `suchi-taxonomy/v1` are unchanged.
+  This clean cutover provides no parser alias, schema, cached-receipt or
+  template rewrite, rendered-output sweep, fallback or maintenance command for
+  prior multi-system projections.
+- Filing chips: Dashboard, Documents, Search and Trash rows show the address (or
+  category code) and ASN as aligned blue chips that deepen on row hover or
+  keyboard focus. Document cards pair it with the category name, a
+  single-category Documents view or the Inbox leaves it out, and Document Detail
+  shows it beside the title instead of a read-only toolbar field with a copy
+  button.
+- Approvals use the shared workspace card, with tabs for **All**, **Tags**,
+  **Filing**, **Fields**, **Dates**, **Decisions** and, for administrators, a
+  right-aligned **Processing issues**. The open tab is kept in the address. Each
+  document is one block with its suggestions under the title; added tags read
+  **+ _tag_**, and **Approve all** / **Dismiss all** appear only when a document
+  has several suggestions. **By suggestion** opens a synchronized sidecar:
+  hovering or focusing one side highlights the matching items on the other,
+  decided items fade out of both, and each side shows at most 100 entries and
+  reports the rest.
+- Trash uses the shared workspace card, with the retention note and a counted
+  **Empty trash** in its header. Like Documents rows, each row opens its
+  document anywhere outside its controls, leads with the prior filing chip and
+  ends its metadata with the prior category name. A day countdown turns into an
+  amber pill in the final week; **Restore** comes first and permanent deletion
+  is a plain action. An empty Trash shows only **Trash is empty.**
+- Document Detail:
+  - a human-owned title shows **Title pinned** with **Unpin**, replacing the
+    lock icon, which now means only password status;
+  - one **Original** row groups the file's name, plain format name (PDF, Word,
+    Email; the exact type on hover), size and file date, with other names it
+    arrived under folded beneath;
+  - **Added from** shows one line per source, folding older mailbox folders, and
+    labels Suchi Companion uploads **Suchi Companion · name**, recognised by
+    the pairing token. Manually created tokens still read as API uploads.
+- Email attachments keep their own file name, which consumption-automation
+  filename filters match, and use the message's `Date` as their created date so
+  filing paths sort by message date. The ingestion time stays the added date
+  and is the fallback when `Date` is missing or invalid.
+- Saved decryption passwords show their label, last-used date and most recently
+  unlocked document in labeled columns; labels open for editing from the pencil
+  action.
+- Search is faster:
+  - common-word searches return about a quarter faster with unchanged results,
+    order and scores;
+  - one- and two-character Chinese, Japanese, Korean and Thai terms check only
+    the documents left by the selected system, filters and permissions;
+  - text search counts its matches in the query that ranks them;
+  - writing back an unchanged title and text no longer rewrites both search
+    indexes, while revision counters still advance.
 
 ### Fixed
 
-- Versioned filesystem sidecars now validate and restore document sensitivity,
-  including sensitivity emitted by native exports. Invalid sensitivity or later
-  metadata failures leave no partial intake; unversioned compatibility
-  sidecars continue to ignore fields outside their original flat shape.
+- Versioned filesystem sidecars validate and restore document sensitivity,
+  including sensitivity from native exports. Invalid sensitivity or a later
+  metadata failure leaves no partial intake; unversioned sidecars still ignore
+  fields outside their original flat shape.
+- Files that previously got no text now do:
+  - phone HEIC/HEIF photos are wrapped in JPEG-compressed PDF pages before OCR,
+    so a 24-megapixel iPhone photo no longer exceeds the 32 MiB conversion cap;
+  - PDFs whose header follows a short prefix within the first 1024 bytes, such
+    as income-tax e-filing downloads and invoices beginning with a newline, are
+    processed as PDFs;
+  - select affected photos and PDFs stored earlier and choose **Rescan** to
+    extract their text.
 - Watched-folder files with a known document extension keep that format even
-  when their first lines look like email headers. Bank exports saved as `.xls`
-  that begin with `Date : ...` were stored as `message/rfc822` and indexed
-  nothing; extensionless Maildir handoff names are still detected as email.
-- Phone HEIC/HEIF photos are wrapped in JPEG-compressed PDF pages before OCR.
-  A 24-megapixel iPhone photo previously expanded past the 32 MiB conversion
-  cap and its processing job died, leaving the document without text.
-- PDFs whose header follows a short prefix within the first 1024 bytes are now
-  processed as PDFs. Income-tax e-filing downloads wrapped in a serialization
-  prefix, and invoices beginning with a newline, were stored as binary files
-  without text; select them and choose **Rescan** to extract their text.
-- Starting a second Suchi process against the same archive now fails immediately
-  with `archive_in_use` instead of running independent writers and workers
-  against one SQLite database.
-- A document-link write with a fractional, negative or zero document ID is
-  rejected. A fractional ID was previously rounded down to a different
-  document, and a zero ID removed the existing link.
-- Deleting a folder layout that an automation still assigns is refused instead
-  of leaving rules that fail on every new matching document. The UI keeps the
-  layout visible and names the rules that must change.
-- `suchi gc` now removes empty folders left in `rendered/` after documents move
-  to a new path. The dry run reports them; `--apply` removes only folders with
-  nothing inside.
-- Rendered files are named with the linked file's own extension: `.pdf` for the
-  searchable copy, otherwise the original's type. A plain-text upload no longer
-  appears as `name__1.pdf`; preview, create, and update reject folder-layout
-  templates that include an extension.
-- MIME aliases, filename refinement, ingestion routing, and rendered/downloaded
-  extensions now derive from one format registry. Recognized BMP, DjVu, Outlook,
-  EPUB, and macro-enabled Office variants keep the right extension, and DjVu
-  reaches `djvutxt` instead of being consumed by the generic image fallback.
-- `suchi export` sidecars now carry custom-field values, so a reingested
-  takeout keeps typed values such as hand-entered amounts and dates.
-  Document-link values and extraction-managed `invoice_*` fields are left out;
-  the latter are read again from the original.
-- Query examples now filter by imported document type with
-  `tag:"type:invoice"`; bare `type:` is not a query filter.
+  when their first lines look like email headers. Bank `.xls` exports beginning
+  `Date : ...` were stored as email and indexed nothing; extensionless Maildir
+  handoff names are still detected as email.
+- One format registry now drives MIME aliases, filename refinement, ingestion
+  routing and rendered or downloaded extensions. BMP, DjVu, Outlook, EPUB and
+  macro-enabled Office files keep the right extension, and DjVu reaches
+  `djvutxt`. Rendered files use the linked file's own extension (`.pdf` for the
+  searchable copy, otherwise the original's), so a plain-text upload no longer
+  appears as `name__1.pdf`; folder-layout templates that include an extension
+  are rejected.
+- A second Suchi process against the same archive fails immediately with
+  `archive_in_use` instead of running independent writers against one SQLite
+  database.
+- Document-link writes with a fractional, negative or zero document ID are
+  rejected. A fractional ID previously rounded down to a different document, and
+  zero removed the link.
+- Deleting a folder layout that an automation still assigns is refused, naming
+  the rules to change, instead of leaving rules that fail on every new match.
+- `suchi gc` removes empty folders left in `rendered/` after documents move. The
+  dry run reports them; `--apply` removes only empty folders.
+- `suchi export` sidecars carry custom-field values, so a reingested takeout
+  keeps typed values such as amounts and dates. Document-link values and
+  extraction-managed `invoice_*` fields are left out; the latter are read again
+  from the original.
+- Query examples filter by imported document type with `tag:"type:invoice"`;
+  bare `type:` is not a query filter.
 
 ### Security
 
@@ -872,7 +837,8 @@ version. Installations keep using the v0.2.0 artifacts.
   and saved document passwords are sealed at rest.
 - Setup, demo isolation, error responses, and capability removal fail closed.
 
-[Unreleased]: https://github.com/johnnybravo-xyz/suchi/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/johnnybravo-xyz/suchi/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/johnnybravo-xyz/suchi/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/johnnybravo-xyz/suchi/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/johnnybravo-xyz/suchi/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/johnnybravo-xyz/suchi/compare/v0.1.0...v0.2.0
