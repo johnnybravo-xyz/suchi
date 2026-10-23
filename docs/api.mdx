@@ -2185,7 +2185,9 @@ Document suggestions from archive matching, the optional LLM classifier, and
 classifier answers mapped through an automation also appear in
 `approval_tasks`. Their `approval_name` is `document-change`; the `vars`
 projection includes bounded proposed/current values, confidence, reason, policy
-version, source freshness and authorized supporting documents. Ask-derived
+version, source freshness and authorized supporting documents. Category,
+correspondent and tag proposals also carry `proposed_id`, the proposed row's ID
+in the current filing system, while it still exists. Ask-derived
 proposals additionally expose the automation ID/name and typed custom-field
 label when applicable. The configured question remains part of the ordinary
 automation definition but is not copied into approval tasks; raw answers and

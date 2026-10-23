@@ -783,6 +783,9 @@ func DocumentChangeProjection(ctx context.Context, q systems.Queryer, docID int6
 			if err := q.QueryRowContext(ctx, "SELECT name FROM "+table+" WHERE id=? AND system_id=?", c.ValueID, current.SystemID).Scan(&proposed); err != nil {
 				out["review_conflict"] = true
 				proposed = "Unavailable"
+			} else {
+				// Clients such as the Inbox match the suggestion by ID, not by name.
+				out["proposed_id"] = c.ValueID
 			}
 		}
 	}

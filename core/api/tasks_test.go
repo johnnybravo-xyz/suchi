@@ -547,6 +547,15 @@ func TestDocumentChangeReviewProjectionUsesOwnerSourceAccess(t *testing.T) {
 	if projected["review_conflict"] != false {
 		t.Fatalf("scoped token remained conflicted: %+v", projected)
 	}
+
+	filing := map[string]any{"field": "jd_category", "value_id": float64(49), "confidence": 0.9, "source": "archive"}
+	projected, err = s.documentChangeReviewVars(ctx, 101, filing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projected["proposed_value"] != "Inbox" || projected["proposed_id"] != int64(49) {
+		t.Fatalf("filing suggestion identity = %v/%v, want Inbox/49", projected["proposed_value"], projected["proposed_id"])
+	}
 }
 
 func TestApprovalTasksForUser_ExcludesResolved(t *testing.T) {
