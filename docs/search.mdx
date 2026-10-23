@@ -348,8 +348,11 @@ bypasses object authorization.
 - The trigram index is about 1.6 times the size of the extracted text it covers,
   against about 0.3 times for the word index, and indexing a document costs
   roughly three times as much. `go test ./core/api -run '^$' -bench
-  'IndexCorpus|SearchLanguages' -benchtime 1x` measures both on a fixed
-  20,000-document English, German and Japanese corpus.
+  'IndexCorpus|SearchLanguages|ListDocumentsQuery|RewriteText' -benchtime 5x`
+  measures indexing, Search, Documents and text write-back on a fixed
+  20,000-document English, German and Japanese corpus. Queries run as an
+  administrator in the 19,800-document system and the 200-document system
+  beside it, and as a member whose access comes from ownership and a group.
 - Queries are limited to 1 KiB, 64 tokens, and 256 bytes per value.
 - Search pages cap at 100; similar results at 50; Ask your documents at 6
   documents.
