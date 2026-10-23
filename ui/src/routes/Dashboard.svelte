@@ -7,6 +7,8 @@
   import { documentListHash, parseSavedViewFilters } from '../lib/documentFilters.js'
   import { fmtDate, formatDaysAway, sensDot } from '../lib/format.js'
   import { addDays, daysUntil, formatIntelligenceDate, intelligenceRoleLabel, localISODate, upcomingDates } from '../lib/intelligence.js'
+  import { session } from '../lib/session.svelte.js'
+  import { hasCapability } from '../lib/capabilities.js'
   import Icon from '../lib/Icon.svelte'
 
   let {
@@ -32,6 +34,15 @@
   let comingUp = $state([])
   const comingUpController = new AbortController()
 
+  // Intake routes besides upload, offered while the archive is empty. Watched
+  // folders and archive mailboxes are administrator settings.
+  const otherWaysIn = $derived([
+    ...(session.user?.role === 'admin' ? [{ label: translate("dashboard.watchAFolder"), href: '#/settings?tab=archive&section=sources' }] : []),
+    ...(session.user?.role === 'admin' ? [{ label: translate("dashboard.connectAMailbox"), href: '#/settings?tab=archive&section=mail' }]
+      : hasCapability(session.user, 'mailboxes') ? [{ label: translate("dashboard.connectAMailbox"), href: '#/settings' }] : []),
+    ...(String(session.user?.kind || '').startsWith('demo') ? [] : [{ label: translate("dashboard.pairAPhone"), href: '#/settings?pair=1' }]),
+  ])
+
   const onboarding = $derived.by(() => {
     if (setupNeeded) {
       return {
@@ -54,6 +65,7 @@
         body: translate("dashboard.startWithOneRepresentativeDocumentSuchiKeepsThe"),
         action: translate("dashboard.uploadADocument"),
         href: '#/upload',
+        alternatives: otherWaysIn,
       }
     }
     if (total === 1 && (inboxCount > 0 || pending > 0 || dead > 0)) {
@@ -177,6 +189,12 @@
             <button class="btn" type="button" onclick={() => onRetrySetup?.()}>{translate("dashboard.retrySetupStatus")}</button>
           {/if}
         </div>
+        {#if onboarding.alternatives?.length}
+          <p class="onboarding-alternatives">
+            {translate("dashboard.otherWaysIn")}
+            {#each onboarding.alternatives as way, i (way.href)}{#if i}{' · '}{/if}<a href={filingHref(way.href)}>{way.label}</a>{/each}
+          </p>
+        {/if}
       </div>
     </section>
   {/if}
@@ -199,7 +217,7 @@
     <span class="m-value">{st ? pending : '—'}</span>
     <span class="m-sub">{st ? (pending > 0 ? translate("dashboard.waitingOnYou") : translate("dashboard.nonePending")) : (statsError || translate("dashboard.loadingArchiveStatus"))}</span>
   </a>
-  <a class="metric card" href={filingHref("#/tasks")} class:bad={dead > 0}>
+  <a class="metric card" href={filingHref(dead > 0 ? "#/tasks?tab=issues" : "#/tasks")} class:bad={dead > 0}>
     <span class="m-label"><Icon name="zap" size={14} /> {translate("dashboard.failedJobs")}</span>
     <span class="m-value">{st ? dead : '—'}</span>
     <span class="m-sub">{st ? (dead > 0 ? translate("dashboard.deadLetteredNeedsAttention") : translate("dashboard.pipelineHealthy")) : (statsError || translate("dashboard.loadingArchiveStatus"))}</span>

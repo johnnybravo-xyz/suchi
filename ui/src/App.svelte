@@ -31,9 +31,11 @@
     settings:    () => import('./routes/Settings.svelte'),
     account:     () => import('./routes/AccountSettings.svelte'),
     demo:        () => import('./routes/Demo.svelte'),
+    shortcutHelp: () => import('./lib/ShortcutHelp.svelte'),
   }
 
   let mobileNavOpen = $state(false)
+  let shortcutsOpen = $state(false)
   let sidebarCollapsed = $state(false)
   let uploadFiles = $state([])
   let dragDepth = $state(0)   // window-level drop target (except on #/upload)
@@ -352,6 +354,10 @@
       e.preventDefault()
       void undoNotice()
     }
+    if (e.key === '?' && !e.metaKey && !e.ctrlKey && !isTyping(e.target) && session.user && !document.querySelector('dialog[open]')) {
+      e.preventDefault()
+      shortcutsOpen = true
+    }
   }
 
   function currentChatScope() {
@@ -530,6 +536,7 @@
       ico: session.theme === 'dark' ? 'sun' : 'moon',
       run: () => setTheme(session.theme === 'dark' ? 'light' : 'dark') },
     { label: translate("app.newView"), ico: 'plus', href: filingHref('#/views?new=1') },
+    { label: translate("app.keyboardShortcuts"), ico: 'help', run: () => (shortcutsOpen = true) },
     ...(demoVisitor ? [] : [{ label: translate("app.pairAPhone"), ico: 'link', href: filingHref('#/settings?pair=1') }]),
     ...(session.user?.role === 'admin'
       ? [{ label: translate("app.addAMailbox"), ico: 'mail', href: filingHref('#/settings?tab=archive&section=mail') }]
@@ -760,6 +767,8 @@
     </div>
   </div>
 
+
+  {#if shortcutsOpen}<Lazy load={lazyRoutes.shortcutHelp} props={{ onClose: () => (shortcutsOpen = false) }} />{/if}
 
   {#if ChatDrawer}
     <ChatDrawer open={chatOpen} request={chatRequest} status={chatStatusInfo}

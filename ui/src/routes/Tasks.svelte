@@ -3,6 +3,7 @@
   import { tick } from 'svelte'
   import { t as translate } from "../lib/i18n.svelte.js";
   import { scopedHash as filingHref } from '../lib/systems.svelte.js'
+  import { route, go } from '../lib/router.svelte.js'
   import { SUGGESTION_FIELDS, canApplySuggestion } from '../lib/suggestions.js'
   import { listTasks, resolveApprovalTask, retryDeadJob, dismissDeadJob, thumbPath,
            listIntelligence, resolveIntelligence } from '../lib/api.js'
@@ -25,7 +26,9 @@
   let busyTasks = $state(new Set())
   let taskErrors = $state({})
   let dateErrors = $state({})
-  let approvalFilter = $state('all')
+  // The open tab lives in the URL (?tab=issues) so links can open it directly.
+  const tabFromURL = route.query.get('tab') || ''
+  let approvalFilter = $state(tabFromURL || 'all')
   let expandedSuggestionGroups = $state(new Set())
   let expandedReviewContext = $state(new Set())
   let suggestionGroupsOpen = $state(false)
@@ -38,7 +41,7 @@
   let suggestionReviewScroll = $state()
   let suggestionGroupsToggle = $state()
   const metadataTasks = $derived(tasks.filter(isMetadataTask))
-  const visibleMetadataTasks = $derived(metadataTasks.filter(task => matchesApprovalFilter(task, approvalFilter)))
+  const visibleMetadataTasks = $derived(metadataTasks.filter(task => matchesApprovalFilter(task, activeTab)))
   const documentGroups = $derived(approvalGroups(visibleMetadataTasks))
   const displayedDocumentGroups = $derived(documentGroups.slice(0, REVIEW_ENTRY_LIMIT))
   const hiddenDocumentGroupCount = $derived(Math.max(0, documentGroups.length - displayedDocumentGroups.length))
@@ -90,7 +93,9 @@
       expandedReviewContext = new Set()
       onCount?.(tasks.length + jobs.length + intelligence.length)
       // Land on the first tab with work when there are no metadata suggestions.
-      if (!metadataTasks.length && SUGGESTION_TABS.includes(approvalFilter)) {
+      // A tab named in the URL wins only while it exists for this person.
+      const namedTab = tabFromURL && approvalTabs.some(tab => tab.id === tabFromURL)
+      if (!namedTab && !metadataTasks.length && SUGGESTION_TABS.includes(activeTab)) {
         approvalFilter = intelligence.length ? 'dates' : otherTasks.length ? 'decisions' : jobs.length ? 'issues' : approvalFilter
       }
     } catch (ex) {
@@ -537,6 +542,25 @@
     return count === 0 ? translate("tasks.notRetried") : plural("tasks.retryCount", count)
   }
 
+  function selectTab(id) {
+    approvalFilter = id
+    go(filingHref(id === 'all' ? '#/tasks' : `#/tasks?tab=${id}`), { replace: true })
+  }
+
+  async function retryAllJobs() {
+    const ids = jobs.map(job => job.id)
+    busyJobs = new Set(ids)
+    let failed = 0
+    for (const id of ids) {
+      try { await retryDeadJob(id) } catch { failed++ }
+    }
+    notify?.(failed
+      ? translate("tasks.someStepsCouldNotRestart", { started: ids.length - failed, failed })
+      : plural("tasks.stepsStartedAgain", ids.length))
+    busyJobs = new Set()
+    await load()
+  }
+
   async function actOnDeadJob(job, action) {
     busyJobs = new Set([...busyJobs, job.id])
     try {
@@ -599,7 +623,7 @@
       <div class="approval-filters" role="group" aria-label={translate("tasks.approvalFilters")}>
         {#each approvalTabs as tab (tab.id)}
           <button type="button" class:active={activeTab === tab.id} class:attention={tab.attention}
-                  aria-pressed={activeTab === tab.id} onclick={() => (approvalFilter = tab.id)}>
+                  aria-pressed={activeTab === tab.id} onclick={() => selectTab(tab.id)}>
             <span>{tab.label}</span>
             <span class="filter-count">{formatNumber(tab.count)}</span>
           </button>
@@ -743,6 +767,13 @@
       </div>
     {:else if activeTab === 'issues'}
       <div class="tab-panel">
+        {#if jobs.length > 1}
+          <div class="issues-actions">
+            <button class="btn sm" disabled={busyJobs.size > 0} onclick={retryAllJobs}>
+              <Icon name="refresh" size={13} /> {translate("tasks.retryAll")}
+            </button>
+          </div>
+        {/if}
         <div class="index">
           {#each jobs as j (j.id)}
             <div class="irow processing-issue">
@@ -757,7 +788,7 @@
                 </details>
               </div>
               <span class="sub">{retryLabel(j)}</span>
-              {#if j.doc_id}<a class="btn sm" href={filingHref(`#/doc/${j.doc_id}`)}>{translate("tasks.documentValue", { "doc_id": j.doc_id })}</a>{/if}
+              {#if j.doc_id}<a class="btn sm issue-document" href={filingHref(`#/doc/${j.doc_id}`)}>{j.doc_title || translate("tasks.documentValue", { "doc_id": j.doc_id })}</a>{/if}
               <button class="btn sm" disabled={busyJobs.has(j.id)} onclick={() => actOnDeadJob(j, 'retry')} title={translate("tasks.tryThisProcessingStepAgain")}>
                 <Icon name="refresh" size={13} /> {translate("common.retry")}
               </button>
@@ -994,6 +1025,8 @@
 </div>
 
 <style>
+  .issues-actions { display:flex; justify-content:flex-end; margin-bottom:10px }
+  .issue-document { max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
   .approvals-page { width:min(100%,1400px);margin:0 auto }
   .approvals-error { margin:14px 20px 0 }
   .review-toolbar { display:flex;align-items:center;justify-content:flex-end;gap:10px;min-width:0 }

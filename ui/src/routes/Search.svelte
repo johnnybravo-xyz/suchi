@@ -7,6 +7,7 @@
   import { isCanonicalFilingAddress, resolvedFilingAddressHash } from '../lib/filing-address.js'
   import { route, go } from '../lib/router.svelte.js'
   import { fmtDate, plural } from '../lib/format.js'
+  import { addDays, localISODate } from '../lib/intelligence.js'
   import Icon from '../lib/Icon.svelte'
   import { createQueryAssistant } from '../lib/queryAssist.js'
 
@@ -103,6 +104,19 @@
     }
   }
 
+  // Two rich queries shown before the first search; each runs when chosen.
+  const today = localISODate()
+  const examples = [
+    { query: `is:inbox added:>=${addDays(today, -30)}`, label: translate("search.exampleRecentInbox") },
+    { query: `date-role:expiry date:>=${today}`, label: translate("search.exampleUpcomingExpiry") },
+  ]
+
+  function runExample(query) {
+    q = query
+    page = 1
+    navigateToQuery()
+  }
+
   function navigateToQuery() {
     const params = new URLSearchParams()
     if (q.trim()) params.set('q', q.trim())
@@ -173,6 +187,15 @@
     <div class="index">{#each Array(4) as _}<div class="irow"><div class="skel" style="width:70%"></div></div>{/each}</div>
   {:else if searched && hits.length === 0}
     <div class="empty"><Icon name="search" size={56} /><b>{translate("search.nothingMatched")}</b><span>{translate("search.tryFewerWords")}</span></div>
+  {:else if !searched && !q.trim()}
+    <div class="search-examples">
+      <span class="search-examples-label">{translate("search.tryAQuery")}</span>
+      {#each examples as example (example.query)}
+        <button class="search-example" type="button" onclick={() => runExample(example.query)}>
+          <code>{example.query}</code><span>{example.label}</span>
+        </button>
+      {/each}
+    </div>
   {:else if hits.length}
     <p class="sub" style="color:var(--muted);margin:0 0 10px">{plural("search.resultCount", count)}</p>
     <div class="index">

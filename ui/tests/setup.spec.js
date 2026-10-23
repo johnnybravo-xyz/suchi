@@ -8221,3 +8221,52 @@ test('finds documents, recent documents, views and commands from the Omnibox', a
   await menu.getByRole('option', { name: 'Pair a phone', exact: true }).click()
   await expect(page).toHaveURL(/#\/settings$/)
 })
+
+test('opens processing issues from the Dashboard and retries them all', async ({ page }) => {
+  const retried = []
+  await mockAPI(page, {
+    filingTreeChosen: true,
+    documentsCount: 3,
+    deadJobs: [
+      { id: 71, kind: 'post-ingest', state: 'dead', attempts: 3, doc_id: 42, doc_title: 'Scanned lease', last_error: 'ocr failed' },
+      { id: 72, kind: 'post-ingest', state: 'dead', attempts: 3, doc_id: 43, last_error: 'ocr failed' },
+    ],
+  })
+  await page.route('**/api/tasks/*/retry', route => {
+    retried.push(Number(new URL(route.request().url()).pathname.split('/').at(-2)))
+    return route.fulfill({ json: {} })
+  })
+  await page.goto('/#/dashboard')
+  await expect(page.locator('a.metric.card.bad')).toHaveAttribute('href', '#/tasks?tab=issues')
+  await page.goto('/#/tasks?tab=issues')
+  await expect(page.getByRole('link', { name: 'Scanned lease', exact: true })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Document #43', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Retry all', exact: true }).click()
+  await expect.poll(() => retried).toEqual([71, 72])
+  await expect(page.locator('.topbar .notice')).toContainText('Started 2 processing steps again')
+})
+
+test('offers rich query examples, a shortcut overlay and other ways to add documents', async ({ page }) => {
+  const searches = []
+  await mockAPI(page, { filingTreeChosen: true, documentsCount: 0 })
+  await page.route('**/api/search/**', route => {
+    searches.push(new URL(route.request().url()).searchParams.get('q'))
+    return route.fallback()
+  })
+  await page.goto('/#/dashboard')
+  const otherWays = page.locator('.onboarding-alternatives')
+  await expect(otherWays.getByRole('link', { name: 'Watch a folder', exact: true })).toHaveAttribute('href', '#/settings?tab=archive&section=sources')
+  await expect(otherWays.getByRole('link', { name: 'Pair a phone', exact: true })).toHaveAttribute('href', '#/settings?pair=1')
+
+  await page.locator('body').press('?')
+  const help = page.getByRole('dialog', { name: 'Keyboard shortcuts' })
+  await expect(help).toContainText('Undo the last filing or Trash move')
+  await page.keyboard.press('Escape')
+  await expect(help).toHaveCount(0)
+
+  await page.goto('/#/search')
+  const example = page.locator('.search-example').filter({ hasText: 'date-role:expiry' })
+  await example.click()
+  await expect.poll(() => searches.some(query => query?.startsWith('date-role:expiry date:>='))).toBe(true)
+  await expect(page).toHaveURL(/#\/search\?q=date-role%3Aexpiry/)
+})

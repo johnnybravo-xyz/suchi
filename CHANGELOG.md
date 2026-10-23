@@ -6,6 +6,11 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Added
 
+- Press **?** for a keyboard shortcut overview. Search offers example rich
+  queries before the first search, and the empty archive's getting-started card
+  links to watched folders, mailboxes and phone pairing. Processing issues name
+  their documents, offer **Retry all**, and open directly from the Dashboard's
+  **Failed jobs** card; job rows in `/api/tasks/` now carry `doc_title`.
 - The ⌘K / Ctrl K menu now finds documents and saved views as you type, lists
   recently opened documents, and adds **New view**, **Pair a phone** and **Add a
   mailbox** commands.
