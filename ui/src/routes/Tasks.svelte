@@ -12,6 +12,7 @@
 
   const REVIEW_ENTRY_LIMIT = 100
   let { notify, onCount, canReviewIntelligence = false, canManageJobs = false } = $props()
+  const SUGGESTION_TABS = ['all', 'tags', 'filing', 'fields']
   let tasks = $state([])
   let jobs = $state([])
   let loading = $state(true)
@@ -30,18 +31,40 @@
   // The hovered or focused side of the synchronized queues and its task IDs;
   // the opposite side highlights the same decisions.
   let linkedHover = $state(null)
+  let linkHoverVersion = 0
+  let revealTimer
+  let documentReviewScroll = $state()
+  let suggestionReviewScroll = $state()
   let suggestionGroupsToggle = $state()
   const metadataTasks = $derived(tasks.filter(isMetadataTask))
   const visibleMetadataTasks = $derived(metadataTasks.filter(task => matchesApprovalFilter(task, approvalFilter)))
   const documentGroups = $derived(approvalGroups(visibleMetadataTasks))
   const displayedDocumentGroups = $derived(documentGroups.slice(0, REVIEW_ENTRY_LIMIT))
   const hiddenDocumentGroupCount = $derived(Math.max(0, documentGroups.length - displayedDocumentGroups.length))
-  const suggestionGroups = $derived(suggestionApprovalGroups(visibleMetadataTasks))
+  // Built in document order, so groups appear as their first document does and
+  // both panes read top to bottom together.
+  const suggestionGroups = $derived(suggestionApprovalGroups(documentGroups.flatMap(group => group.tasks)))
   const filterCounts = $derived(countApprovalFilters(metadataTasks))
   const displayedSuggestionGroups = $derived(suggestionGroups.slice(0, REVIEW_ENTRY_LIMIT))
   const hiddenSuggestionGroupCount = $derived(Math.max(0, suggestionGroups.length - displayedSuggestionGroups.length))
   const otherTasks = $derived(tasks.filter(task => !isMetadataTask(task)))
   const otherTaskGroups = $derived(approvalGroups(otherTasks))
+  // One view per tab. The metadata tabs that All counts come first; Dates,
+  // counted separately, follows them. Decisions and processing issues appear
+  // only when present; processing issues sit apart at the end as an attention
+  // notice.
+  const approvalTabs = $derived([
+    { id: 'all', label: translate("tasks.allSuggestionFilter"), count: filterCounts.all },
+    { id: 'tags', label: translate("tasks.tagSuggestionFilter"), count: filterCounts.tags },
+    { id: 'filing', label: translate("tasks.filingSuggestionFilter"), count: filterCounts.filing },
+    { id: 'fields', label: translate("tasks.fieldSuggestionFilter"), count: filterCounts.fields },
+    ...(canReviewIntelligence ? [{ id: 'dates', label: translate("tasks.dateSuggestionFilter"), count: intelligence.length }] : []),
+    ...(otherTasks.length ? [{ id: 'decisions', label: translate("tasks.decisions"), count: otherTasks.length }] : []),
+    ...(canManageJobs && jobs.length ? [{ id: 'issues', label: translate("tasks.processingIssues"), count: jobs.length, attention: true }] : []),
+  ])
+  const activeTab = $derived(approvalTabs.some(tab => tab.id === approvalFilter) ? approvalFilter : 'all')
+  const suggestionTab = $derived(SUGGESTION_TABS.includes(activeTab))
+  const hasApprovals = $derived(tasks.length > 0 || intelligence.length > 0 || (canManageJobs && jobs.length > 0))
 
   async function load() {
     loading = true; err = ''
@@ -65,6 +88,10 @@
       expandedSuggestionGroups = new Set()
       expandedReviewContext = new Set()
       onCount?.(tasks.length + jobs.length + intelligence.length)
+      // Land on the first tab with work when there are no metadata suggestions.
+      if (!metadataTasks.length && SUGGESTION_TABS.includes(approvalFilter)) {
+        approvalFilter = intelligence.length ? 'dates' : otherTasks.length ? 'decisions' : jobs.length ? 'issues' : approvalFilter
+      }
     } catch (ex) {
       tasks = []
       jobs = []
@@ -372,12 +399,53 @@
     }[task.vars?.field] || translate("tasks.unsupportedActionReadOnly")
   }
 
-  function linkHover(side, groupTasks) {
+  // A pointer crossing one pane on its way elsewhere would otherwise scroll
+  // the other pane at every entry it passes. The tint follows at once; the
+  // other pane scrolls only once the pointer rests. Focus is deliberate, so it
+  // reveals at once.
+  const REVEAL_DELAY_MS = 300
+
+  function linkHover(side, groupTasks, source, immediate = false) {
+    const version = ++linkHoverVersion
     linkedHover = { side, taskIDs: new Set(groupTasks.map(task => task.id)) }
+    clearTimeout(revealTimer)
+    const reveal = async () => {
+      await tick()
+      if (version !== linkHoverVersion) return
+      if (side === 'document') revealLinked(suggestionReviewScroll, '.suggestion-card.linked', source)
+      else revealLinked(documentReviewScroll, '.document-review-card.linked', source)
+    }
+    if (immediate) reveal()
+    else revealTimer = setTimeout(reveal, REVEAL_DELAY_MS)
   }
 
   function clearLinkHover() {
+    linkHoverVersion++
+    clearTimeout(revealTimer)
     linkedHover = null
+  }
+
+  // Side by side, each pane scrolls on its own, so a linked entry can sit
+  // outside the other pane's view. Stacked panes share the page scroll and are
+  // skipped: scrolling there would move the hovered entry away.
+  function revealLinked(scroller, selector, source) {
+    if (!scroller || !source || getComputedStyle(scroller).overflowY !== 'auto') return
+    const linked = [...scroller.querySelectorAll(selector)]
+    if (!linked.length) return
+    const view = scroller.getBoundingClientRect()
+    if (linked.some(entry => {
+      const box = entry.getBoundingClientRect()
+      return box.top >= view.top && box.bottom <= view.bottom
+    })) return
+    // Level the entry with the hovered one, so moving straight across lands on
+    // it, while keeping it inside the pane; a tall entry keeps its top in view.
+    const box = linked[0].getBoundingClientRect()
+    const from = source.getBoundingClientRect()
+    const margin = 8
+    const levelTop = from.top + from.height / 2 - box.height / 2
+    const top = Math.max(view.top + margin, Math.min(levelTop, view.bottom - margin - box.height))
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    scroller.scrollBy({ top: box.top - top, behavior: reduceMotion ? 'auto' : 'smooth' })
   }
 
   function toggleSuggestionGroup(key) {
@@ -502,7 +570,7 @@
 <svelte:window onkeydown={onKey} />
 
 <div class="approvals-page">
-  <RuleWorkspace class="approvals-workspace"
+  <RuleWorkspace class="approvals-workspace {suggestionTab && visibleMetadataTasks.length ? 'fitted' : ''}"
                  title={translate("app.approvals")}
                  description={translate("tasks.suggestedChangesDescription")}
                  headingId="approvals-workspace-heading">
@@ -512,7 +580,7 @@
                 disabled={loading || intelligenceBusy || busyTasks.size > 0} onclick={load}>
           <Icon name="refresh" size={13} /> {translate("tasks.refresh")}
         </button>
-        {#if metadataTasks.length}
+        {#if metadataTasks.length && suggestionTab}
           <button bind:this={suggestionGroupsToggle} type="button"
                   class="btn sm suggestion-groups-toggle" class:primary={suggestionGroupsOpen}
                   aria-expanded={suggestionGroupsOpen}
@@ -528,18 +596,13 @@
 
     {#if err}<div class="err approvals-error">{err}</div>{/if}
 
-    {#if loading || metadataTasks.length}
+    {#if loading || hasApprovals}
       <div class="approval-filters" role="group" aria-label={translate("tasks.approvalFilters")}>
-        {#each [
-          ['all', translate("tasks.allSuggestionFilter")],
-          ['tags', translate("tasks.tagSuggestionFilter")],
-          ['filing', translate("tasks.filingSuggestionFilter")],
-          ['fields', translate("tasks.fieldSuggestionFilter")],
-        ] as [filter, label] (filter)}
-          <button type="button" class:active={approvalFilter === filter} aria-pressed={approvalFilter === filter}
-                  onclick={() => (approvalFilter = filter)}>
-            <span>{label}</span>
-            <span class="filter-count">{formatNumber(filterCounts[filter])}</span>
+        {#each approvalTabs as tab (tab.id)}
+          <button type="button" class:active={activeTab === tab.id} class:attention={tab.attention}
+                  aria-pressed={activeTab === tab.id} onclick={() => (approvalFilter = tab.id)}>
+            <span>{tab.label}</span>
+            <span class="filter-count">{formatNumber(tab.count)}</span>
           </button>
         {/each}
       </div>
@@ -549,383 +612,385 @@
       <div class="review-skeleton">
         {#each Array(4) as _}<div class="approval-loading-row"><div class="skel"></div></div>{/each}
       </div>
-    {:else}
-      {#if metadataTasks.length > 0 && visibleMetadataTasks.length === 0}
-        <p class="filtered-empty">{translate("tasks.noSuggestionsInThisFilter")}</p>
-      {:else if visibleMetadataTasks.length > 0}
-        <div class="review-panes" class:with-suggestion-groups={suggestionGroupsOpen}>
-          <section class="document-review-pane" aria-label={translate("tasks.byDocument")}>
-            {#if suggestionGroupsOpen}
-              <header class="pane-heading">
-                <div class="pane-heading-label">
-                  <h2>{translate("tasks.byDocument")}</h2>
-                  <span>{translate("tasks.inQueue", { count: documentGroups.length })}</span>
-                </div>
-              </header>
-            {/if}
-            <div class="document-review-list">
-              {#each displayedDocumentGroups as group (group.key)}
-                <article class="document-review-card"
-                         onmouseenter={() => linkHover('document', group.tasks)} onmouseleave={clearLinkHover}
-                         onfocusin={() => linkHover('document', group.tasks)} onfocusout={clearLinkHover}>
-                    <a class="task-thumb" class:placeholder={!group.document.doc_has_thumbnail} class:blurred={isHighSensitivity(group.document.doc_sensitivity)}
-                       href={filingHref(`#/doc/${group.document.doc_id}`)}
-                       aria-label={translate("tasks.openValue2", { "doc_id": group.document.doc_title || `document ${group.document.doc_id}` })}>
-                      {#if group.document.doc_has_thumbnail}
-                        <img src={thumbPath(group.document.doc_id, isHighSensitivity(group.document.doc_sensitivity))} alt="" loading="lazy" />
-                      {:else}
-                        <Icon name="docs" size={16} />
-                      {/if}
-                    </a>
-                  <div class="document-review-body">
-                  <header class="document-header">
-                    <div class="document-identity">
-                      <div class="document-title-line">
-                        <a href={filingHref(`#/doc/${group.document.doc_id}`)}>
-                          {group.document.doc_title || translate("tasks.documentValue", { "doc_id": group.document.doc_id })}
-                        </a>
-                        <span>#{group.document.doc_id}</span>
-                        {#if filingLabel(group.document)}<span class="filing-pill">{filingLabel(group.document)}</span>{/if}
-                      </div>
+    {:else if !hasApprovals}
+      <div class="empty"><Icon name="tasks" size={56} /><b>{translate("tasks.nothingNeedsYou")}</b><span>{translate("tasks.theArchiveIsRunningItself")}</span></div>
+    {:else if activeTab === 'dates'}
+      <div class="tab-panel">
+        {#if intelligence.length}
+          {@const reviewGroups = intelligenceGroups()}
+          {#if addableDates.length > 1}
+            <div class="tab-actions">
+              <button class="btn sm" disabled={intelligenceBusy}
+                      onclick={() => resolveDates('accepted', addableDates.map(candidate => candidate.id))}>
+                <Icon name="check" size={13} /> {plural("tasks.addAllDatesToCalendar", addableDates.length)}
+              </button>
+            </div>
+          {/if}
+          <div class="approval-grid" class:approval-grid-many={reviewGroups.length > 2} data-approval-kind="date">
+            {#each reviewGroups as group (group.documentID)}
+              <article class="approval-card">
+                <header class="approval-card-header document-header">
+                  <a class="task-thumb" class:placeholder={!group.thumbnail} class:blurred={isHighSensitivity(group.sensitivity)}
+                     href={filingHref(`#/doc/${group.documentID}`)} aria-label={translate("tasks.openValue", { "documentID": group.title || `document ${group.documentID}` })}>
+                    {#if group.thumbnail}
+                      <img src={thumbPath(group.documentID, isHighSensitivity(group.sensitivity))} alt="" loading="lazy" />
+                    {:else}
+                      <Icon name="docs" size={22} />
+                    {/if}
+                  </a>
+                  <div class="document-identity">
+                    <a href={filingHref(`#/doc/${group.documentID}`)}>{group.title || translate("tasks.documentValue2", { "documentID": group.documentID })}</a>
+                    <div class="document-meta">
+                      <span>#{group.documentID}</span>
+                      {#if group.candidates.length > 1}<span>{plural("tasks.dateCount", group.candidates.length)}</span>{/if}
                     </div>
-                    <!-- A single suggestion's row controls already settle the document. -->
-                    {#if group.tasks.length > 1 && (group.rejectTasks.length || group.applyTasks.length)}
-                      <div class="document-bulk-actions">
-                        {#if group.rejectTasks.length}
-                          <button class="btn sm" disabled={tasksAreBusy(group.tasks) || tasksHaveErrors(group.tasks)}
-                                  onclick={() => resolveMany(group.rejectTasks, 'reject')}>
-                            {group.rejectTasks.length > 1 ? translate("tasks.dismissAll") : translate("tasks.dismiss")}
-                          </button>
-                        {/if}
-                        {#if group.applyTasks.length}
-                          <button class="btn sm primary" disabled={tasksAreBusy(group.tasks) || tasksHaveErrors(group.tasks)}
-                                  onclick={() => resolveMany(group.applyTasks, 'apply')}>
-                            {group.applyTasks.length > 1
-                              ? translate("tasks.approveAll", { count: group.applyTasks.length })
-                              : translate("tasks.approve")}
-                          </button>
-                        {/if}
+                  </div>
+                </header>
+                <div class="approval-card-body decision-list">
+                  {#each group.candidates as candidate (candidate.id)}
+                    <section class="decision-row intelligence-candidate">
+                      <div class="decision date-value">
+                        {formatIntelligenceValue(candidate)}
+                        {#if candidate.type !== 'date'}<span class="pill">{translate("tasks.readOnly")}</span>{/if}
+                        {#if candidate.source_current === false}<span class="pill warn">{translate("tasks.documentChanged")}</span>{/if}
+                      </div>
+                      {#if candidate.evidence_text}
+                        <blockquote class="intelligence-evidence">“{candidate.evidence_text}”</blockquote>
+                        {#if candidate.source_current !== true}<p class="evidence-note">{translate("tasks.thisSavedQuoteNoLongerMatchesTheDocument")}</p>{/if}
+                      {:else}
+                        <p class="evidence-note">{translate("tasks.theMatchingTextIsNotShownHere")}</p>
+                      {/if}
+                      {#if dateErrors[candidate.id]}<p class="review-error" role="alert">{dateErrors[candidate.id]}</p>{/if}
+                      {#if canRejectDate(candidate)}
+                        <div class="choices">
+                          {#if canReviewDate(candidate)}
+                            <button class="btn sm primary" disabled={intelligenceBusy || !!dateErrors[candidate.id]}
+                                    onclick={() => resolveDates('accepted', [candidate.id])}>
+                              <Icon name="check" size={13} />{translate("tasks.addToCalendar")}
+                            </button>
+                          {/if}
+                          <button class="btn sm danger" disabled={intelligenceBusy || !!dateErrors[candidate.id]}
+                                  onclick={() => resolveDates('rejected', [candidate.id])}>{translate("tasks.reject")}</button>
+                        </div>
+                      {/if}
+                      {#if typeof candidate.confidence === 'number'}
+                        <details class="task-details">
+                          <summary>{translate("tasks.howThisWasSuggested")}</summary>
+                          <p>{translate("tasks.modelConfidenceValue", { "confidence": Math.round(candidate.confidence * 100) })}</p>
+                          {#if candidate.extractor}<p>{translate("tasks.suggestedByValue", { "extractor": producerLabel(candidate.extractor) })}</p>{/if}
+                        </details>
+                      {/if}
+                    </section>
+                  {/each}
+                </div>
+              </article>
+            {/each}
+          </div>
+        {:else}
+          <p class="filtered-empty">{translate("tasks.noSuggestionsInThisFilter")}</p>
+        {/if}
+      </div>
+    {:else if activeTab === 'decisions'}
+      <div class="tab-panel">
+        <div class="approval-grid" class:approval-grid-many={otherTaskGroups.length > 2} data-approval-kind="workflow">
+          {#each otherTaskGroups as group (group.key)}
+            <article class="approval-card workflow-approval-card">
+              <header class="approval-card-header operation-header">
+                <span class="operation-mark"><Icon name="refresh" size={17} /></span>
+                <span><small>{translate("tasks.archiveOperation")}</small><b>{group.tasks[0]?.approval_name === 'rescan-proposal' ? translate("tasks.processingUpdate") : translate("tasks.approvalRequest")}</b></span>
+              </header>
+              <div class="approval-card-body decision-list">
+                {#each group.tasks as t (t.id)}
+                  {@const dl = deadline(t)}
+                  {@const targets = rescanTargets(t)}
+                  <section class="decision-row">
+                    <div class="prompt decision">{decisionPrompt(t)}</div>
+                    {#if t.approval_name === 'rescan-proposal' && t.vars}
+                      <div class="rescan-context">
+                        <b>{pipelineLabel(t.vars.kind)}</b> {plural("tasks.improvedDocumentCount", t.vars.stale_count)}
                       </div>
                     {/if}
+                    {#if taskErrors[t.id]}<p class="review-error" role="alert">{taskErrors[t.id]}</p>{/if}
+                    <div class="choices">
+                      {#each taskChoices(t) as c, i}
+                        <button class="btn sm" class:primary={i === 0} class:danger={/reject|deny|decline/i.test(c)}
+                                disabled={busyTasks.has(t.id) || !!taskErrors[t.id]} onclick={() => resolve(t, c)}>
+                          {#if i === 0}<Icon name="check" size={13} />{/if}{choiceLabel(t, c)}
+                        </button>
+                      {/each}
+                    </div>
+                    {#if dl}<div class="meta" class:deadline-soon={dl.soon}>{dl.text}</div>{/if}
+                    {#if targets.length}
+                      <details class="task-details">
+                        <summary>{translate("tasks.affectedDocuments")}</summary>
+                        <div class="rescan-targets">
+                          <ul>
+                            {#each targets as target (target.id)}
+                              <li><a href={filingHref(`#/doc/${target.id}`)}>{target.title || translate("tasks.documentValue3", { "id": target.id })}</a></li>
+                            {/each}
+                          </ul>
+                          {#if Number(t.vars?.stale_count || 0) > targets.length}
+                            <span>{translate("tasks.andValueMore", { "length": Number(t.vars.stale_count) - targets.length })}</span>
+                          {/if}
+                        </div>
+                      </details>
+                    {/if}
+                  </section>
+                {/each}
+              </div>
+            </article>
+          {/each}
+        </div>
+      </div>
+    {:else if activeTab === 'issues'}
+      <div class="tab-panel">
+        <div class="index">
+          {#each jobs as j (j.id)}
+            <div class="irow processing-issue">
+              <span class="dot danger"></span>
+              <div class="grow processing-issue-copy">
+                <span class="title" style="display:block;font-size:.8rem">{jobKindLabel(j.kind)}</span>
+                <span class="sub">{translate("tasks.processingStoppedBeforeThisStepCompleted")}</span>
+                <details class="processing-details">
+                  <summary>{translate("tasks.technicalDetails")}</summary>
+                  <code>{j.kind}</code>
+                  {#if j.last_error}<pre>{j.last_error}</pre>{/if}
+                </details>
+              </div>
+              <span class="sub">{retryLabel(j)}</span>
+              {#if j.doc_id}<a class="btn sm" href={filingHref(`#/doc/${j.doc_id}`)}>{translate("tasks.documentValue", { "doc_id": j.doc_id })}</a>{/if}
+              <button class="btn sm" disabled={busyJobs.has(j.id)} onclick={() => actOnDeadJob(j, 'retry')} title={translate("tasks.tryThisProcessingStepAgain")}>
+                <Icon name="refresh" size={13} /> {translate("common.retry")}
+              </button>
+              <button class="btn sm" disabled={busyJobs.has(j.id)} onclick={() => actOnDeadJob(j, 'dismiss')} title={translate("tasks.removeThisIssueWithoutRetrying")}>
+                <Icon name="x" size={13} /> {translate("tasks.dismiss")}
+              </button>
+            </div>
+          {/each}
+        </div>
+      </div>
+    {:else if visibleMetadataTasks.length === 0}
+      <p class="filtered-empty">{translate("tasks.noSuggestionsInThisFilter")}</p>
+    {:else}
+      <div class="review-panes" class:with-suggestion-groups={suggestionGroupsOpen}>
+        <section class="document-review-pane" aria-label={translate("tasks.byDocument")}>
+          {#if suggestionGroupsOpen}
+            <header class="pane-heading">
+              <div class="pane-heading-label">
+                <h2>{translate("tasks.byDocument")}</h2>
+                <span>{translate("tasks.inQueue", { count: documentGroups.length })}</span>
+              </div>
+            </header>
+          {/if}
+          <div class="pane-scroll" bind:this={documentReviewScroll}>
+          <div class="document-review-list">
+            {#each displayedDocumentGroups as group (group.key)}
+              <article class="document-review-card"
+                       class:linked={linkedHover?.side === 'suggestion' && group.tasks.some(task => linkedHover.taskIDs.has(task.id))}
+                       onmouseenter={(event) => linkHover('document', group.tasks, event.currentTarget)} onmouseleave={clearLinkHover}
+                       onfocusin={(event) => linkHover('document', group.tasks, event.currentTarget, true)} onfocusout={clearLinkHover}>
+                  <a class="task-thumb" class:placeholder={!group.document.doc_has_thumbnail} class:blurred={isHighSensitivity(group.document.doc_sensitivity)}
+                     href={filingHref(`#/doc/${group.document.doc_id}`)}
+                     aria-label={translate("tasks.openValue2", { "doc_id": group.document.doc_title || `document ${group.document.doc_id}` })}>
+                    {#if group.document.doc_has_thumbnail}
+                      <img src={thumbPath(group.document.doc_id, isHighSensitivity(group.document.doc_sensitivity))} alt="" loading="lazy" />
+                    {:else}
+                      <Icon name="docs" size={16} />
+                    {/if}
+                  </a>
+                <div class="document-review-body">
+                <header class="document-header">
+                  <div class="document-identity">
+                    <div class="document-title-line">
+                      <a href={filingHref(`#/doc/${group.document.doc_id}`)}>
+                        {group.document.doc_title || translate("tasks.documentValue", { "doc_id": group.document.doc_id })}
+                      </a>
+                      <span>#{group.document.doc_id}</span>
+                      {#if filingLabel(group.document)}<span class="filing-pill">{filingLabel(group.document)}</span>{/if}
+                    </div>
+                  </div>
+                  <!-- A single suggestion's row controls already settle the document. -->
+                  {#if group.tasks.length > 1 && (group.rejectTasks.length || group.applyTasks.length)}
+                    <div class="document-bulk-actions">
+                      {#if group.rejectTasks.length}
+                        <button class="btn sm" disabled={tasksAreBusy(group.tasks) || tasksHaveErrors(group.tasks)}
+                                onclick={() => resolveMany(group.rejectTasks, 'reject')}>
+                          {group.rejectTasks.length > 1 ? translate("tasks.dismissAll") : translate("tasks.dismiss")}
+                        </button>
+                      {/if}
+                      {#if group.applyTasks.length}
+                        <button class="btn sm primary" disabled={tasksAreBusy(group.tasks) || tasksHaveErrors(group.tasks)}
+                                onclick={() => resolveMany(group.applyTasks, 'apply')}>
+                          {group.applyTasks.length > 1
+                            ? translate("tasks.approveAll", { count: group.applyTasks.length })
+                            : translate("tasks.approve")}
+                        </button>
+                      {/if}
+                    </div>
+                  {/if}
+                </header>
+                <div class="document-decisions">
+                  {#each group.tasks as t (t.id)}
+                    {@const choices = taskChoices(t)}
+                    {@const dl = deadline(t)}
+                    {@const reviewContextOpen = expandedReviewContext.has(t.id)}
+                    <section class="decision-row document-decision" data-task-id={t.id}
+                             class:linked={linkedHover?.side === 'suggestion' && linkedHover.taskIDs.has(t.id)}>
+                      <div class="decision-kind">{suggestionActionLabel(t)}</div>
+                      <div class="metadata-transition">
+                        {#if t.vars?.field === 'tag'}
+                          <span class="addition-mark" aria-hidden="true">+</span>
+                        {:else}
+                          <span>{typeof t.vars?.current_value === 'string' ? (t.vars.current_value || translate("tasks.notSet")) : translate("tasks.unavailable")}</span>
+                          <span class="transition-arrow" aria-hidden="true">→</span>
+                        {/if}
+                        <strong>{suggestionValue(t.vars)}</strong>
+                      </div>
+                      {#if t.vars?.source}
+                        <span class="source-pill decision-source">
+                          {t.vars.automation_name
+                            ? translate("tasks.automationValue", { "automation_name": t.vars.automation_name })
+                            : sourceLabel(t.vars.source)}
+                        </span>
+                      {/if}
+                      {#if t.vars?.evidence_text || t.vars?.sources?.length}
+                        <button type="button" class="review-rationale-toggle"
+                                aria-expanded={reviewContextOpen} aria-controls={`review-context-${t.id}`}
+                                onclick={() => toggleReviewContext(t.id)}>
+                          {supportingContextLabel(t.vars)}
+                        </button>
+                      {/if}
+                      <div class="decision-controls">
+                        {#if choices.includes('reject')}
+                          <button class="decision-button dismiss" disabled={busyTasks.has(t.id) || !!taskErrors[t.id]}
+                                  aria-label={choiceLabel(t, 'reject')} title={choiceLabel(t, 'reject')}
+                                  onclick={() => resolve(t, 'reject')}><Icon name="x" size={16} /></button>
+                        {/if}
+                        {#if choices.includes('apply')}
+                          <button class="decision-button approve" disabled={busyTasks.has(t.id) || !!taskErrors[t.id]}
+                                  aria-label={choiceLabel(t, 'apply')} title={choiceLabel(t, 'apply')}
+                                  onclick={() => resolve(t, 'apply')}><Icon name="check" size={16} /></button>
+                        {/if}
+                      </div>
+                      {#if reviewContextOpen || taskErrors[t.id] || dl}
+                        <div class="decision-followup">
+                          {#if reviewContextOpen}
+                            <div id={`review-context-${t.id}`} class="review-rationale-content">
+                              {#if t.vars.evidence_text}<blockquote class="intelligence-evidence">“{t.vars.evidence_text}”</blockquote>{/if}
+                              {#if t.vars.sources?.length}
+                                <ul class="review-sources">
+                                  {#each t.vars.sources as source}
+                                    <li><a href={filingHref(`#/doc/${source.document_id}`)}>{source.title || translate("tasks.openDocument")}</a></li>
+                                  {/each}
+                                </ul>
+                              {/if}
+                            </div>
+                          {/if}
+                          {#if taskErrors[t.id]}<p class="review-error" role="alert">{taskErrors[t.id]}</p>{/if}
+                          {#if dl}<div class="meta" class:deadline-soon={dl.soon}>{dl.text}</div>{/if}
+                        </div>
+                      {/if}
+                    </section>
+                  {/each}
+                </div>
+                </div>
+              </article>
+            {/each}
+          </div>
+          {#if hiddenDocumentGroupCount}
+            <p class="review-overflow">{plural("tasks.moreDocumentsBelow", hiddenDocumentGroupCount)}</p>
+          {/if}
+          </div>
+        </section>
+
+        {#if suggestionGroupsOpen}
+          <section id="suggestion-review-pane" class="suggestion-review-pane" aria-label={translate("tasks.bySuggestion")}>
+            <header class="pane-heading">
+              <div class="pane-heading-label">
+                <h2>{translate("tasks.bySuggestion")}</h2>
+                <span>{plural("tasks.groupCount", suggestionGroups.length)}</span>
+              </div>
+              <span class="sync-mark" role="img"
+                    aria-label={translate("tasks.suggestionGroupsExplanation", { count: visibleMetadataTasks.length })}
+                    title={translate("tasks.suggestionGroupsExplanation", { count: visibleMetadataTasks.length })}>
+                <Icon name="sync" size={14} />
+              </span>
+            </header>
+            <div class="pane-scroll" bind:this={suggestionReviewScroll}>
+            <div class="suggestion-review-list">
+              {#each displayedSuggestionGroups as group (group.key)}
+                {@const representative = group.representative}
+                {@const expanded = expandedSuggestionGroups.has(group.key)}
+                <article class="approval-card suggestion-card"
+                         class:linked={linkedHover?.side === 'document' && group.tasks.some(task => linkedHover.taskIDs.has(task.id))}
+                         onmouseenter={(event) => linkHover('suggestion', group.tasks, event.currentTarget)} onmouseleave={clearLinkHover}
+                         onfocusin={(event) => linkHover('suggestion', group.tasks, event.currentTarget, true)} onfocusout={clearLinkHover}>
+                  <header class="approval-card-header suggestion-card-header">
+                    <div>
+                      <span>{suggestionActionLabel(representative)}</span>
+                      <strong>{#if representative.vars?.field === 'tag'}<span class="addition-mark" aria-hidden="true">+</span>{/if}{suggestionValue(representative.vars)}</strong>
+                    </div>
+                    {#if representative.vars?.source}
+                      <span class="source-pill">
+                        {representative.vars.automation_name
+                          ? translate("tasks.automationValue", { "automation_name": representative.vars.automation_name })
+                          : sourceLabel(representative.vars.source)}
+                      </span>
+                    {/if}
                   </header>
-                  <div class="document-decisions">
-                    {#each group.tasks as t (t.id)}
-                      {@const choices = taskChoices(t)}
-                      {@const dl = deadline(t)}
-                      {@const reviewContextOpen = expandedReviewContext.has(t.id)}
-                      <section class="decision-row document-decision" data-task-id={t.id}
-                               class:linked={linkedHover?.side === 'suggestion' && linkedHover.taskIDs.has(t.id)}>
-                        <div class="decision-kind">{suggestionActionLabel(t)}</div>
-                        <div class="metadata-transition">
-                          {#if t.vars?.field === 'tag'}
-                            <span class="addition-mark" aria-hidden="true">+</span>
-                          {:else}
-                            <span>{typeof t.vars?.current_value === 'string' ? (t.vars.current_value || translate("tasks.notSet")) : translate("tasks.unavailable")}</span>
-                            <span class="transition-arrow" aria-hidden="true">→</span>
-                          {/if}
-                          <strong>{suggestionValue(t.vars)}</strong>
-                        </div>
-                        {#if t.vars?.source}
-                          <span class="source-pill decision-source">
-                            {t.vars.automation_name
-                              ? translate("tasks.automationValue", { "automation_name": t.vars.automation_name })
-                              : sourceLabel(t.vars.source)}
-                          </span>
-                        {/if}
-                        {#if t.vars?.evidence_text || t.vars?.sources?.length}
-                          <button type="button" class="review-rationale-toggle"
-                                  aria-expanded={reviewContextOpen} aria-controls={`review-context-${t.id}`}
-                                  onclick={() => toggleReviewContext(t.id)}>
-                            {supportingContextLabel(t.vars)}
-                          </button>
-                        {/if}
-                        <div class="decision-controls">
-                          {#if choices.includes('reject')}
-                            <button class="decision-button dismiss" disabled={busyTasks.has(t.id) || !!taskErrors[t.id]}
-                                    aria-label={choiceLabel(t, 'reject')} title={choiceLabel(t, 'reject')}
-                                    onclick={() => resolve(t, 'reject')}><Icon name="x" size={16} /></button>
-                          {/if}
-                          {#if choices.includes('apply')}
-                            <button class="decision-button approve" disabled={busyTasks.has(t.id) || !!taskErrors[t.id]}
-                                    aria-label={choiceLabel(t, 'apply')} title={choiceLabel(t, 'apply')}
-                                    onclick={() => resolve(t, 'apply')}><Icon name="check" size={16} /></button>
-                          {/if}
-                        </div>
-                        {#if reviewContextOpen || taskErrors[t.id] || dl}
-                          <div class="decision-followup">
-                            {#if reviewContextOpen}
-                              <div id={`review-context-${t.id}`} class="review-rationale-content">
-                                {#if t.vars.evidence_text}<blockquote class="intelligence-evidence">“{t.vars.evidence_text}”</blockquote>{/if}
-                                {#if t.vars.sources?.length}
-                                  <ul class="review-sources">
-                                    {#each t.vars.sources as source}
-                                      <li><a href={filingHref(`#/doc/${source.document_id}`)}>{source.title || translate("tasks.openDocument")}</a></li>
-                                    {/each}
-                                  </ul>
-                                {/if}
-                              </div>
-                            {/if}
-                            {#if taskErrors[t.id]}<p class="review-error" role="alert">{taskErrors[t.id]}</p>{/if}
-                            {#if dl}<div class="meta" class:deadline-soon={dl.soon}>{dl.text}</div>{/if}
-                          </div>
-                        {/if}
-                      </section>
+                  <div class="suggestion-documents">
+                    {#each group.tasks as task, index (task.id)}
+                      {#if expanded || index < 3}
+                        {@const name = task.doc_title || translate("tasks.documentValue", { "doc_id": task.doc_id })}
+                        <a href={filingHref(`#/doc/${task.doc_id}`)} data-task-id={task.id}>
+                          <strong title={name}>{name}</strong>
+                          <span>#{task.doc_id}</span>
+                        </a>
+                      {/if}
                     {/each}
+                    {#if group.tasks.length > 3}
+                      <button type="button" class="more-documents" onclick={() => toggleSuggestionGroup(group.key)}
+                              aria-expanded={expanded}>
+                        {expanded
+                          ? translate("tasks.showFewerDocuments")
+                          : translate("tasks.moreDocuments", { count: group.tasks.length - 3 })}
+                      </button>
+                    {/if}
                   </div>
-                  </div>
+                  {#if firstTaskError(group.tasks)}
+                    <p class="review-error suggestion-error" role="alert">{firstTaskError(group.tasks)}</p>
+                  {/if}
+                  {#if group.rejectTasks.length || group.applyTasks.length}
+                    <footer class="suggestion-card-actions">
+                      {#if group.rejectTasks.length}
+                        <button class="btn sm" disabled={tasksAreBusy(group.tasks) || tasksHaveErrors(group.tasks)}
+                                onclick={() => resolveMany(group.rejectTasks, 'reject')}>
+                          {group.rejectTasks.length > 1
+                            ? translate("tasks.dismissAllCount", { count: group.rejectTasks.length })
+                            : translate("tasks.dismiss")}
+                        </button>
+                      {/if}
+                      {#if group.applyTasks.length}
+                        <button class="btn sm primary" disabled={tasksAreBusy(group.tasks) || tasksHaveErrors(group.tasks)}
+                                onclick={() => resolveMany(group.applyTasks, 'apply')}>
+                          {group.applyTasks.length > 1
+                            ? translate("tasks.applyToAll", { count: group.applyTasks.length })
+                            : translate("tasks.approve")}
+                        </button>
+                      {/if}
+                    </footer>
+                  {/if}
                 </article>
               {/each}
             </div>
-              {#if hiddenDocumentGroupCount}
-                <p class="review-overflow">{plural("tasks.moreDocumentsBelow", hiddenDocumentGroupCount)}</p>
+              {#if hiddenSuggestionGroupCount}
+                <p class="review-overflow">{plural("tasks.moreSuggestionGroupsBelow", hiddenSuggestionGroupCount)}</p>
               {/if}
+            </div>
           </section>
-
-          {#if suggestionGroupsOpen}
-            <section id="suggestion-review-pane" class="suggestion-review-pane" aria-label={translate("tasks.bySuggestion")}>
-              <div class="suggestion-review-sticky">
-              <header class="pane-heading">
-                <div class="pane-heading-label">
-                  <h2>{translate("tasks.bySuggestion")}</h2>
-                  <span>{plural("tasks.groupCount", suggestionGroups.length)}</span>
-                </div>
-                <span class="sync-mark" role="img"
-                      aria-label={translate("tasks.suggestionGroupsExplanation", { count: visibleMetadataTasks.length })}
-                      title={translate("tasks.suggestionGroupsExplanation", { count: visibleMetadataTasks.length })}>
-                  <Icon name="sync" size={14} />
-                </span>
-              </header>
-              <div class="suggestion-review-list">
-                {#each displayedSuggestionGroups as group (group.key)}
-                  {@const representative = group.representative}
-                  {@const expanded = expandedSuggestionGroups.has(group.key)}
-                  <article class="approval-card suggestion-card"
-                           class:linked={linkedHover?.side === 'document' && group.tasks.some(task => linkedHover.taskIDs.has(task.id))}
-                           onmouseenter={() => linkHover('suggestion', group.tasks)} onmouseleave={clearLinkHover}
-                           onfocusin={() => linkHover('suggestion', group.tasks)} onfocusout={clearLinkHover}>
-                    <header class="approval-card-header suggestion-card-header">
-                      <div>
-                        <span>{suggestionActionLabel(representative)}</span>
-                        <strong>{#if representative.vars?.field === 'tag'}<span class="addition-mark" aria-hidden="true">+</span>{/if}{suggestionValue(representative.vars)}</strong>
-                      </div>
-                      {#if representative.vars?.source}
-                        <span class="source-pill">
-                          {representative.vars.automation_name
-                            ? translate("tasks.automationValue", { "automation_name": representative.vars.automation_name })
-                            : sourceLabel(representative.vars.source)}
-                        </span>
-                      {/if}
-                    </header>
-                    <div class="suggestion-documents">
-                      {#each group.tasks as task, index (task.id)}
-                        {#if expanded || index < 3}
-                          <a href={filingHref(`#/doc/${task.doc_id}`)} data-task-id={task.id}>
-                            <strong>{task.doc_title || translate("tasks.documentValue", { "doc_id": task.doc_id })}</strong>
-                            <span>#{task.doc_id}</span>
-                          </a>
-                        {/if}
-                      {/each}
-                      {#if group.tasks.length > 3}
-                        <button type="button" class="more-documents" onclick={() => toggleSuggestionGroup(group.key)}
-                                aria-expanded={expanded}>
-                          {expanded
-                            ? translate("tasks.showFewerDocuments")
-                            : translate("tasks.moreDocuments", { count: group.tasks.length - 3 })}
-                        </button>
-                      {/if}
-                    </div>
-                    {#if firstTaskError(group.tasks)}
-                      <p class="review-error suggestion-error" role="alert">{firstTaskError(group.tasks)}</p>
-                    {/if}
-                    {#if group.rejectTasks.length || group.applyTasks.length}
-                      <footer class="suggestion-card-actions">
-                        {#if group.rejectTasks.length}
-                          <button class="btn sm" disabled={tasksAreBusy(group.tasks) || tasksHaveErrors(group.tasks)}
-                                  onclick={() => resolveMany(group.rejectTasks, 'reject')}>
-                            {translate("tasks.dismissAllCount", { count: group.rejectTasks.length })}
-                          </button>
-                        {/if}
-                        {#if group.applyTasks.length}
-                          <button class="btn sm primary" disabled={tasksAreBusy(group.tasks) || tasksHaveErrors(group.tasks)}
-                                  onclick={() => resolveMany(group.applyTasks, 'apply')}>
-                            {translate("tasks.applyToAll", { count: group.applyTasks.length })}
-                          </button>
-                        {/if}
-                      </footer>
-                    {/if}
-                  </article>
-                {/each}
-              </div>
-                {#if hiddenSuggestionGroupCount}
-                  <p class="review-overflow">{plural("tasks.moreSuggestionGroupsBelow", hiddenSuggestionGroupCount)}</p>
-                {/if}
-              </div>
-            </section>
-          {/if}
-        </div>
-      {/if}
-
-  {#if intelligence.length > 0}
-    {@const reviewGroups = intelligenceGroups()}
-    <section aria-labelledby="dates-title">
-      <div class="section-title-row">
-        <h3 id="dates-title" class="approval-section-title">{translate("tasks.datesForCalendar")}</h3>
-        {#if addableDates.length > 1}
-          <button class="btn sm" disabled={intelligenceBusy}
-                  onclick={() => resolveDates('accepted', addableDates.map(candidate => candidate.id))}>
-            <Icon name="check" size={13} /> {plural("tasks.addAllDatesToCalendar", addableDates.length)}
-          </button>
         {/if}
       </div>
-      <div class="approval-grid" class:approval-grid-many={reviewGroups.length > 2} data-approval-kind="date">
-        {#each reviewGroups as group (group.documentID)}
-          <article class="approval-card">
-            <header class="approval-card-header document-header">
-              <a class="task-thumb" class:placeholder={!group.thumbnail} class:blurred={isHighSensitivity(group.sensitivity)}
-                 href={filingHref(`#/doc/${group.documentID}`)} aria-label={translate("tasks.openValue", { "documentID": group.title || `document ${group.documentID}` })}>
-                {#if group.thumbnail}
-                  <img src={thumbPath(group.documentID, isHighSensitivity(group.sensitivity))} alt="" loading="lazy" />
-                {:else}
-                  <Icon name="docs" size={22} />
-                {/if}
-              </a>
-              <div class="document-identity">
-                <a href={filingHref(`#/doc/${group.documentID}`)}>{group.title || translate("tasks.documentValue2", { "documentID": group.documentID })}</a>
-                <div class="document-meta">
-                  <span>#{group.documentID}</span>
-                  {#if group.candidates.length > 1}<span>{plural("tasks.dateCount", group.candidates.length)}</span>{/if}
-                </div>
-              </div>
-            </header>
-            <div class="approval-card-body decision-list">
-              {#each group.candidates as candidate (candidate.id)}
-                <section class="decision-row intelligence-candidate">
-                  <div class="decision date-value">
-                    {formatIntelligenceValue(candidate)}
-                    {#if candidate.type !== 'date'}<span class="pill">{translate("tasks.readOnly")}</span>{/if}
-                    {#if candidate.source_current === false}<span class="pill warn">{translate("tasks.documentChanged")}</span>{/if}
-                  </div>
-                  {#if candidate.evidence_text}
-                    <blockquote class="intelligence-evidence">“{candidate.evidence_text}”</blockquote>
-                    {#if candidate.source_current !== true}<p class="evidence-note">{translate("tasks.thisSavedQuoteNoLongerMatchesTheDocument")}</p>{/if}
-                  {:else}
-                    <p class="evidence-note">{translate("tasks.theMatchingTextIsNotShownHere")}</p>
-                  {/if}
-                  {#if dateErrors[candidate.id]}<p class="review-error" role="alert">{dateErrors[candidate.id]}</p>{/if}
-                  {#if canRejectDate(candidate)}
-                    <div class="choices">
-                      {#if canReviewDate(candidate)}
-                        <button class="btn sm primary" disabled={intelligenceBusy || !!dateErrors[candidate.id]}
-                                onclick={() => resolveDates('accepted', [candidate.id])}>
-                          <Icon name="check" size={13} />{translate("tasks.addToCalendar")}
-                        </button>
-                      {/if}
-                      <button class="btn sm danger" disabled={intelligenceBusy || !!dateErrors[candidate.id]}
-                              onclick={() => resolveDates('rejected', [candidate.id])}>{translate("tasks.reject")}</button>
-                    </div>
-                  {/if}
-                  {#if typeof candidate.confidence === 'number'}
-                    <details class="task-details">
-                      <summary>{translate("tasks.howThisWasSuggested")}</summary>
-                      <p>{translate("tasks.modelConfidenceValue", { "confidence": Math.round(candidate.confidence * 100) })}</p>
-                      {#if candidate.extractor}<p>{translate("tasks.suggestedByValue", { "extractor": producerLabel(candidate.extractor) })}</p>{/if}
-                    </details>
-                  {/if}
-                </section>
-              {/each}
-            </div>
-          </article>
-        {/each}
-      </div>
-    </section>
-  {/if}
-
-  {#if otherTaskGroups.length > 0}
-    <h3 class="approval-section-title">{translate("tasks.decisions")}</h3>
-    <div class="approval-grid" class:approval-grid-many={otherTaskGroups.length > 2} data-approval-kind="workflow">
-      {#each otherTaskGroups as group (group.key)}
-        <article class="approval-card workflow-approval-card">
-          <header class="approval-card-header operation-header">
-            <span class="operation-mark"><Icon name="refresh" size={17} /></span>
-            <span><small>{translate("tasks.archiveOperation")}</small><b>{group.tasks[0]?.approval_name === 'rescan-proposal' ? translate("tasks.processingUpdate") : translate("tasks.approvalRequest")}</b></span>
-          </header>
-          <div class="approval-card-body decision-list">
-            {#each group.tasks as t (t.id)}
-              {@const dl = deadline(t)}
-              {@const targets = rescanTargets(t)}
-              <section class="decision-row">
-                <div class="prompt decision">{decisionPrompt(t)}</div>
-                {#if t.approval_name === 'rescan-proposal' && t.vars}
-                  <div class="rescan-context">
-                    <b>{pipelineLabel(t.vars.kind)}</b> {plural("tasks.improvedDocumentCount", t.vars.stale_count)}
-                  </div>
-                {/if}
-                {#if taskErrors[t.id]}<p class="review-error" role="alert">{taskErrors[t.id]}</p>{/if}
-                <div class="choices">
-                  {#each taskChoices(t) as c, i}
-                    <button class="btn sm" class:primary={i === 0} class:danger={/reject|deny|decline/i.test(c)}
-                            disabled={busyTasks.has(t.id) || !!taskErrors[t.id]} onclick={() => resolve(t, c)}>
-                      {#if i === 0}<Icon name="check" size={13} />{/if}{choiceLabel(t, c)}
-                    </button>
-                  {/each}
-                </div>
-                {#if dl}<div class="meta" class:deadline-soon={dl.soon}>{dl.text}</div>{/if}
-                {#if targets.length}
-                  <details class="task-details">
-                    <summary>{translate("tasks.affectedDocuments")}</summary>
-                    <div class="rescan-targets">
-                      <ul>
-                        {#each targets as target (target.id)}
-                          <li><a href={filingHref(`#/doc/${target.id}`)}>{target.title || translate("tasks.documentValue3", { "id": target.id })}</a></li>
-                        {/each}
-                      </ul>
-                      {#if Number(t.vars?.stale_count || 0) > targets.length}
-                        <span>{translate("tasks.andValueMore", { "length": Number(t.vars.stale_count) - targets.length })}</span>
-                      {/if}
-                    </div>
-                  </details>
-                {/if}
-              </section>
-            {/each}
-          </div>
-        </article>
-      {/each}
-    </div>
-  {/if}
-
-  {#if tasks.length === 0 && jobs.length === 0 && intelligence.length === 0}
-    <div class="empty"><Icon name="tasks" size={56} /><b>{translate("tasks.nothingNeedsYou")}</b><span>{translate("tasks.theArchiveIsRunningItself")}</span></div>
-  {/if}
-
-  {#if canManageJobs && jobs.length}
-    <h3 class="approval-section-title">{translate("tasks.processingIssues")}</h3>
-    <div class="index">
-      {#each jobs as j (j.id)}
-        <div class="irow processing-issue">
-          <span class="dot danger"></span>
-          <div class="grow processing-issue-copy">
-            <span class="title" style="display:block;font-size:.8rem">{jobKindLabel(j.kind)}</span>
-            <span class="sub">{translate("tasks.processingStoppedBeforeThisStepCompleted")}</span>
-            <details class="processing-details">
-              <summary>{translate("tasks.technicalDetails")}</summary>
-              <code>{j.kind}</code>
-              {#if j.last_error}<pre>{j.last_error}</pre>{/if}
-            </details>
-          </div>
-          <span class="sub">{retryLabel(j)}</span>
-          {#if j.doc_id}<a class="btn sm" href={filingHref(`#/doc/${j.doc_id}`)}>{translate("tasks.documentValue", { "doc_id": j.doc_id })}</a>{/if}
-          <button class="btn sm" disabled={busyJobs.has(j.id)} onclick={() => actOnDeadJob(j, 'retry')} title={translate("tasks.tryThisProcessingStepAgain")}>
-            <Icon name="refresh" size={13} /> {translate("common.retry")}
-          </button>
-          <button class="btn sm" disabled={busyJobs.has(j.id)} onclick={() => actOnDeadJob(j, 'dismiss')} title={translate("tasks.removeThisIssueWithoutRetrying")}>
-            <Icon name="x" size={13} /> {translate("tasks.dismiss")}
-          </button>
-        </div>
-      {/each}
-    </div>
-  {/if}
-
-{/if}
+    {/if}
   </RuleWorkspace>
 </div>
 
@@ -935,17 +1000,25 @@
   .review-toolbar { display:flex;align-items:center;justify-content:flex-end;gap:10px;min-width:0 }
   .review-toolbar button { flex:none }
   .suggestion-groups-toggle { border-radius:999px }
+  /* The divider is an inset shadow the active underline can cover without
+     overflowing, so the horizontally scrollable bar never shows a vertical
+     scrollbar. */
   .approval-filters {
     display:flex;align-items:center;gap:4px;margin:0;padding:0 20px;
-    border-bottom:1px solid var(--line);overflow-x:auto
+    box-shadow:inset 0 -1px var(--line);overflow-x:auto;overflow-y:hidden
   }
   .approval-filters button {
-    position:relative;display:flex;align-items:center;gap:6px;flex:none;margin-bottom:-1px;padding:13px 12px;
+    position:relative;display:flex;align-items:center;gap:6px;flex:none;padding:13px 12px;
     border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);
     font:inherit;font-size:.74rem;font-weight:650;cursor:pointer
   }
   .approval-filters button:hover { color:var(--ink) }
   .approval-filters button.active { border-bottom-color:var(--accent);color:var(--accent) }
+  /* Processing issues are a different kind of notice, kept apart at the end. */
+  .approval-filters button.attention { margin-left:auto }
+  .approval-filters button.attention .filter-count {
+    border-color:color-mix(in srgb,var(--danger) 30%,var(--line));background:var(--danger-soft);color:var(--danger)
+  }
   .filter-count {
     display:inline-grid;place-items:center;box-sizing:border-box;min-width:19px;height:19px;padding:0 5px;
     border:1px solid var(--line);border-radius:999px;background:var(--surface-2);
@@ -961,14 +1034,17 @@
   .filtered-empty { margin:0;padding:32px 22px;color:var(--muted);text-align:center }
   .review-panes { display:grid;grid-template-columns:minmax(0,1fr);width:100%;margin:0;background:var(--surface) }
   .review-panes.with-suggestion-groups { grid-template-columns:minmax(0,1fr) 400px }
-  /* overflow:hidden on the shared card would stop the sticky pane; clip keeps
-     the rounded corners without creating a scroll container. */
-  :global(.rule-workspace.approvals-workspace) { overflow:clip }
-  /* Beside a long document table, the groups stay in view within .content,
-     scrolling on their own when taller than the viewport. The height leaves
-     room for the topbar and .content's bottom padding so the pane still fits
-     when the table ends. */
-  .suggestion-review-sticky { position:sticky;top:0;max-height:calc(100dvh - 112px);overflow-y:auto }
+  /* On a suggestion tab side by side, the card fills the space below the
+     topbar (64px) and inside .content's padding (20px top, 40px bottom); each
+     pane then scrolls under its own caption, so the header, tabs and captions
+     always stay in view. Other tabs flow with the page. */
+  @media (min-width:1051px) {
+    :global(.rule-workspace.approvals-workspace.fitted) { display:flex;flex-direction:column;max-height:calc(100dvh - 124px) }
+    .approval-filters { flex:none }
+    .review-panes { flex:1 1 auto;min-height:0;grid-template-rows:minmax(0,1fr) }
+    .document-review-pane,.suggestion-review-pane { display:flex;flex-direction:column;min-height:0 }
+    .pane-scroll { flex:1;min-height:0;overflow-y:auto }
+  }
   .document-review-pane { min-width:0;background:var(--surface) }
   .suggestion-review-pane {
     min-width:0;border-left:1px solid var(--line);
@@ -979,8 +1055,10 @@
   .pane-heading h2 { margin:0;color:var(--muted);font-size:.7rem;font-weight:750;letter-spacing:.08em;text-transform:uppercase }
   .pane-heading span { color:var(--muted);font-size:.68rem }
   .sync-mark { display:inline-flex;margin-left:auto;color:var(--muted);cursor:help }
-  .document-review-card .decision-row,.suggestion-card { transition:background-color .15s,box-shadow .15s,border-color .15s }
-  .document-review-card .decision-row.linked {
+  .document-review-card,.document-review-card .decision-row,.suggestion-card { transition:background-color .15s,box-shadow .15s,border-color .15s }
+  .document-review-card.linked { background:color-mix(in srgb,var(--accent) 5%,var(--surface)) }
+  /* Only a card with several decisions marks which of them are linked. */
+  .document-review-card .decision-row.linked:not(:only-child) {
     border-radius:6px;background:color-mix(in srgb,var(--accent) 7%,var(--surface));
     box-shadow:0 0 0 5px color-mix(in srgb,var(--accent) 7%,var(--surface))
   }
@@ -989,9 +1067,8 @@
   .document-review-list { display:block }
   .suggestion-review-list { display:grid;gap:12px;padding:14px 14px 16px }
   .review-overflow { margin:0;padding:14px 28px;border-top:1px solid var(--line);color:var(--muted);font-size:.72rem }
-  .approval-section-title { margin:20px 20px 8px;color:var(--muted);font-size:.9rem }
-  .section-title-row { display:flex;align-items:center;justify-content:space-between;gap:12px;margin:20px 20px 8px }
-  .section-title-row .approval-section-title { margin:0 }
+  .tab-panel { padding-top:20px }
+  .tab-actions { display:flex;justify-content:flex-end;margin:0 20px 12px }
   .approval-grid { display:grid;max-width:820px;gap:12px;align-items:start;margin:0 20px 22px }
   .approval-grid.approval-grid-many { max-width:none;grid-template-columns:repeat(2,minmax(0,1fr)) }
   .approval-card {
@@ -1060,7 +1137,9 @@
   .suggestion-card-header .addition-mark { margin-right:6px;color:var(--accent) }
   .source-pill { display:inline-flex;flex:none;max-width:46%;padding:3px 8px;border:1px solid var(--line);border-radius:999px;color:var(--muted);font-size:.59rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
   .source-pill.decision-source { max-width:100% }
-  .suggestion-documents { display:grid;padding:4px 13px }
+  /* minmax(0,…) lets a long unbroken name ellipsize instead of widening the
+     column past the card and pushing the document number out of view. */
+  .suggestion-documents { display:grid;grid-template-columns:minmax(0,1fr);padding:4px 13px }
   .suggestion-documents a { display:flex;align-items:baseline;justify-content:space-between;gap:9px;padding:6px 0;color:var(--ink);font-size:.74rem }
   .suggestion-documents a strong { min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
   .suggestion-documents a span { flex:none;color:var(--faint);font-family:"Spline Sans Mono",ui-monospace,monospace;font-size:.58rem }
@@ -1108,7 +1187,6 @@
 
   @media (max-width:1050px) {
     .review-panes.with-suggestion-groups { grid-template-columns:1fr }
-    .suggestion-review-sticky { position:static;max-height:none;overflow:visible }
     .suggestion-review-pane { border-top:1px solid var(--line);border-left:0 }
     .review-panes.with-suggestion-groups .document-decision {
       grid-template-columns:126px minmax(0,1fr) 148px 96px 68px
@@ -1154,6 +1232,6 @@
     .task-thumb { flex-basis:42px;width:42px }
     .pane-heading { padding-inline:16px }
     .approval-grid { margin-inline:14px }
-    .section-title-row,.approval-section-title { margin-inline:14px }
+    .tab-actions { margin-inline:14px }
   }
 </style>

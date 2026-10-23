@@ -5410,16 +5410,15 @@ test('shows at most 100 document and suggestion-group entries', async ({ page },
   await expect(page.locator('.suggestion-card')).toHaveCount(100)
   await expect(page.getByText('2 more suggestion groups below', { exact: true })).toBeAttached()
   if (testInfo.project.name === 'desktop') {
-    // The groups stay in view beside a long document table.
+    // Side by side, the card fits the window and each pane scrolls on its own.
     const contentBox = await page.locator('.content').boundingBox()
-    for (const position of ['middle', 'end']) {
-      await page.locator('.content').evaluate((content, position) => {
-        content.scrollTop = position === 'end' ? content.scrollHeight : content.scrollHeight / 2
-      }, position)
-      const pane = await page.locator('.suggestion-review-sticky').boundingBox()
-      expect(pane.y).toBeGreaterThanOrEqual(contentBox.y - 1)
-      expect(pane.y + pane.height).toBeLessThanOrEqual(contentBox.y + contentBox.height + 1)
+    for (const pane of await page.locator('.pane-scroll').all()) {
+      await pane.evaluate(element => { element.scrollTop = element.scrollHeight })
+      const box = await pane.boundingBox()
+      expect(box.y).toBeGreaterThanOrEqual(contentBox.y - 1)
+      expect(box.y + box.height).toBeLessThanOrEqual(contentBox.y + contentBox.height + 1)
     }
+    await expect(page.getByText('2 more documents below', { exact: true })).toBeInViewport()
   }
 })
 
@@ -5503,7 +5502,10 @@ test('shows processing issue recovery only to administrators', async ({ page }) 
   const adminIncludes = []
   await mockAPI(page, { deadJobs, taskIncludes: adminIncludes })
   await page.goto('/#/tasks')
-  await expect(page.getByRole('heading', { name: 'Processing issues' })).toBeVisible()
+  const issuesTab = page.getByRole('button', { name: 'Processing issues 1', exact: true })
+  await expect(issuesTab).toBeVisible()
+  await expect(page.getByText('Read and file document', { exact: true })).toHaveCount(0)
+  await issuesTab.click()
   await expect(page.getByText('Read and file document', { exact: true })).toBeVisible()
   await expect(page.getByText('post-ingest', { exact: true })).not.toBeVisible()
   await expect(page.getByText('document is unavailable', { exact: true })).not.toBeVisible()
@@ -5518,7 +5520,7 @@ test('shows processing issue recovery only to administrators', async ({ page }) 
   await mockAPI(page, { userRole: 'member', deadJobs, taskIncludes: memberIncludes })
   await page.reload()
   await expect(page.getByRole('link', { name: 'HDFC receipt.pdf', exact: true })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Processing issues' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /^Processing issues/ })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Retry', exact: true })).toHaveCount(0)
   expect(memberIncludes).toContain('approvals')
   expect(memberIncludes).not.toContain('jobs')
@@ -5692,7 +5694,129 @@ test('keeps failed bulk suggestions while removing successful decisions from bot
   await expect(page.locator('.document-review-card').getByRole('link', { name: 'Bulk review 2.pdf', exact: true })).toBeVisible()
   await expect(page.locator('.suggestion-card').getByText('Bulk review 2.pdf', { exact: true })).toBeVisible()
   await expect(page.locator('.document-review-card').getByRole('alert')).toContainText('Nothing was applied')
-  await expect(page.getByRole('button', { name: 'Apply to all 1' })).toBeDisabled()
+  await expect(page.locator('.suggestion-card-actions').getByRole('button', { name: 'Approve', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: /all 1$/ })).toHaveCount(0)
+})
+
+test('reveals the linked entry in the other review pane', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'panes stack on narrow screens')
+  const approvalTasks = Array.from({ length: 30 }, (_, index) => ({
+    id: 300 + index, run_id: 400 + index, approval_id: 10, approval_name: 'document-change',
+    doc_id: 500 + index, doc_title: `Long queue ${index + 1}.pdf`, doc_has_thumbnail: false,
+    state_key: 'review', assignee: 'user:1', prompt: 'Review suggested document metadata',
+    choices: ['apply', 'reject'], status: 'open', created_at: 1780100000 - index,
+    vars: { field: 'tag', proposed_value: `topic-${index + 1}`, current_value: '', confidence: 0.8, source: 'archive', reason: 'review_first', source_current: true, review_conflict: false },
+  }))
+  await mockAPI(page, { approvalTasks })
+  await page.setViewportSize({ width: 1600, height: 800 })
+  await page.goto('/#/tasks')
+  await page.getByRole('button', { name: /^Show suggestion groups/ }).click()
+  const documentCards = page.locator('.document-review-card')
+  const suggestionCards = page.locator('.suggestion-card')
+  await expect(suggestionCards).toHaveCount(30)
+
+  const group = n => page.locator('.suggestion-card', {
+    has: page.locator('.suggestion-card-header strong', { hasText: new RegExp(`^\\+topic-${n}$`) }),
+  })
+  const centerGap = (a, b) => Promise.all([a, b].map(locator => locator.evaluate(element => {
+    const box = element.getBoundingClientRect()
+    return box.top + box.height / 2
+  }))).then(([one, two]) => Math.abs(one - two))
+  const fullyVisible = locator => locator.evaluate(element => {
+    const view = element.closest('.pane-scroll').getBoundingClientRect()
+    const box = element.getBoundingClientRect()
+    return box.top >= view.top && box.bottom <= view.bottom
+  })
+  const centerInPane = locator => locator.evaluate(element => element.scrollIntoView({ block: 'center' }))
+  const top = selector => page.locator(selector).evaluate(element => Math.round(element.getBoundingClientRect().top))
+
+  // Resting on an entry levels its match beside it, so moving straight across
+  // lands on it. Entries away from both ends leave room to level them exactly.
+  await centerInPane(documentCards.nth(24))
+  await documentCards.nth(24).hover()
+  await expect(group(25)).toHaveClass(/linked/)
+  await expect.poll(() => centerGap(group(25), documentCards.nth(24))).toBeLessThan(3)
+
+  // Each pane scrolls on its own; the header, tabs and both captions stay put.
+  const headerTop = await top('.approvals-workspace .rule-workspace-header')
+  expect(await page.locator('.content').evaluate(element => element.scrollTop)).toBe(0)
+  await expect(page.locator('.approval-filters')).toBeInViewport()
+  expect(await top('.document-review-pane .pane-heading')).toBe(await top('.suggestion-review-pane .pane-heading'))
+
+  await centerInPane(group(5))
+  await group(5).hover()
+  const earlierDocument = page.locator('.document-review-card.linked')
+  await expect(earlierDocument).toContainText('Long queue 5.pdf')
+  await expect.poll(() => centerGap(earlierDocument, group(5))).toBeLessThan(3)
+  expect(await top('.approvals-workspace .rule-workspace-header')).toBe(headerTop)
+
+  // Passing over other documents on the way across leaves the groups where
+  // they were, even when those documents' groups are out of view.
+  const groupsPane = page.locator('.suggestion-review-pane .pane-scroll')
+  const groupsScroll = await groupsPane.evaluate(element => element.scrollTop)
+  const passed = []
+  for (let index = 0; index < 30; index++) {
+    if (await fullyVisible(documentCards.nth(index)) && !(await fullyVisible(group(index + 1)))) passed.push(index)
+  }
+  expect(passed.length).toBeGreaterThan(0)
+  for (const index of passed.reverse()) {
+    const box = await documentCards.nth(index).boundingBox()
+    await page.mouse.move(box.x + 40, box.y + box.height / 2)
+  }
+  await page.mouse.move(0, 0)
+  await page.waitForTimeout(600)
+  expect(await groupsPane.evaluate(element => element.scrollTop)).toBe(groupsScroll)
+})
+
+test('keeps processing issues in their own tab at the end of the tab bar', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'tab bar scrolls on narrow screens')
+  const deadJobs = [{
+    id: 41, kind: 'post-ingest', doc_id: 17, state: 'dead', attempts: 4,
+    last_error: 'document is unavailable', updated_at: 1780100000,
+  }]
+  await mockAPI(page, { deadJobs })
+  await page.setViewportSize({ width: 1600, height: 800 })
+  await page.goto('/#/tasks')
+  const tabs = page.locator('.approval-filters button')
+  await expect(tabs).toHaveText([/^All/, /^Tags/, /^Filing/, /^Fields/, /^Dates/, /^Processing issues/])
+  // Right-aligned: the gap before the issues tab is far wider than between the others.
+  const [datesBox, issuesBox, barBox] = await Promise.all([
+    tabs.nth(4).boundingBox(), tabs.nth(5).boundingBox(), page.locator('.approval-filters').boundingBox(),
+  ])
+  expect(issuesBox.x - (datesBox.x + datesBox.width)).toBeGreaterThan(200)
+  expect(issuesBox.x + issuesBox.width).toBeGreaterThan(barBox.x + barBox.width - 40)
+  // Suggestion tabs show only the review panes.
+  await expect(page.locator('.review-panes')).toBeVisible()
+  await expect(page.getByText('Read and file document', { exact: true })).toHaveCount(0)
+  await tabs.nth(5).click()
+  await expect(page.getByText('Read and file document', { exact: true })).toBeVisible()
+  await expect(page.locator('.review-panes')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /^Show suggestion groups/ })).toHaveCount(0)
+  // The tab bar scrolls sideways only; it never grows a vertical scrollbar.
+  const bar = await page.locator('.approval-filters').evaluate(element => [element.scrollHeight, element.clientHeight])
+  expect(bar[0]).toBe(bar[1])
+})
+
+test('orders suggestion groups by their first document', async ({ page }) => {
+  const task = (id, docID, tag) => ({
+    id, run_id: id, approval_id: 11, approval_name: 'document-change',
+    doc_id: docID, doc_title: docID === 73 ? 'KYC 6911a4b27bb139d9b88cf39e6911a4b27bb139d9b88cf39e.pdf' : `Ordered ${docID}.pdf`, doc_has_thumbnail: false,
+    state_key: 'review', assignee: 'user:1', prompt: 'Review suggested document metadata',
+    choices: ['apply', 'reject'], status: 'open', created_at: 1780100000 - id,
+    vars: { field: 'tag', proposed_value: tag, current_value: '', confidence: 0.8, source: 'archive', reason: 'review_first', source_current: true, review_conflict: false },
+  })
+  await mockAPI(page, { approvalTasks: [task(601, 71, 'first'), task(602, 72, 'third'), task(603, 71, 'second'), task(604, 73, 'first')] })
+  await page.goto('/#/tasks')
+  await page.getByRole('button', { name: /^Show suggestion groups/ }).click()
+  await expect(page.locator('.document-review-card .document-title-line a')).toHaveText(['Ordered 71.pdf', 'Ordered 72.pdf', /^KYC /])
+  await expect(page.locator('.suggestion-card-header strong')).toHaveText(['+first', '+second', '+third'])
+  // A long unbroken name ellipsizes; its document number stays inside the card.
+  const firstGroup = page.locator('.suggestion-card').first()
+  const [numberRight, cardRight] = await Promise.all([
+    firstGroup.getByText('#73', { exact: true }).evaluate(element => element.getBoundingClientRect().right),
+    firstGroup.evaluate(element => element.getBoundingClientRect().right),
+  ])
+  expect(numberRight).toBeLessThanOrEqual(cardRight)
 })
 
 test('shows affected document titles in rescan details', async ({ page }) => {
@@ -6244,7 +6368,7 @@ test('reviews dates with per-date actions and one bulk add', async ({ page }, te
   })
   await page.goto('/#/tasks')
 
-  await expect(page.getByRole('heading', { name: 'Dates for Calendar' })).toBeVisible()
+  await page.locator('.approval-filters').getByRole('button', { name: /^Dates/ }).click()
   const reviewGrid = page.locator('.approval-grid[data-approval-kind="date"]')
   await expect(reviewGrid).toHaveClass(/approval-grid-many/)
   const columnCount = await reviewGrid.evaluate(element => getComputedStyle(element).gridTemplateColumns.split(' ').length)
@@ -6258,7 +6382,8 @@ test('reviews dates with per-date actions and one bulk add', async ({ page }, te
   expect(intelligenceRequests).toContainEqual({ action: 'resolve', candidate_ids: [72], decision: 'rejected' })
 
   await page.getByRole('button', { name: 'Add all 3 dates to Calendar' }).click()
-  await expect(page.getByRole('heading', { name: 'Dates for Calendar' })).toHaveCount(0)
+  await expect(page.locator('.intelligence-candidate')).toHaveCount(0)
+  await expect(page.getByText('Nothing needs you.')).toBeVisible()
   expect(intelligenceRequests).toContainEqual({
     action: 'resolve', candidate_ids: [71, 73, 74], decision: 'accepted',
   })

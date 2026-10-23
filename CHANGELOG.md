@@ -67,17 +67,23 @@ Notable user-visible changes to Suchi are recorded here.
 
 - Approvals now use the same centered workspace card as Automations, Calendar,
   and Views. The card header owns the description, refresh action, and stable
-  suggestion-group toggle; count tabs sit directly below it. Each document is
-  one block with its suggestions under the title and no internal dividers, and
-  only documents with several suggestions repeat **Approve all** and **Dismiss
-  all**. Added tags read **+ _tag_** instead of crossing out "Not set".
-  With both projections open, hovering or focusing one side tints the matching
-  decisions on the other, decided items fade out of both together, and a link
-  icon replaces the explanatory paragraph. The **By suggestion** sidecar stays
-  in view while a long document table scrolls.
-  Opening **By suggestion** adds a 400-pixel sidecar inside the card. Both
-  projections show at most 100 entries, report the remainder, stay synchronized,
-  and stack document-first on narrow screens.
+  suggestion-group toggle. Tabs below it show one kind of work at a time:
+  **All**, **Tags**, **Filing** and **Fields**, then **Dates**, **Decisions**
+  when present and, for administrators, a right-aligned **Processing issues**
+  tab, instead of sections stacked below the suggestions. Each document is one
+  block with its suggestions under the title and no internal dividers; only
+  documents with several suggestions repeat **Approve all** and **Dismiss all**,
+  and single-document suggestion groups read **Approve** and **Dismiss** without
+  a count. Added tags read **+ _tag_** instead of crossing out "Not set".
+  Opening **By suggestion** adds a 400-pixel sidecar inside the card that lists
+  its groups in document order and shortens long document names so their numbers
+  stay visible. On wide screens the card fits the window, keeping its header,
+  tabs and pane captions in place while each projection scrolls on its own; on
+  narrow screens the projections stack document-first. Both show at most 100
+  entries and report the remainder. Hovering or focusing one side tints the
+  matching document cards or groups on the other and, once the pointer rests,
+  scrolls the first one level with it when none is visible. Decided items fade
+  out of both together, and a link icon replaces the explanatory paragraph.
 
 - Trash now uses the shared workspace card. Its header holds the retention
   explanation and counted **Empty trash** action; like Documents rows, each row

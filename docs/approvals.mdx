@@ -30,43 +30,60 @@ decision.
 
 The **Approvals** screen uses the same centered workspace card as Automations,
 Calendar, and Views. Its header keeps the page description, refresh action, and
-**Show suggestion groups** control together; the **All**, **Tags**, **Filing**,
-and **Fields** tabs are the only suggestion counts.
+**Show suggestion groups** control together. Tabs below it show one kind of
+work at a time: **All**, **Tags**, **Filing** and **Fields** for metadata
+suggestions, which **All** counts, then **Dates**, and **Decisions** when
+workflow approvals are waiting. Administrators also get a
+**Processing issues** tab, set apart at the right end, when processing has
+failed. When there are no metadata suggestions, the screen opens on the first
+tab with work. The workspace is capped at 1,400 pixels so the change sentence
+and its actions remain connected on very wide displays.
 
-The screen opens with one **By document** table, keeping each document's current
-and proposed values together. Each document is one block: a small thumbnail
-beside its title and its suggestions, with a hairline only between documents.
-Each decision reads left to right as one change: the struck current value, an
-arrow, and the emphasized new value. An added tag reads **+ _tag_** because it
-replaces nothing, in both projections. Rows share
-fixed action, change, reason, similar-document, and decision columns so
-different suggestion types retain the same edges. The reason is a quiet chip;
-supporting documents use a compact **_n_ similar** disclosure.
+The suggestion tabs open with one **By document** table, keeping each
+document's current and proposed values together. Each document is one block: a
+small thumbnail beside its title and its suggestions, with a hairline only
+between documents. Each decision reads left to right as one change: the struck
+current value, an arrow, and the emphasized new value. An added tag reads
+**+ _tag_** because it replaces nothing, in both projections. Rows share fixed
+action, change, reason, similar-document, and decision columns so different
+suggestion types retain the same edges. The reason is a quiet chip; supporting
+documents use a compact **_n_ similar** disclosure.
 
 Choose **Show suggestion groups** to open a 400-pixel sidecar inside the same
 workspace card. The header control becomes **Hide suggestion groups** without
 moving, and the **By document** and **By suggestion** captions appear only while
-both projections are visible. Each projection shows at most 100 entries and
-states how many remain; settling visible entries brings the next queued entries
-into view. Beside the document table the sidecar stays in view while the table
-scrolls, scrolling on its own when its groups are taller than the window. On
-narrower screens the sidecar stacks after the document table. The
-workspace is capped at 1,400 pixels so the change sentence and its actions
-remain connected on very wide displays.
+both projections are visible. Suggestion groups follow the document order: each
+group appears where its first document does and lists its documents in that
+order, so both projections read top to bottom together. Each projection shows at
+most 100 entries and states how many remain; settling visible entries brings the
+next queued entries into view. Long document names in a group are shortened so
+each document number stays visible.
+
+On wide screens the suggestion tabs fit the window: the header, tabs and both
+captions stay in place while each projection scrolls on its own. On narrower
+screens the sidecar stacks after the document table and the page scrolls as
+one.
 
 Applying or dismissing a decision updates both views immediately, and the item
 fades out of both at once (instantly when reduced motion is requested). While
 both projections are open, pointing at or focusing a suggestion group tints its
-decisions in the document table, and pointing at a document tints its groups.
-The link icon in the **By suggestion** caption states the same relationship for
-screen readers and on hover. Each decision
-row has its own dismiss and approve controls; documents with several decisions
-also offer **Approve all** and **Dismiss all** beside the title.
-Suggestion cards can apply or dismiss the grouped decision for every listed
-document. Expand a grouped card's document list before a bulk action when you
-need to inspect every affected item. A partially failed bulk action removes
-only completed decisions, keeps failures visible, and requires a refresh before
-retrying.
+document cards, also marking the linked decisions in a document that has
+several; pointing at a document tints its groups. Side by side, when no tinted
+entry is visible, the other projection scrolls the first one level with the
+entry you point at, so moving straight across lands on it. It waits until the
+pointer rests for about 300 milliseconds, so sweeping across one projection
+toward an entry does not scroll the other; keyboard focus scrolls at once. The
+link icon in the **By suggestion** caption states the same relationship for
+screen readers and on hover.
+
+Each decision row has its own dismiss and approve controls; documents with
+several decisions also offer **Approve all** and **Dismiss all** beside the
+title. Suggestion cards apply or dismiss the grouped decision for every listed
+document, as **Apply to all _n_** and **Dismiss all _n_**, or **Approve** and
+**Dismiss** when the group holds one document. Expand a grouped card's document
+list before a bulk action when you need to inspect every affected item. A
+partially failed bulk action removes only completed decisions, keeps failures
+visible, and requires a refresh before retrying.
 
 ## Model
 
@@ -258,11 +275,10 @@ state-machine runs.
 
 Start with [Document dates](/document-dates) for the complete user workflow.
 
-The Approvals screen hosts pending `document_intelligence` suggestions under
-**Dates for Calendar**; workflow approvals follow under **Decisions** and dead
-jobs under **Processing issues**. Each date is added or rejected with its own
-buttons, and **Add all N dates to Calendar** in the toolbar accepts every
-addable date. Each action is one bounded API call over the affected IDs.
+The Approvals screen hosts pending `document_intelligence` suggestions in the
+**Dates** tab; workflow approvals have a **Decisions** tab and dead jobs a
+**Processing issues** tab. Each date is added or rejected with its own buttons,
+and **Add all N dates to Calendar** above the dates accepts every addable date. Each action is one bounded API call over the affected IDs.
 
 Dates and workflow approvals share the same card grid. More than two groups use
 two desktop columns and one mobile column; one or two groups stay in a compact

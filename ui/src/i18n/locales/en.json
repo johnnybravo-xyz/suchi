@@ -1805,7 +1805,7 @@
   "tasks.changeTitle": "Change title",
   "tasks.changingTheTitleToValue": "changing the title to “{value}”",
   "tasks.couldNotValueThisProcessingItem": "Could not {action} this processing item",
-  "tasks.datesForCalendar": "Dates for Calendar",
+  "tasks.dateSuggestionFilter": "Dates",
   "tasks.deadlinePassed": "deadline passed",
   "tasks.decisionRecordedAnyRequestedProcessingWillContinueShortly": "Decision recorded. Any requested processing will continue shortly.",
   "tasks.decisionRecordedTheDocumentAndCurrentValueWill": "Decision recorded. The document and current value will be checked again before the change is applied.",
