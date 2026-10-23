@@ -6,6 +6,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Added
 
+- Inbox rows offer a pending filing suggestion as a one-click button beside
+  **File under…**, applying the same decision as Approvals. Filing suggestions
+  in `/api/tasks/` now carry `proposed_id`.
 - Filing, refiling and moving documents to Trash can be undone from a notice in
   the top bar, or with **⌘ Z** / **Ctrl Z**. Notices replace the dark toast at the
   bottom of the screen and no longer cover the page. Refiling on Document Detail

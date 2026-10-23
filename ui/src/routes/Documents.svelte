@@ -3,7 +3,8 @@
   import { t as translate } from "../lib/i18n.svelte.js";
   import { scopedHash as filingHref, systems, captureScope, scopeCurrent } from '../lib/systems.svelte.js'
   import { onDestroy, untrack } from 'svelte'
-  import { listDocuments, listTags, listAllTags, listCorrespondents, patchDocument, deleteDocument, restoreDocument, bulkEdit, createShareLink, thumbPath, decryptDocument, decryptBatch, extractIntelligence } from '../lib/api.js'
+  import { filingSuggestions } from '../lib/suggestions.js'
+  import { listDocuments, listTags, listAllTags, listCorrespondents, patchDocument, deleteDocument, restoreDocument, bulkEdit, listTasks, resolveApprovalTask, createShareLink, thumbPath, decryptDocument, decryptBatch, extractIntelligence } from '../lib/api.js'
   import { route, go } from '../lib/router.svelte.js'
   import { uploadBus } from '../lib/upload_bus.svelte.js'
   import { SENSITIVITY_OPTIONS, fmtDate, formatNumber, isHighSensitivity, plural, sensDot } from '../lib/format.js'
@@ -243,6 +244,7 @@
         go(pageHash(Math.min(page, lastPage)), { replace: true })
         return
       }
+      if (inboxMode) void loadSuggestions(version)
       const visibleIDs = new Set(docs.map((document) => document.id))
       const visibleSelection = new Set([...sel].filter((id) => visibleIDs.has(id)))
       if (sel.size && !visibleSelection.size) clearSel()
@@ -252,6 +254,41 @@
     } finally {
       if (activeController === controller) activeController = undefined
       if (version === loadVersion) loading = false
+    }
+  }
+
+  // Inbox rows offer the pending filing suggestion from Approvals as one click.
+  let filingByDocument = $state(new Map())
+  let accepting = $state(new Set())
+
+  async function loadSuggestions(version) {
+    try {
+      const res = await listTasks({ include: 'approvals', limit: 200 })
+      if (version === loadVersion) filingByDocument = filingSuggestions(res?.approval_tasks)
+    } catch {
+      if (version === loadVersion) filingByDocument = new Map()
+    }
+  }
+
+  function suggestionLabel(suggestion) {
+    const category = jdCategories.find(item => item.id === suggestion.categoryID)
+    return category ? `${category.code} ${category.name}` : suggestion.label
+  }
+
+  async function acceptSuggestion(doc, suggestion) {
+    const previous = doc.jd_category_id
+    accepting = new Set([...accepting, doc.id])
+    try {
+      await resolveApprovalTask(suggestion.taskID, { choice: 'apply' })
+      await load()
+      notify?.(translate("documents.filedUnderValue", { category: suggestionLabel(suggestion) }), { undo: async () => {
+        await patchDocument(doc.id, { jd_category_id: previous })
+        await load()
+      } })
+    } catch (ex) {
+      notify?.(ex.message || translate("documents.couldNotFileIt"))
+    } finally {
+      accepting = new Set([...accepting].filter(id => id !== doc.id))
     }
   }
 
@@ -885,6 +922,14 @@
               {#if unlockErr[d.id]}<span class="sub" style="color:var(--danger)">{unlockErr[d.id]}</span>{/if}
             </span>
           {:else if inboxMode && jdCategories.length}
+            {@const suggestion = filingByDocument.get(d.id)}
+            {#if suggestion}
+              <button class="btn sm suggested-filing" disabled={accepting.has(d.id)} onclick={() => acceptSuggestion(d, suggestion)}
+                      aria-label={translate("documents.fileValueUnderSuggested", { id: d.title || 'document ' + d.id, category: suggestionLabel(suggestion) })}
+                      title={translate("documents.suggestedFiling")}>
+                <Icon name="check" size={12} />{suggestionLabel(suggestion)}
+              </button>
+            {/if}
             <select class="input" style="padding:3px 8px;font-size:.76rem;max-width:150px"
                     aria-label={translate("documents.fileValueUnder", { "id": d.title || 'document ' + d.id })}
                     onchange={(e) => { if (e.target.value) fileTo(d, e.target.value) }}>

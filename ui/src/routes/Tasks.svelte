@@ -3,6 +3,7 @@
   import { tick } from 'svelte'
   import { t as translate } from "../lib/i18n.svelte.js";
   import { scopedHash as filingHref } from '../lib/systems.svelte.js'
+  import { SUGGESTION_FIELDS, canApplySuggestion } from '../lib/suggestions.js'
   import { listTasks, resolveApprovalTask, retryDeadJob, dismissDeadJob, thumbPath,
            listIntelligence, resolveIntelligence } from '../lib/api.js'
   import { fmtDate, formatNumber, isHighSensitivity, plural } from '../lib/format.js'
@@ -179,10 +180,8 @@
   function taskChoices(t) {
     const choices = Array.isArray(t.choices) ? t.choices : []
     if (t.approval_name === 'document-change') {
-      if (!['jd_category', 'correspondent', 'tag', 'title', 'language', 'custom_field'].includes(t.vars?.field)) return []
-      return choices.filter(choice => choice === 'reject' || (choice === 'apply' &&
-        t.vars?.source_current === true && t.vars?.review_conflict === false &&
-        ['review_first', 'low_confidence'].includes(t.vars?.reason)))
+      if (!SUGGESTION_FIELDS.includes(t.vars?.field)) return []
+      return choices.filter(choice => choice === 'reject' || (choice === 'apply' && canApplySuggestion(t)))
     }
     if (t.approval_name === 'rescan-proposal') {
       return choices.filter(choice => ['approve_all', 'approve_sample', 'dismiss'].includes(choice) &&
@@ -270,7 +269,7 @@
       return t.prompt || t.title || translate("tasks.taskValue", { "id": t.id })
     }
     const value = suggestionValue(t.vars)
-    if (!['jd_category', 'correspondent', 'tag', 'title', 'language', 'custom_field'].includes(t.vars.field)) return translate("tasks.unsupportedActionReadOnly")
+    if (!SUGGESTION_FIELDS.includes(t.vars.field)) return translate("tasks.unsupportedActionReadOnly")
     const action = {
       jd_category: translate("tasks.filingUnderValue", { "value": value }),
       correspondent: translate("tasks.settingTheCorrespondentToValue", { "value": value }),

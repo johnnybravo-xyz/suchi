@@ -8111,3 +8111,44 @@ test('undoes Inbox filing from the notice and with the keyboard shortcut', async
   await expect.poll(() => writes.length).toBe(4)
   expect(writes.at(-1)).toEqual({ jd_category_id: 49 })
 })
+
+test('files an Inbox document under its pending suggestion in one click', async ({ page }) => {
+  const resolutions = []
+  const writes = []
+  const options = {
+    filingTreeChosen: true,
+    jdCategories: [
+      { id: 21, code: 21, name: 'Banking', area_code: 20, area_name: 'Money' },
+      { id: 49, code: 49, name: 'Inbox', area_code: 40, area_name: 'System', system: true },
+    ],
+    documents: [
+      { id: 42, title: 'Unfiled statement', jd_category_id: 49, created_at: 1780000000, tags: [] },
+      { id: 43, title: 'Unfiled note', jd_category_id: 49, created_at: 1780000000, tags: [] },
+    ],
+    approvalTasks: [{
+      id: 7, doc_id: 42, approval_name: 'document-change', choices: ['apply', 'reject'], status: 'open',
+      vars: { field: 'jd_category', proposed_id: 21, proposed_value: 'Banking', source_current: true, review_conflict: false, reason: 'review_first' },
+    }],
+  }
+  await mockAPI(page, options)
+  await page.route('**/api/approvals/tasks/7/resolve', route => {
+    resolutions.push(route.request().postDataJSON())
+    return route.fulfill({ json: {} })
+  })
+  await page.route('**/api/documents/42', route => {
+    if (route.request().method() !== 'PATCH') return route.fallback()
+    writes.push(route.request().postDataJSON())
+    return route.fulfill({ status: 204 })
+  })
+  await page.goto('/#/inbox')
+
+  const suggested = page.getByRole('button', { name: 'File Unfiled statement under 21 Banking, as suggested', exact: true })
+  await expect(suggested).toBeVisible()
+  await expect(page.getByRole('button', { name: /Unfiled note under .*, as suggested/ })).toHaveCount(0)
+  await suggested.click()
+  await expect.poll(() => resolutions).toEqual([{ choice: 'apply' }])
+  const notice = page.locator('.topbar .notice')
+  await expect(notice).toContainText('Filed under 21 Banking')
+  await notice.getByRole('button', { name: /Undo/ }).click()
+  await expect.poll(() => writes).toEqual([{ jd_category_id: 49 }])
+})
