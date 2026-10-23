@@ -8057,3 +8057,24 @@ test('Account subscription restores saved model after disconnect and reconnect',
   expect(settingsRequests).toEqual([])
   expect(testRequests).toEqual([])
 })
+
+test('refreshes a processing document once archive status reports finished work', async ({ page }) => {
+  const options = {
+    filingTreeChosen: true,
+    processingReading: 1,
+    documentDetails: { 42: { document: { processing: true, title: 'IMG_2047.pdf', content: '' } } },
+  }
+  await mockAPI(page, options)
+  await page.clock.install()
+  await page.goto('/#/doc/42')
+  const note = page.getByRole('status').filter({ hasText: 'Still processing.' })
+  await expect(note).toBeVisible()
+  await expect(page.locator('.processing-ribbon')).toHaveAttribute('href', '#/documents?q=is%3Aprocessing')
+
+  options.processingReading = 0
+  options.documentDetails[42].document = { processing: false, title: 'Electricity bill March 2026', content: 'Electricity bill' }
+  await page.clock.runFor(5_000)
+  await expect(note).toHaveCount(0)
+  await expect(page.locator('.processing-ribbon')).toHaveCount(0)
+  await expect(page.locator('.title-rename')).toHaveText('Electricity bill March 2026')
+})

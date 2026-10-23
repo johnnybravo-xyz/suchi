@@ -181,8 +181,9 @@ input, select, textarea { font: inherit; color: inherit; }
   padding: 8px 11px 8px 9px;
   border: 1px solid var(--line-strong); border-radius: 8px;
   background: var(--surface); color: var(--muted);
-  font-size: .7rem; font-weight: 700; white-space: nowrap;
+  font-size: .7rem; font-weight: 700; white-space: nowrap; text-decoration: none;
 }
+.processing-ribbon:hover { border-color: var(--accent); color: var(--accent); }
 .processing-ribbon-dot {
   width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
   animation: processing-pulse 1.2s ease-in-out infinite;

@@ -2,15 +2,14 @@
 <script>
   import { t as translate } from "./i18n.svelte.js";
   import { captureScope, scopeCurrent, scopedHash as filingHref } from './systems.svelte.js'
-  import { onMount, onDestroy } from 'svelte'
+  import { onMount, onDestroy, untrack } from 'svelte'
   import { session } from './session.svelte.js'
   import { uploadDocument, getDocument, listDocuments, listTasks } from './api.js'
   import { fmtBytes, plural } from './format.js'
   import { markUploaded } from './upload_bus.svelte.js'
+  import { processingBus } from './processing_bus.svelte.js'
   import Icon from './Icon.svelte'
 
-  const CHECK_DELAY = 2500
-  const MAX_CHECKS = 40
   const CHECK_CONCURRENCY = 4
 
   let { initialFiles = [], onInitialFilesConsumed } = $props()
@@ -21,8 +20,8 @@
   let fileInput
   let mounted = true
   let workerRunning = false
-  let pollRunning = false
-  let pollTimer
+  let checking = false
+  let recheck = false
   const scope = captureScope()
   const processingQueue = new Set()
   // Rejected ASN scans end their job error with "<code>[ page=N][ asn=M][ doc=ID]";
@@ -72,8 +71,14 @@
   onDestroy(() => {
     mounted = false
     clearPreviews()
-    clearTimeout(pollTimer)
     processingQueue.clear()
+  })
+
+  // Unfinished uploads are re-checked only when App's stats poll reports
+  // that work may have finished; this page runs no timer of its own.
+  $effect(() => {
+    processingBus.revision
+    untrack(() => void checkQueue())
   })
 
   function current(user) {
@@ -106,8 +111,6 @@
         id: null,
         children: [],
         address: '',
-        checks: 0,
-        paused: false,
       })
     }
     if (!additions.length) return
@@ -151,36 +154,28 @@
   }
 
   function watchProcessing(entry) {
-    entry.checks = 0
-    entry.paused = false
     entry.state = 'processing'
     processingQueue.add(entry)
-    schedulePoll(0)
+    void checkQueue()
   }
 
-  function schedulePoll(delay = CHECK_DELAY) {
-    if (!mounted || pollRunning || pollTimer || !processingQueue.size) return
-    pollTimer = setTimeout(() => {
-      pollTimer = null
-      void pollProcessing()
-    }, delay)
-  }
-
-  async function pollProcessing() {
-    if (!mounted || pollRunning) return
-    pollRunning = true
+  async function checkQueue() {
+    if (checking) {
+      recheck = true
+      return
+    }
+    if (!mounted || !processingQueue.size) return
+    checking = true
     const user = session.user
-    const entries = [...processingQueue].slice(0, CHECK_CONCURRENCY)
-    await Promise.all(entries.map(entry => checkProcessing(entry, user)))
-    pollRunning = false
-    if (mounted && processingQueue.size) schedulePoll()
-  }
-
-  function pauseChecks(entry) {
-    if (entry.checks < MAX_CHECKS) return false
-    processingQueue.delete(entry)
-    entry.paused = true
-    return true
+    const entries = [...processingQueue]
+    for (let start = 0; start < entries.length; start += CHECK_CONCURRENCY) {
+      await Promise.all(entries.slice(start, start + CHECK_CONCURRENCY).map(entry => checkProcessing(entry, user)))
+    }
+    checking = false
+    if (recheck) {
+      recheck = false
+      void checkQueue()
+    }
   }
 
   async function checkProcessing(entry, user) {
@@ -188,7 +183,6 @@
       processingQueue.delete(entry)
       return
     }
-    entry.checks++
     try {
       const tasks = await listTasks({ include: 'jobs', doc_id: entry.id, kind: 'post-', limit: 200 })
       if (!current(user)) return
@@ -197,7 +191,6 @@
       const failedJob = tasks.results.find(job => job.state === 'dead')
       if (active) {
         entry.state = 'processing'
-        pauseChecks(entry)
         return
       }
       const doc = await getDocument(entry.id)
@@ -227,7 +220,6 @@
     } catch {
       if (!current(user)) return
       entry.state = 'status_unknown'
-      pauseChecks(entry)
     }
   }
 
@@ -396,7 +388,6 @@
               </div>
             {/if}
             {#if entry.error}<span class="row-error" role="alert">{entry.error}</span>{/if}
-            {#if entry.paused}<span>{translate("uploadBox.automaticChecksPausedProcessingContinuesOnThe")}</span>{/if}
           </div>
           <div class="row-actions">
             {#if entry.state === 'upload_failed' && entry.statusCode !== 413}
@@ -405,7 +396,7 @@
             {#if entry.state === 'upload_failed'}
               <button class="btn sm" onclick={() => remove(entry)}>{translate("uploadBox.remove")}</button>
             {/if}
-            {#if entry.id && (entry.paused || entry.state === 'processing_failed')}
+            {#if entry.id && (entry.state === 'status_unknown' || entry.state === 'processing_failed')}
               <button class="btn sm" onclick={() => watchProcessing(entry)}>{translate("uploadBox.checkAgain")}</button>
             {/if}
             {#if entry.id && !entry.children.length}<a class="btn sm" href={filingHref(`#/doc/${entry.id}`)}>{translate("uploadBox.openDocument")}</a>{/if}

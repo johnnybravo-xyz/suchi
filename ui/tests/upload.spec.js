@@ -11,6 +11,7 @@ async function mockUpload(page, options = {}) {
     let body = { results: [], count: 0 }
     if (url.pathname === '/api/whoami') body = { user_id: 1, email: 'reader@example.test', role: 'member', capabilities: [] }
     else if (url.pathname === '/api/demo/mode') body = { enabled: false }
+    else if (url.pathname === '/api/stats/') body = { processing_reading: options.processing?.() ?? 0, processing_classifying: 0 }
     else if (url.pathname === '/api/documents/' && request.method() === 'POST') {
       uploads.push(request)
       if (options.upload) return options.upload(route, uploads.length)
@@ -168,11 +169,16 @@ test('reports uploaded, duplicate, restored, and failed files distinctly', async
   await expect(page.getByRole('link', { name: 'Open document', exact: true })).toHaveCount(3)
 })
 
-test('waits for processing to finish before reading the document', async ({ page }) => {
+test('re-checks an upload only when archive status reports finished work', async ({ page }) => {
   let jobs = [{ kind: 'post-ingest', state: 'running' }]
+  let taskReads = 0
   let documentReads = 0
   await mockUpload(page, {
-    tasks: route => route.fulfill({ json: { results: jobs } }),
+    processing: () => jobs.length,
+    tasks: route => {
+      taskReads++
+      return route.fulfill({ json: { results: jobs } })
+    },
     document: route => {
       documentReads++
       return route.fulfill({ json: { id: 41, title: 'Blank scan', content: '   ', tags: [] } })
@@ -182,13 +188,15 @@ test('waits for processing to finish before reading the document', async ({ page
   await page.goto('/#/upload')
   await page.locator('input[type=file]').setInputFiles(file('blank.png'))
   await expect(page.getByText('Uploaded · Processing', { exact: true })).toBeVisible()
-  expect(documentReads).toBe(0)
+  await expect.poll(() => taskReads).toBe(1)
+  // Still one unfinished document: the page waits instead of polling.
   jobs = [{ kind: 'post-classify', state: 'pending' }]
-  await page.clock.runFor(2500)
+  await page.clock.runFor(15_000)
   await expect(page.getByText('Uploaded · Processing', { exact: true })).toBeVisible()
+  expect(taskReads).toBe(1)
   expect(documentReads).toBe(0)
   jobs = []
-  await page.clock.runFor(2500)
+  await page.clock.runFor(5_000)
   await expect(page.getByText('Ready · No text found', { exact: true })).toBeVisible()
   expect(documentReads).toBe(1)
 })
@@ -215,26 +223,6 @@ test('shows documents created from a split scan instead of linking the retired b
   await expect(page.getByRole('link', { name: 'Open document', exact: true })).toHaveCount(0)
 })
 
-test('keeps processing honest after automatic checks pause and allows checking again', async ({ page }) => {
-  let jobs = [{ kind: 'post-ingest', state: 'running' }]
-  let reads = 0
-  await mockUpload(page, { tasks: route => { reads++; return route.fulfill({ json: { results: jobs } }) } })
-  await page.clock.install()
-  await page.goto('/#/upload')
-  await page.locator('input[type=file]').setInputFiles(file('slow.png'))
-  await expect.poll(() => reads).toBe(1)
-  for (let check = 2; check <= 40; check++) {
-    await page.clock.runFor(2500)
-    await expect.poll(() => reads).toBe(check)
-  }
-  await expect(page.getByText('Uploaded · Processing', { exact: true })).toBeVisible()
-  await expect(page.getByText('Automatic checks paused. Processing continues on the server.', { exact: true })).toBeVisible()
-  await expect(page.getByText('Ready', { exact: true })).toHaveCount(0)
-  jobs = []
-  await page.getByRole('button', { name: 'Check again', exact: true }).click()
-  await expect(page.getByText('Ready', { exact: true })).toBeVisible()
-})
-
 test('shows unavailable and failed processing without claiming completion', async ({ page }) => {
   let unavailable = true
   await mockUpload(page, { tasks: route => unavailable
@@ -245,7 +233,7 @@ test('shows unavailable and failed processing without claiming completion', asyn
   await page.locator('input[type=file]').setInputFiles(file('failed.png'))
   await expect(page.getByText('Could not check processing status', { exact: true })).toBeVisible()
   unavailable = false
-  await page.clock.runFor(2500)
+  await page.clock.runFor(15_000)
   await expect(page.getByText('Processing needs attention', { exact: true })).toBeVisible()
   await expect(page.getByText('Ready', { exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Check again', exact: true })).toBeVisible()

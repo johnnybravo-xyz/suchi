@@ -163,8 +163,13 @@ queue. The shell routes top-bar, command and global-drop entry points there; no
 second modal owns upload state. A batch records every file synchronously in
 selection order and sends them sequentially to its captured system. Each entry
 keeps one idempotency key for retry and drops its `File` after acceptance.
-A single bounded scheduler checks processing tasks before fetching terminal
-document details, so active jobs do not cause repeated document reads. When the
+Rows are checked once after acceptance, then only when `processing_bus.svelte.js`
+reports that App's `/api/stats/` poll saw finished work (fewer unfinished
+documents, or none); the screen owns no timer. Checks run four at a time and read
+processing tasks before terminal document details, so active jobs do not cause
+repeated document reads. Document Detail uses the same signal to re-fetch a
+document whose `processing` flag is set, merging the fresh fields without the
+full load that would reset open editors. When the
 accepted row is retired by splitting, the queue requests its immutable
 `split_origin_id`, orders children by `split_index`, and replaces the parent
 success link with links to every child, including their ASN chips. Navigation

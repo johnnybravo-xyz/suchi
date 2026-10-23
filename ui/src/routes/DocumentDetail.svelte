@@ -19,6 +19,7 @@
   import DocumentLinkDialog from '../lib/DocumentLinkDialog.svelte'
   import ShareLinkForm from '../lib/ShareLinkForm.svelte'
   import { markUploaded } from '../lib/upload_bus.svelte.js'
+  import { processingBus } from '../lib/processing_bus.svelte.js'
   import { parseDocumentReference } from '../lib/documentReferences.js'
 
   let { id, notify, jdCategories = [] } = $props()
@@ -225,6 +226,27 @@
     }
     return [...m.values()].sort((a, b) => a.lo - b.lo)
   })
+
+  // While the server is still reading or classifying this document, refresh
+  // only the document when App's stats poll reports finished work. Edits in
+  // progress are kept; a full load() would reset them.
+  $effect(() => {
+    processingBus.revision
+    untrack(() => { if (doc?.processing) void refreshProcessed() })
+  })
+
+  async function refreshProcessed() {
+    const version = loadVersion
+    const scope = captureScope()
+    const documentID = id
+    try {
+      const fresh = await getDocument(documentID)
+      if (version !== loadVersion || !scopeCurrent(scope) || !doc) return
+      doc = editingTitle ? { ...fresh, title: doc.title } : fresh
+      if (!editingTitle) titleDraft = fresh.title
+      if (!fresh.processing) void loadSimilarDocuments(documentID, version, scope)
+    } catch {}
+  }
 
   async function load(preserveRelatedTab = false) {
     const selectedRelatedTab = preserveRelatedTab ? relatedTab : 'similar'
@@ -1474,6 +1496,11 @@
                 <span class="dot {sensDot(doc.sensitivity)}"></span>{doc.title || translate("documentDetail.documentValue", { "id": doc.id })}
               </button>
             </h2>
+            {#if doc.processing}
+              <p class="processing-note" role="status">
+                <span class="processing-ribbon-dot" aria-hidden="true"></span>{translate("documentDetail.stillProcessing")}
+              </p>
+            {/if}
             {#if doc.title_owner === 'human'}
               <div class="title-pin">
                 <Icon name="pin" size={13} />
@@ -2351,6 +2378,7 @@
   .title-rename .dot { display:inline-block; margin-right:8px; }
   /* Centred on the title's first line box (1.15rem × the body's 1.55 line height), so long titles wrap below it. */
   .title-address { flex:none; font-size:.76rem; line-height:1; padding:3px 7px; margin-top:calc((1.15rem * 1.55 - .76rem - 6px) / 2); }
+  .processing-note { display:flex; align-items:center; gap:7px; margin:0; color:var(--muted); font-size:.75rem; }
   .title-pin { display:flex; flex-wrap:wrap; align-items:center; gap:6px; color:var(--muted); font-size:.75rem; }
   .title-pin .btn.sm { padding:1px 8px; font-size:.7rem; }
   .document-tags { min-width:0 }

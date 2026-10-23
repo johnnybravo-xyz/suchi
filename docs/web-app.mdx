@@ -94,9 +94,11 @@ row links to its document; a feeder scan split by ASN labels changes to
 **Created _n_ documents** with an ordered link and ASN chip for every child.
 
 Network and server failures retain the file for **Retry**. An oversized file
-instead asks for a smaller file or a changed server limit. Processing checks do
-not claim completion when the server is unavailable; **Check again** resumes a
-paused or failed check. Focus the drop area to paste a screenshot, then choose
+instead asks for a smaller file or a changed server limit. Each accepted row is
+checked once, then again only when the top bar's status refresh reports finished
+work, so the page runs no timer of its own. A check made while the server is
+unavailable says so instead of claiming completion; **Check again** retries it
+or a failed one. Focus the drop area to paste a screenshot, then choose
 **Upload image** or **Discard**. Accepted batches keep their original filing
 system and continue while the same account remains signed in; closing the browser
 can interrupt them.
@@ -145,8 +147,10 @@ request. Loading or unavailable counts show `—`, not zero or a healthy status.
 While documents are still being read or classified, a pulsing **Processing N of M**
 marker sits in the top bar on every page. M is the size of the current run, so it
 starts at the number waiting when you first see the marker and resets once the
-queue is empty; hover for the reading and classifying counts. Narrow screens show
-the remaining count.
+queue is empty; hover for the reading and classifying counts, or select it to list
+those documents (`is:processing`). Narrow screens show the remaining count. An
+open document that is still processing says so under its title and refreshes once
+the work finishes, keeping any edit in progress.
 **Recently added** shows six newest visible documents. **Views** shows up to four
 shortcuts with filter summaries, including at least one shared view when available.
 **New view** starts creation; the empty message is **No saved views yet.** Read

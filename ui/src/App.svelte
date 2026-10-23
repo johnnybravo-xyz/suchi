@@ -11,6 +11,7 @@
   import Icon from './lib/Icon.svelte'
   import Omnibox from './lib/Omnibox.svelte'
   import Lazy from './lib/Lazy.svelte'
+  import { noteProcessing, processingBus } from './lib/processing_bus.svelte.js'
   import BrandMark from './lib/BrandMark.svelte'
 
   const lazyRoutes = {
@@ -84,6 +85,11 @@
     if (!statsPolling || !tabVisible) return
     const timer = setInterval(pollStats, processingActive ? 5_000 : 15_000)
     return () => clearInterval(timer)
+  })
+  // An upload starts processing; poll at once so the faster cadence starts
+  // now rather than on the next slow tick.
+  $effect(() => {
+    if (processingBus.refresh && statsPolling) untrack(pollStats)
   })
   const filingTree = $derived(jdTree
     .map((area) => ({ ...area, categories: area.categories.filter((category) => !category.system) }))
@@ -259,6 +265,7 @@
       statsError = ''
       const remaining = (st?.processing_reading ?? 0) + (st?.processing_classifying ?? 0)
       processingPeak = remaining ? Math.max(processingPeak, remaining) : 0
+      noteProcessing(remaining)
       inboxCount = st?.inbox_count ?? 0
       revealPendingInbox()
     } catch (ex) {
@@ -630,13 +637,13 @@
           </button>
         {/if}
         {#if processingActive}
-          <span class="processing-ribbon" role="status"
-                aria-label={translate("app.processingProgress", { done: processingPeak - processing, total: processingPeak })}
-                title={translate("app.processingDetail", { reading: st.processing_reading ?? 0, classifying: st.processing_classifying ?? 0 })}>
+          <a class="processing-ribbon" href={filingHref(`#/documents?q=${encodeURIComponent('is:processing')}`)}
+             aria-label={translate("app.processingProgress", { done: processingPeak - processing, total: processingPeak })}
+             title={translate("app.processingDetail", { reading: st.processing_reading ?? 0, classifying: st.processing_classifying ?? 0 })}>
             <span class="processing-ribbon-dot" aria-hidden="true"></span>
             <span class="processing-ribbon-label">{translate("app.processingProgress", { done: processingPeak - processing, total: processingPeak })}</span>
             <span class="processing-ribbon-count" aria-hidden="true">{processing}</span>
-          </span>
+          </a>
         {/if}
         <button class="btn primary topbar-upload" disabled={!scopeReady} onclick={openUpload} aria-label={translate("app.uploadDocuments")}>
           <Icon name="upload" size={15} /><span>{translate("app.upload")}</span>
