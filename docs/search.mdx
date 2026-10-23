@@ -75,7 +75,10 @@ physical search/storage separation.
   Thai text, which has no spaces for `unicode61` to split on.
 
 Insert, delete, and title/content update triggers keep both FTS rows synchronized
-with `documents`. The index stores searchable text, not original file bytes.
+with `documents`. An update that writes back the same title and content (a
+missing text counts as empty) leaves both indexes untouched; the document's
+revision counters still advance. The index stores searchable text, not original
+file bytes.
 
 Suchi currently has no vector index or embedding queue. “Semantic” behavior in
 the product comes from explicit metadata, approved extracted facts, lexical

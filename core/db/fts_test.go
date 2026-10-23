@@ -143,3 +143,61 @@ func trigramHits(t *testing.T, d *db.DB, term string) int {
 	}
 	return n
 }
+
+// Writing back the same title and content leaves both search indexes alone,
+// while the source revision still counts the write. Real changes, including
+// NULL transitions, still reindex.
+func TestFTSSkipsUnchangedText(t *testing.T) {
+	d, log := openSetDB(t)
+	migs, err := db.LoadMigrations(migrations.FS, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrate(t.Context(), d, migs, log); err != nil {
+		t.Fatal(err)
+	}
+	execMigrationFixture(t, d, `
+		INSERT INTO users(id, email, display_name, role, created_at, updated_at) VALUES (1, 'a@b.c', 'a', 'admin', 0, 0);
+		INSERT INTO jd_areas(system_id, code_start, code_end, name, position) VALUES (1, 10, 19, 'test', 0);
+		INSERT INTO jd_categories(system_id, id, area_start, code, name, system) VALUES (1, 1, 10, 11, 'inbox', 1);
+		INSERT INTO documents(system_id, id, owner_id, original_blob, original_size, title, content, jd_category_id, created_at, updated_at)
+			VALUES (1, 100, 1, 'sha_a', 1, 'Electricity bill', 'total due', 1, 0, 0)`)
+	indexState := func() string {
+		t.Helper()
+		var state string
+		if err := d.Read.QueryRow(`SELECT
+			(SELECT count(*) || ':' || sum(length(block)) FROM documents_fts_data) || '|' ||
+			(SELECT count(*) || ':' || sum(length(block)) FROM documents_trigram_data)`).Scan(&state); err != nil {
+			t.Fatal(err)
+		}
+		return state
+	}
+	write := func(query string) {
+		t.Helper()
+		execMigrationFixture(t, d, query)
+		execMigrationFixture(t, d, `
+			INSERT INTO documents_fts(documents_fts, rank) VALUES ('integrity-check', 1);
+			INSERT INTO documents_trigram(documents_trigram, rank) VALUES ('integrity-check', 1)`)
+	}
+
+	before := indexState()
+	write(`UPDATE documents SET title = title, content = content WHERE id = 100`)
+	if got := indexState(); got != before {
+		t.Fatalf("same-value write changed the indexes: %s -> %s", before, got)
+	}
+	assertMigrationScalar(t, d, `SELECT source_revision FROM documents WHERE id = 100`, 1)
+
+	write(`UPDATE documents SET content = NULL WHERE id = 100`)
+	if ftsHits(t, d, "total") != 0 || trigramHits(t, d, `"total"`) != 0 {
+		t.Fatal("cleared content is still indexed")
+	}
+	before = indexState()
+	write(`UPDATE documents SET content = '' WHERE id = 100`)
+	if got := indexState(); got != before {
+		t.Fatalf("NULL to empty content changed the indexes: %s -> %s", before, got)
+	}
+	write(`UPDATE documents SET title = 'Water bill', content = 'meter reading' WHERE id = 100`)
+	if ftsHits(t, d, "water") != 1 || trigramHits(t, d, `"reading"`) != 1 || ftsHits(t, d, "electricity") != 0 {
+		t.Fatal("changed text was not reindexed")
+	}
+}

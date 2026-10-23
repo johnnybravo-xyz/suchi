@@ -24,3 +24,26 @@ ALTER TABLE document_sources ADD COLUMN filename TEXT NOT NULL DEFAULT '';
 -- client names the official app behind an API upload, set from server-issued
 -- token provenance. label stays the uploading person.
 ALTER TABLE document_sources ADD COLUMN client TEXT NOT NULL DEFAULT '' CHECK (client IN ('', 'companion_app'));
+
+-- The word and trigram indexes skip writes that leave the indexed title and
+-- content unchanged. The revision triggers still count every write, because a
+-- same-value write intentionally invalidates evidence.
+DROP TRIGGER documents_fts_au;
+CREATE TRIGGER documents_fts_au AFTER UPDATE OF title, content ON documents
+WHEN old.title IS NOT new.title OR coalesce(old.content, '') IS NOT coalesce(new.content, '')
+BEGIN
+    INSERT INTO documents_fts(documents_fts, rowid, title, content)
+    VALUES ('delete', old.id, old.title, coalesce(old.content, ''));
+    INSERT INTO documents_fts(rowid, title, content)
+    VALUES (new.id, new.title, coalesce(new.content, ''));
+END;
+
+DROP TRIGGER documents_trigram_au;
+CREATE TRIGGER documents_trigram_au AFTER UPDATE OF title, content ON documents
+WHEN old.title IS NOT new.title OR coalesce(old.content, '') IS NOT coalesce(new.content, '')
+BEGIN
+    INSERT INTO documents_trigram(documents_trigram, rowid, title, content)
+    VALUES ('delete', old.id, old.title, coalesce(old.content, ''));
+    INSERT INTO documents_trigram(rowid, title, content)
+    VALUES (new.id, new.title, coalesce(new.content, ''));
+END;

@@ -126,6 +126,9 @@ Notable user-visible changes to Suchi are recorded here.
   reading the whole archive first. Such a search in a small system or a filtered
   Documents list is many times faster.
 
+- Writing back a document's unchanged title and text, as reprocessing often
+  does, no longer rewrites both search indexes. Revision counters still advance.
+
 ### Fixed
 
 - Versioned filesystem sidecars now validate and restore document sensitivity,
