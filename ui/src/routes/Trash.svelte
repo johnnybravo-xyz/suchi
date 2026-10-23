@@ -137,7 +137,6 @@
       <div class="trash-empty" role="status">
         <Icon name="trash" size={42} />
         <b>{translate("trash.trashIsEmpty")}</b>
-        <span>{translate("trash.emptyStateRestoreNote")}</span>
       </div>
     {:else}
       <div class="trash-list">
@@ -233,7 +232,6 @@
     color:var(--muted);text-align:center;
   }
   .trash-empty b { color:var(--ink);font-size:1rem }
-  .trash-empty span { max-width:440px;font-size:.84rem;line-height:1.5 }
   @media (max-width: 800px) {
     .trash-row { grid-template-columns:minmax(0,1fr);gap:14px;padding:16px 20px }
     .trash-outcome { justify-content:space-between;padding-top:14px;border-top:1px solid var(--line) }

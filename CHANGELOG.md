@@ -110,8 +110,8 @@ Notable user-visible changes to Suchi are recorded here.
   prior filing address chip, and ends its compact metadata line with the prior
   category name. A day countdown to deletion turns into an amber pill in the
   final week, beside a safer-looking **Restore** action and a plain
-  permanent-delete action. The zero-count action disables and the empty state
-  stays in the card.
+  permanent-delete action. The zero-count action disables, and the empty state
+  now shows only **Trash is empty.**
 
 - Saved decryption passwords now separate their editable label, last-used date,
   and most recently unlocked document into labeled columns. Labels remain plain

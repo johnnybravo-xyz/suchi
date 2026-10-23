@@ -1949,7 +1949,6 @@
   "trash.deletesOnValue": "Deletes {date}",
   "trash.documentsArePermanentlyDeleted30DaysAfter": "Deleted documents wait here for 30 days. Restore puts one back where it was filed.",
   "trash.documentValue": "Document #{id}",
-  "trash.emptyStateRestoreNote": "Restoring a document returns it to the filing category shown on its row.",
   "trash.emptyTrash": "Empty trash",
   "trash.emptyTrash2": "Empty Trash?",
   "trash.permanentlyDeleted": "Permanently deleted",
