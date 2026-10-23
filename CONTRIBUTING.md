@@ -5,7 +5,7 @@ still pre-1.0, so prefer clear designs over compatibility layers.
 
 ## Get started
 
-The workspace uses Go 1.27.2 or newer and Bun 1.4.1.
+The workspace uses Go 1.27.3 or newer and Bun 1.4.1.
 
 ```sh
 git clone git@github.com:johnnybravo-xyz/suchi.git

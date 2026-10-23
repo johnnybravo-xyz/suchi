@@ -199,6 +199,12 @@ Notable user-visible changes to Suchi are recorded here.
 - Query examples now filter by imported document type with
   `tag:"type:invoice"`; bare `type:` is not a query filter.
 
+### Security
+
+- Build with Go 1.27.3 to include the standard-library `crypto/x509` fix that
+  distrusts compromised intermediate certificates (GO-2026-6809), which mailbox
+  TLS connections rely on.
+
 ## [0.3.0] - 2026-10-14
 
 ### Changed

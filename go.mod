@@ -1,6 +1,6 @@
 module github.com/johnnybravo-xyz/suchi
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/AzureAD/microsoft-authentication-library-for-go v1.10.1

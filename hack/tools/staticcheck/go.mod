@@ -1,6 +1,6 @@
 module suchi.tools/staticcheck
 
-go 1.27.2
+go 1.27.3
 
 require (
 	honnef.co/go/tools v0.8.1

@@ -1,3 +1,3 @@
 module github.com/johnnybravo-xyz/suchi/ui
 
-go 1.27.2
+go 1.27.3
