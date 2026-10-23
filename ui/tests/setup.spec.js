@@ -8270,3 +8270,39 @@ test('offers rich query examples, a shortcut overlay and other ways to add docum
   await expect.poll(() => searches.some(query => query?.startsWith('date-role:expiry date:>='))).toBe(true)
   await expect(page).toHaveURL(/#\/search\?q=date-role%3Aexpiry/)
 })
+
+test('refreshes the processing list as documents finish and stays quiet when idle', async ({ page }) => {
+  const listRequests = []
+  const options = {
+    filingTreeChosen: true,
+    processingReading: 2,
+    documents: [
+      { id: 61, title: 'Scan one', created_at: 1780000000, tags: [] },
+      { id: 62, title: 'Scan two', created_at: 1780000000, tags: [] },
+    ],
+  }
+  await mockAPI(page, options)
+  page.on('request', request => {
+    const url = new URL(request.url())
+    if (url.pathname === '/api/documents/' && url.searchParams.get('q') === 'is:processing') listRequests.push(url.search)
+  })
+  await page.clock.install()
+  await page.goto('/#/documents?q=is%3Aprocessing')
+  await expect(page.locator('.document-row')).toHaveCount(2)
+  const initial = listRequests.length
+
+  options.processingReading = 1
+  options.documents = [options.documents[1]]
+  await page.clock.runFor(5_000)
+  await expect(page.locator('.document-row')).toHaveCount(1)
+  expect(listRequests.length).toBe(initial + 1)
+
+  options.processingReading = 0
+  options.documents = []
+  await page.clock.runFor(5_000)
+  await expect(page.locator('.document-row')).toHaveCount(0)
+  const settled = listRequests.length
+  // Nothing left processing: idle status polls do not reload the list.
+  await page.clock.runFor(60_000)
+  expect(listRequests.length).toBe(settled)
+})

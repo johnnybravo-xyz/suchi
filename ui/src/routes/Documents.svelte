@@ -7,6 +7,7 @@
   import { listDocuments, listTags, listAllTags, listCorrespondents, patchDocument, deleteDocument, restoreDocument, bulkEdit, listTasks, resolveApprovalTask, createShareLink, thumbPath, decryptDocument, decryptBatch, extractIntelligence } from '../lib/api.js'
   import { route, go } from '../lib/router.svelte.js'
   import { uploadBus } from '../lib/upload_bus.svelte.js'
+  import { processingBus } from '../lib/processing_bus.svelte.js'
   import { SENSITIVITY_OPTIONS, fmtDate, formatNumber, isHighSensitivity, plural, sensDot } from '../lib/format.js'
   import { session } from '../lib/session.svelte.js'
   import { hasCapability } from '../lib/capabilities.js'
@@ -32,6 +33,16 @@
   let tags = $state([]), correspondents = $state([])
   let facetError = $state('')
   const fQuery = $derived(route.query.get('q') || '')
+  // The processing marker's list (is:processing) refreshes as documents
+  // finish; other lists ignore the signal.
+  const listsProcessing = $derived(/(^|\s)is:processing(\s|$)/.test(fQuery))
+  let seenFinished = processingBus.finished
+  $effect(() => {
+    const finished = processingBus.finished
+    if (finished === seenFinished) return
+    seenFinished = finished
+    untrack(() => { if (listsProcessing) void load({ background: true }) })
+  })
   const fTag = $derived(route.query.get('tags__id__in') || '')
   const fCorr = $derived(route.query.get('correspondents__id__in') || '')
   const fCorrMissing = $derived(route.query.get('correspondents__isnull') === 'true')

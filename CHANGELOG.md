@@ -45,7 +45,8 @@ Notable user-visible changes to Suchi are recorded here.
 - A **Processing N of M** marker in the top bar shows that documents you can see
   are still being read or classified, and how far the current run has got. It
   updates every 5 seconds while work remains, and selecting it lists those
-  documents with the new `is:processing` query term. `/api/stats/` now returns
+  documents with the new `is:processing` query term; that list refreshes as
+  each one finishes. `/api/stats/` now returns
   `processing_reading` and `processing_classifying`, and document details report
   `processing`. An open document that is still processing says so and refreshes
   when it finishes. Upload re-checks its rows only when that status reports

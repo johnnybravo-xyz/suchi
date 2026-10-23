@@ -170,7 +170,10 @@ documents, or none); the screen owns no timer. Checks run four at a time and rea
 processing tasks before terminal document details, so active jobs do not cause
 repeated document reads. Document Detail uses the same signal to re-fetch a
 document whose `processing` flag is set, merging the fresh fields without the
-full load that would reset open editors. When the
+full load that would reset open editors. A Documents list whose query includes
+`is:processing` reloads in the background on the bus's separate `finished`
+counter, which advances only when the unfinished count drops, so idle polls
+never reload a list. When the
 accepted row is retired by splitting, the queue requests its immutable
 `split_origin_id`, orders children by `split_index`, and replaces the parent
 success link with links to every child, including their ASN chips. Navigation
