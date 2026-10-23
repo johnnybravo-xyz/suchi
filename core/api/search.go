@@ -215,14 +215,16 @@ func (s *Server) Search(w http.ResponseWriter, r *http.Request) {
 
 // searchFTSPageSQL ranks word-index hits (porter stems, bm25 plus recency)
 // ahead of substring-only trigram hits, then documents matched only by the
-// short-term scan. Excerpts come from the word index when it matched, else
-// from a highlighted trigram window.
+// short-term substring check. Excerpts come from the word index when it
+// matched, else from a highlighted trigram window. A word hit's score always
+// wins, so the trigram index only scores documents the word index missed.
 func searchFTSPageSQL(whereSQL string, trigram bool) string {
 	trigramCTE, trigramJoin, trigramScore, trigramPassage := "", "", "NULL", "NULL"
 	if trigram {
 		trigramCTE = `, trigram_hits AS MATERIALIZED (
 			SELECT rowid AS id, bm25(documents_trigram, ?, ?) AS score
 			FROM documents_trigram WHERE documents_trigram MATCH ?
+			  AND rowid NOT IN (SELECT id FROM word_hits)
 		)`
 		trigramJoin = `
 			LEFT JOIN trigram_hits ON trigram_hits.id = d.id`

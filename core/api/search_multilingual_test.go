@@ -100,6 +100,55 @@ func TestSearchRanksWordMatchesBeforeSubstringMatches(t *testing.T) {
 	}
 }
 
+// A document found by both indexes keeps its word-index score; a substring-only
+// hit keeps its trigram score.
+func TestSearchScoresEachHitFromItsBestIndex(t *testing.T) {
+	s := newChatTestServer(t)
+	seedMultilingualDocs(t, s)
+	plan, err := s.compileQuery(context.Background(), "invoice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[int64]float64{}
+	for _, index := range []struct{ table, match string }{
+		{"documents_trigram", plan.TrigramMatch},
+		{"documents_fts", plan.Match},
+	} {
+		rows, err := s.DB.Read.Query(`SELECT rowid, bm25(`+index.table+`, ?, ?) FROM `+index.table+` WHERE `+index.table+` MATCH ?`,
+			bm25TitleWeight, bm25ContentWeight, index.match)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for rows.Next() {
+			var id int64
+			var score float64
+			if err := rows.Scan(&id, &score); err != nil {
+				t.Fatal(err)
+			}
+			want[id] = score
+		}
+		if err := rows.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest("GET", "/api/search/?q=invoice&recency=off", nil).
+		WithContext(auth.WithPrincipal(context.Background(), adminPrincipal(1)))
+	s.Search(recorder, request)
+	var response searchResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Results) != 2 || len(want) != 2 {
+		t.Fatalf("results=%+v index scores=%v", response.Results, want)
+	}
+	for _, hit := range response.Results {
+		if hit.Rank != want[hit.ID] {
+			t.Errorf("document %d rank=%v, want %v", hit.ID, hit.Rank, want[hit.ID])
+		}
+	}
+}
+
 func TestChatRetrievesUnspacedTerms(t *testing.T) {
 	s := newChatTestServer(t)
 	seedMultilingualDocs(t, s)

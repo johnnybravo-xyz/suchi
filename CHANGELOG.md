@@ -117,6 +117,10 @@ Notable user-visible changes to Suchi are recorded here.
   and most recently unlocked document into labeled columns. Labels remain plain
   text until the pencil action opens inline editing.
 
+- Searches for common words return about a quarter faster: the substring index
+  no longer scores documents the word index already found. Results, order and
+  scores are unchanged.
+
 ### Fixed
 
 - Versioned filesystem sidecars now validate and restore document sensitivity,
