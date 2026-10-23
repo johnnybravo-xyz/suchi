@@ -121,6 +121,11 @@ Notable user-visible changes to Suchi are recorded here.
   no longer scores documents the word index already found. Results, order and
   scores are unchanged.
 
+- One- and two-character Chinese, Japanese, Korean and Thai terms now check only
+  the documents left by the selected system, filters and permissions instead of
+  reading the whole archive first. Such a search in a small system or a filtered
+  Documents list is many times faster.
+
 ### Fixed
 
 - Versioned filesystem sidecars now validate and restore document sensitivity,

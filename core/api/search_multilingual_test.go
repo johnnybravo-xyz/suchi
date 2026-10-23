@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -68,6 +69,50 @@ func TestSearchMatchesAcrossLanguages(t *testing.T) {
 		{"bills Versicherung", []int64{7}}, // each clause may match a different index
 		{"Versicherung -bill", []int64{1, 9}},
 		{`content:"Krankenversicherung"`, []int64{1, 7}},
+	} {
+		got, _ := searchIDs(t, s, tc.query)
+		sort.Slice(got, func(i, j int) bool { return got[i] < got[j] })
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("search %q = %v, want %v", tc.query, got, tc.want)
+		}
+		_, rows, count := doList(t, s, "/api/documents/?q="+url.QueryEscape(tc.query), adminPrincipal(1))
+		if count != len(tc.want) || len(rows) != len(tc.want) {
+			t.Errorf("documents %q count=%d rows=%d, want %d", tc.query, count, len(rows), len(tc.want))
+		}
+	}
+}
+
+// Short unspaced terms are checked on each document row; a document without
+// text still counts as not containing the term.
+func TestSearchShortUnspacedTermsInEachField(t *testing.T) {
+	s := newChatTestServer(t)
+	seedMultilingualDocs(t, s)
+	seedChatDoc(t, s, 10, 1, "東京の地図", "", "public", false)
+	seedChatDoc(t, s, 11, 1, "Scan", "", "public", false)
+	if _, err := s.DB.Write.Exec(`UPDATE documents SET content = NULL WHERE id IN (10, 11)`); err != nil {
+		t.Fatal(err)
+	}
+	everyone := []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}
+	without := func(ids ...int64) []int64 {
+		out := []int64{}
+		for _, id := range everyone {
+			if !slices.Contains(ids, id) {
+				out = append(out, id)
+			}
+		}
+		return out
+	}
+	for _, tc := range []struct {
+		query string
+		want  []int64
+	}{
+		{"東京", []int64{3, 10}},
+		{"title:東京", []int64{10}},
+		{"content:東京", []int64{3}},
+		{"-東京", without(3, 10)},
+		{"-title:東京", without(10)},
+		{"-content:東京", without(3)},
+		{"東京 -content:東京", []int64{10}},
 	} {
 		got, _ := searchIDs(t, s, tc.query)
 		sort.Slice(got, func(i, j int) bool { return got[i] < got[j] })

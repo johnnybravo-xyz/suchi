@@ -108,33 +108,41 @@ func Compile(query ResolvedQuery) Plan {
 // compileTextMembership matches one text clause in either index: the porter
 // word index finds stems and word prefixes, the trigram index finds any
 // substring of three or more characters (German compounds, CJK runs). Shorter
-// terms in scripts written without spaces fall back to a substring scan.
+// terms in scripts written without spaces fall back to a substring check on
+// the outer row, so it only reads documents the other filters keep.
 func compileTextMembership(clause Clause, negated bool) Predicate {
 	sql := "SELECT rowid FROM documents_fts WHERE documents_fts MATCH ?"
 	args := []any{compileText(clause)}
-	if trigram := compileTrigramText(clause); trigram != "" {
-		sql += " UNION SELECT rowid FROM documents_trigram WHERE documents_trigram MATCH ?"
-		args = append(args, trigram)
-	} else if UnspacedScript(clause.Text) {
-		columns := []string{"title", "content"}
-		switch clause.Field {
-		case TextTitle:
-			columns = columns[:1]
-		case TextContent:
-			columns = columns[1:]
+	trigram := compileTrigramText(clause)
+	if trigram != "" || !UnspacedScript(clause.Text) {
+		if trigram != "" {
+			sql += " UNION SELECT rowid FROM documents_trigram WHERE documents_trigram MATCH ?"
+			args = append(args, trigram)
 		}
-		conditions := make([]string, len(columns))
-		for i, column := range columns {
-			conditions[i] = "instr(" + column + ", ?) > 0"
-			args = append(args, clause.Text)
+		operator := "IN"
+		if negated {
+			operator = "NOT IN"
 		}
-		sql += " UNION SELECT id FROM documents WHERE " + strings.Join(conditions, " OR ")
+		return Predicate{SQL: "d.id " + operator + " (" + sql + ")", Args: args}
 	}
-	operator := "IN"
+	columns := []string{"title", "content"}
+	switch clause.Field {
+	case TextTitle:
+		columns = columns[:1]
+	case TextContent:
+		columns = columns[1:]
+	}
+	conditions := []string{"d.id IN (" + sql + ")"}
+	for _, column := range columns {
+		// COALESCE keeps a NULL column from turning NOT (...) into NULL.
+		conditions = append(conditions, "COALESCE(instr(d."+column+", ?) > 0, 0)")
+		args = append(args, clause.Text)
+	}
+	membership := "(" + strings.Join(conditions, " OR ") + ")"
 	if negated {
-		operator = "NOT IN"
+		membership = "NOT " + membership
 	}
-	return Predicate{SQL: "d.id " + operator + " (" + sql + ")", Args: args}
+	return Predicate{SQL: membership, Args: args}
 }
 
 // compileTrigramText is empty for terms the trigram index cannot match.

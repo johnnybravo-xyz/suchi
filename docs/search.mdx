@@ -88,10 +88,11 @@ search.
 into:
 
 1. one membership predicate per text clause: the word index, or the trigram
-   index for terms of three or more characters, or a substring scan of title and
-   content for shorter terms in scripts written without spaces (`東京`). Each
-   clause may match through a different index, and negation excludes matches in
-   any of them;
+   index for terms of three or more characters, or a substring check of each
+   candidate's title and content for shorter terms in scripts written without
+   spaces (`東京`), so a small system or narrow filter reads only its own rows.
+   Each clause may match through a different index, and negation excludes
+   matches in any of them;
 2. fixed SQL predicates for metadata filters;
 3. typed custom-field value predicates plus presence predicates, with target
    ACL/liveness inside a `documentlink` `EXISTS`;
@@ -130,8 +131,8 @@ Searches first materialize only the requested page of document IDs and scores.
 Row-ID-restricted FTS passes then build one snippet for each page result, so
 broad matches do not build display text for the whole candidate set. Word-index
 matches rank first, then documents found only by the trigram index, then
-documents found only by the short-term scan. Tier, score and document ID form a
-stable order; `recency=off` drops the recency term. See [SQLite WITH-clause materialization](https://www.sqlite.org/lang_with.html#materialization_hints).
+documents found only by the short-term substring check. Tier, score and
+document ID form a stable order; `recency=off` drops the recency term. See [SQLite WITH-clause materialization](https://www.sqlite.org/lang_with.html#materialization_hints).
 
 ### BM25 weighting
 
