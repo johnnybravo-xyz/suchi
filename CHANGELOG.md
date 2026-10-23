@@ -6,6 +6,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Added
 
+- The ⌘K / Ctrl K menu now finds documents and saved views as you type, lists
+  recently opened documents, and adds **New view**, **Pair a phone** and **Add a
+  mailbox** commands.
 - The Dashboard's **Coming up** card lists accepted due, expiry and renewal
   dates in the next 30 days, and Document Detail shows a document's accepted
   dates with **Add to calendar**. Exported `.ics` events now remind a day before

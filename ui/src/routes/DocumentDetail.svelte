@@ -2,6 +2,7 @@
 <script>
   import { t as translate } from '../lib/i18n.svelte.js'
   import { scopedHash as filingHref, captureScope, scopeCurrent } from '../lib/systems.svelte.js'
+  import { rememberDocument } from '../lib/recentDocuments.js'
   import { onDestroy, tick, untrack } from 'svelte'
   import { listIntelligence, getDocument, getDocumentIntrinsic, patchDocument, deleteDocument, restoreDocument, permanentlyDeleteDocument, documentVersions, documentBacklinks, uploadDocumentVersion, setDocumentCustomField, clearDocumentCustomField, createDocumentNote, updateDocumentNote, deleteDocumentNote, createShareLink, listShareLinks, deleteShareLink, previewPath, downloadPath, similarDocs, listGrants, putGrant, deleteGrant, listAllTags, listCorrespondents, listCustomFields, listDocuments, bulkEdit } from '../lib/api.js'
   import { go } from '../lib/router.svelte.js'
@@ -355,6 +356,9 @@
       if (version !== loadVersion || !scopeCurrent(scope)) return
       doc = loaded
       titleDraft = loaded.title
+      if (loaded.trashed_at == null) {
+        rememberDocument(session.user?.user_id, scope.code, { id: loaded.id, title: isHighSensitivity(loaded.sensitivity) ? '' : loaded.title })
+      }
       archiveSerialNumberDraft = loaded.archive_serial_number == null ? '' : String(loaded.archive_serial_number)
       if (loaded.trashed_at != null) {
         relatedTab = 'notes'

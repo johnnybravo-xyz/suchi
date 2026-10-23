@@ -8190,3 +8190,34 @@ test('shows coming-up dates on the Dashboard and a document date with a calendar
   await dates.getByRole('button', { name: 'Add to calendar', exact: true }).click()
   expect((await download).suggestedFilename()).toBe('suchi-date-9-2026-11-20.ics')
 })
+
+test('finds documents, recent documents, views and commands from the Omnibox', async ({ page }) => {
+  await mockAPI(page, {
+    filingTreeChosen: true,
+    documentDetails: { 42: { document: { title: 'Electricity bill' } } },
+    savedViews: [{ id: 9, name: 'Electricity bills', filter_json: JSON.stringify({ q: 'electricity' }), shared: false }],
+    searchByQuery: { elec: { results: [{ id: 51, title: 'Electricity bill March 2026', snippet: '' }] } },
+  })
+  await page.goto('/#/doc/42')
+  await expect(page.locator('.title-rename')).toHaveText('Electricity bill')
+  await page.goto('/#/dashboard')
+
+  const omni = page.getByRole('searchbox', { name: 'Search or run a command' })
+  await omni.focus()
+  const menu = page.getByRole('listbox')
+  await expect(menu.getByText('Recent', { exact: true })).toBeVisible()
+  await expect(menu.getByRole('option', { name: 'Electricity bill', exact: true })).toBeVisible()
+  await expect(menu.getByRole('option', { name: 'New view', exact: true })).toBeVisible()
+  await expect(menu.getByRole('option', { name: 'Pair a phone', exact: true })).toBeVisible()
+
+  await omni.fill('elec')
+  await expect(menu.getByRole('option', { name: 'Electricity bill March 2026', exact: true })).toBeVisible()
+  await expect(menu.getByRole('option', { name: 'Electricity bills', exact: true })).toBeVisible()
+  await omni.press('ArrowDown')
+  await omni.press('Enter')
+  await expect(page).toHaveURL(/#\/doc\/51$/)
+
+  await omni.fill('pair')
+  await menu.getByRole('option', { name: 'Pair a phone', exact: true }).click()
+  await expect(page).toHaveURL(/#\/settings$/)
+})

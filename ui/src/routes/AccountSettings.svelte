@@ -3,6 +3,7 @@
   import { t as translate } from '../lib/i18n.svelte.js'
   import { availableLocales, displayLanguage } from '../lib/locale-options.js'
   import { scopedHash as filingHref } from '../lib/systems.svelte.js'
+  import { route, go } from '../lib/router.svelte.js'
   import { onDestroy, tick, untrack } from 'svelte'
   import { listTokens, createToken, deleteToken, patchMe, uploadAvatar,
            listDecryptionPasswords, renameDecryptionPassword, deleteDecryptionPassword } from '../lib/api.js'
@@ -284,6 +285,12 @@
   )
 
   loadVault()
+  // The Omnibox's Pair a phone command links here with ?pair=1.
+  untrack(() => {
+    if (route.query.get('pair') !== '1') return
+    if (accountToolsAvailable) pairingOpen = true
+    go(filingHref('#/settings'), { replace: true })
+  })
 </script>
 
 <svelte:window onfocus={() => void load({ background: true })} />

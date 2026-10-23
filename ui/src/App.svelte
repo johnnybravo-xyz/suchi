@@ -12,6 +12,7 @@
   import Omnibox from './lib/Omnibox.svelte'
   import Lazy from './lib/Lazy.svelte'
   import { noteProcessing, processingBus } from './lib/processing_bus.svelte.js'
+  import { forgetRecentDocuments } from './lib/recentDocuments.js'
   import BrandMark from './lib/BrandMark.svelte'
 
   const lazyRoutes = {
@@ -409,6 +410,7 @@
   }
 
   async function handleSignOut() {
+    forgetRecentDocuments(session.user?.user_id)
     await signOut()
     notify('')
     clearScopedState()
@@ -527,6 +529,11 @@
     { label: session.theme === 'dark' ? translate("app.switchToLightTheme") : translate("app.switchToDarkTheme"),
       ico: session.theme === 'dark' ? 'sun' : 'moon',
       run: () => setTheme(session.theme === 'dark' ? 'light' : 'dark') },
+    { label: translate("app.newView"), ico: 'plus', href: filingHref('#/views?new=1') },
+    ...(demoVisitor ? [] : [{ label: translate("app.pairAPhone"), ico: 'link', href: filingHref('#/settings?pair=1') }]),
+    ...(session.user?.role === 'admin'
+      ? [{ label: translate("app.addAMailbox"), ico: 'mail', href: filingHref('#/settings?tab=archive&section=mail') }]
+      : hasCapability(session.user, 'mailboxes') ? [{ label: translate("app.addAMailbox"), ico: 'mail', href: filingHref('#/settings') }] : []),
     { label: translate("app.signOut"), ico: 'out', run: handleSignOut },
   ])
 </script>
