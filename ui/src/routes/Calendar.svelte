@@ -6,7 +6,7 @@
   import { onDestroy } from 'svelte'
   import { listIntelligence, listSavedViews } from '../lib/api.js'
   import { DATE_ROLES, intelligenceRoleLabel, intelligenceDateValue, formatArchiveDate, formatIntelligenceDate, groupCalendarEvents } from '../lib/intelligence.js'
-  import { calendarDateFile, canExportCalendarDate } from '../lib/calendarExport.js'
+  import { canExportCalendarDate, downloadCalendarDate } from '../lib/calendarExport.js'
   import { go } from '../lib/router.svelte.js'
   import Icon from '../lib/Icon.svelte'
   import RuleWorkspace from '../lib/RuleWorkspace.svelte'
@@ -187,13 +187,7 @@
   function downloadDate(event) {
     exportError = ''
     try {
-      const file = calendarDateFile(event, window.location.href)
-      const link = document.createElement('a')
-      const url = URL.createObjectURL(new Blob([file.contents], { type: 'text/calendar;charset=utf-8' }))
-      link.href = url
-      link.download = file.filename
-      setTimeout(() => URL.revokeObjectURL(url), 10_000)
-      link.click()
+      downloadCalendarDate(event)
     } catch (ex) {
       exportError = ex.message || translate("calendar.couldNotDownloadTheCalendarEvent")
     }

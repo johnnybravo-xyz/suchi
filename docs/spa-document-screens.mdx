@@ -146,8 +146,9 @@ and `precision=day`; exact-day and all-dates agendas page by 500.
 cells. [Document dates](/document-dates) owns review/display behavior.
 
 Calendar exports use `lib/calendarExport.js` for explicitly requested, reviewed
-exact-day `.ics` files: escape text, fold UTF-8 lines, preserve stable event IDs
-and disclose the exported contents. This adds no subscription or authority.
+exact-day `.ics` files: escape text, fold UTF-8 lines, preserve stable event IDs,
+add a role-based reminder alarm and disclose the exported contents. Calendar and
+Document Detail share its download. This adds no subscription or authority.
 
 Demo eligibility comes from `whoami.kind` (`demo-anon`/`demo-scratch`). Calendar
 remains visible without mutation/research access; default demo Calendar opens

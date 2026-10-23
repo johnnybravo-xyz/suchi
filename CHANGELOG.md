@@ -6,6 +6,10 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Added
 
+- The Dashboard's **Coming up** card lists accepted due, expiry and renewal
+  dates in the next 30 days, and Document Detail shows a document's accepted
+  dates with **Add to calendar**. Exported `.ics` events now remind a day before
+  a due date and a week before an expiry or renewal.
 - Inbox rows offer a pending filing suggestion as a one-click button beside
   **File under…**, applying the same decision as Approvals. Filing suggestions
   in `/api/tasks/` now carry `proposed_id`.

@@ -18,6 +18,10 @@ function dayBounds(event) {
   return { start: value.replaceAll('-', ''), end: date.toISOString().slice(0, 10).replaceAll('-', '') }
 }
 
+// How far ahead the calendar app reminds about a date, by role. Other roles
+// carry no alarm.
+const ALARM_LEAD = Object.freeze({ due: 'P1D', expiry: 'P7D', renewal: 'P7D' })
+
 export function canExportCalendarDate(event) {
   return dayBounds(event) !== null
 }
@@ -70,6 +74,13 @@ export function calendarDateFile(event, appURL, now = new Date()) {
     `URL:${documentURL.href}`,
     'CLASS:PRIVATE',
     'TRANSP:TRANSPARENT',
+    ...(ALARM_LEAD[event.role] ? [
+      'BEGIN:VALARM',
+      'ACTION:DISPLAY',
+      `TRIGGER:-${ALARM_LEAD[event.role]}`,
+      `DESCRIPTION:${escapeText(`${intelligenceRoleLabel(event.role)}: ${title}`)}`,
+      'END:VALARM',
+    ] : []),
     'END:VEVENT',
     'END:VCALENDAR',
   ]
@@ -77,4 +88,15 @@ export function calendarDateFile(event, appURL, now = new Date()) {
     filename: `suchi-date-${event.id}-${event.value.date}.ics`,
     contents: lines.map(foldLine).join('\r\n') + '\r\n',
   }
+}
+
+// Saves the event as an .ics file; throws when the date cannot be exported.
+export function downloadCalendarDate(event) {
+  const file = calendarDateFile(event, window.location.href)
+  const link = document.createElement('a')
+  const url = URL.createObjectURL(new Blob([file.contents], { type: 'text/calendar;charset=utf-8' }))
+  link.href = url
+  link.download = file.filename
+  setTimeout(() => URL.revokeObjectURL(url), 10_000)
+  link.click()
 }

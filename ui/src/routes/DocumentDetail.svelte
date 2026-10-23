@@ -3,9 +3,9 @@
   import { t as translate } from '../lib/i18n.svelte.js'
   import { scopedHash as filingHref, captureScope, scopeCurrent } from '../lib/systems.svelte.js'
   import { onDestroy, tick, untrack } from 'svelte'
-  import { getDocument, getDocumentIntrinsic, patchDocument, deleteDocument, restoreDocument, permanentlyDeleteDocument, documentVersions, documentBacklinks, uploadDocumentVersion, setDocumentCustomField, clearDocumentCustomField, createDocumentNote, updateDocumentNote, deleteDocumentNote, createShareLink, listShareLinks, deleteShareLink, previewPath, downloadPath, similarDocs, listGrants, putGrant, deleteGrant, listAllTags, listCorrespondents, listCustomFields, listDocuments, bulkEdit } from '../lib/api.js'
+  import { listIntelligence, getDocument, getDocumentIntrinsic, patchDocument, deleteDocument, restoreDocument, permanentlyDeleteDocument, documentVersions, documentBacklinks, uploadDocumentVersion, setDocumentCustomField, clearDocumentCustomField, createDocumentNote, updateDocumentNote, deleteDocumentNote, createShareLink, listShareLinks, deleteShareLink, previewPath, downloadPath, similarDocs, listGrants, putGrant, deleteGrant, listAllTags, listCorrespondents, listCustomFields, listDocuments, bulkEdit } from '../lib/api.js'
   import { go } from '../lib/router.svelte.js'
-  import { SENSITIVITY_OPTIONS, compareLocalized, customFieldLabel, fmtDate, fmtBytes, formatLabel, isHighSensitivity, sensDot, sensitivityLabel } from '../lib/format.js'
+  import { SENSITIVITY_OPTIONS, compareLocalized, customFieldLabel, fmtDate, fmtBytes, formatDaysAway, formatLabel, isHighSensitivity, sensDot, sensitivityLabel } from '../lib/format.js'
   import { originalNames, sourceGroups } from '../lib/documentSources.js'
   import { session } from '../lib/session.svelte.js'
   import { hasCapability } from '../lib/capabilities.js'
@@ -20,9 +20,11 @@
   import ShareLinkForm from '../lib/ShareLinkForm.svelte'
   import { markUploaded } from '../lib/upload_bus.svelte.js'
   import { processingBus } from '../lib/processing_bus.svelte.js'
+  import { daysUntil, formatIntelligenceDate, intelligenceRoleLabel } from '../lib/intelligence.js'
+  import { canExportCalendarDate, downloadCalendarDate } from '../lib/calendarExport.js'
   import { parseDocumentReference } from '../lib/documentReferences.js'
 
-  let { id, notify, jdCategories = [] } = $props()
+  let { id, notify, jdCategories = [], canViewDates = false } = $props()
 
   let doc = $state(null)
   let versionHistory = $state({ count: 0, results: [], head_id: null, can_upload: false, next: null, previous: null })
@@ -235,6 +237,26 @@
     untrack(() => { if (doc?.processing) void refreshProcessed() })
   })
 
+  // Accepted dates found in this document, such as an expiry or due date.
+  let documentDates = $state([])
+
+  async function loadDocumentDates(documentID, version, scope) {
+    documentDates = []
+    if (!canViewDates) return
+    try {
+      const res = await listIntelligence({ status: 'accepted', type: 'date', document_ids: documentID, page_size: 20 })
+      if (!disposed && version === loadVersion && scopeCurrent(scope)) documentDates = res?.results || []
+    } catch {}
+  }
+
+  function addToCalendar(event) {
+    try {
+      downloadCalendarDate(event)
+    } catch (ex) {
+      notify?.(ex.message || translate("documentDetail.couldNotAddToCalendar"))
+    }
+  }
+
   async function refreshProcessed() {
     const version = loadVersion
     const scope = captureScope()
@@ -343,6 +365,7 @@
       void loadCustomFieldDefinitions(version, scope)
       void loadSimilarDocuments(documentID, version, scope)
       void loadAccess(documentID, version, scope)
+      void loadDocumentDates(documentID, version, scope)
     } catch (ex) {
       if (version === loadVersion && scopeCurrent(scope)) err = ex.message || translate("documentDetail.couldNotLoadThisDocument")
     } finally {
@@ -1555,6 +1578,21 @@
               <span class="sub" style="margin-left:6px">{doc.jd_area_name}</span>
             {:else}<span class="chip">{translate("documentDetail.categoryValue", { "jd_category_id": doc.jd_category_id })}</span>{/if}
           </dd>
+          {#if documentDates.length}
+            <dt>{translate("documentDetail.dates")}</dt>
+            <dd class="document-dates">
+              {#each documentDates as event (event.id)}
+                {@const days = event.value?.precision === 'day' ? daysUntil(event.value.date) : null}
+                <span class="document-date">
+                  <span><b>{intelligenceRoleLabel(event.role)}</b> · {formatIntelligenceDate(event)}</span>
+                  {#if days !== null && days >= 0}<span class="date-distance">{formatDaysAway(days)}</span>{/if}
+                  {#if days !== null && days >= 0 && canExportCalendarDate(event)}
+                    <button class="btn sm" type="button" onclick={() => addToCalendar(event)}>{translate("documentDetail.addToCalendar")}</button>
+                  {/if}
+                </span>
+              {/each}
+            </dd>
+          {/if}
           <dt>{translate("documentDetail.sensitivity")}</dt>
           <dd>
             {#if trashed}
@@ -2398,6 +2436,11 @@
   .title-rename .dot { display:inline-block; margin-right:8px; }
   /* Centred on the title's first line box (1.15rem × the body's 1.55 line height), so long titles wrap below it. */
   .title-address { flex:none; font-size:.76rem; line-height:1; padding:3px 7px; margin-top:calc((1.15rem * 1.55 - .76rem - 6px) / 2); }
+  .document-dates { display:grid; gap:6px; }
+  .document-date { display:flex; flex-wrap:wrap; align-items:center; gap:4px 10px; }
+  .document-date b { font-weight:600; }
+  .date-distance { color:var(--muted); }
+  .document-date .btn.sm { padding:1px 8px; font-size:.72rem; }
   .processing-note { display:flex; align-items:center; gap:7px; margin:0; color:var(--muted); font-size:.75rem; }
   .title-pin { display:flex; flex-wrap:wrap; align-items:center; gap:6px; color:var(--muted); font-size:.75rem; }
   .title-pin .btn.sm { padding:1px 8px; font-size:.7rem; }

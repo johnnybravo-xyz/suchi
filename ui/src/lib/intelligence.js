@@ -12,6 +12,31 @@ export function intelligenceRoleLabel(value) {
   return t(`intelligence.role.${DATE_ROLES.includes(role) ? role : 'date'}`)
 }
 
+// Roles that ask the reader to act by a date; Coming up shows only these.
+export const UPCOMING_ROLES = Object.freeze(['due', 'expiry', 'renewal'])
+
+export function localISODate(date = new Date()) {
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  return `${date.getFullYear()}-${month}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+export function addDays(isoDate, days) {
+  const date = new Date(`${isoDate}T00:00:00Z`)
+  date.setUTCDate(date.getUTCDate() + days)
+  return date.toISOString().slice(0, 10)
+}
+
+export function daysUntil(isoDate, today = localISODate()) {
+  return Math.round((Date.parse(`${isoDate}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86_400_000)
+}
+
+// Accepted exact-day dates with an upcoming role, from today on, soonest first.
+export function upcomingDates(events, today = localISODate()) {
+  return (events || [])
+    .filter(event => UPCOMING_ROLES.includes(event.role) && event.value?.precision === 'day' && intelligenceDateValue(event) >= today)
+    .sort((a, b) => intelligenceDateValue(a).localeCompare(intelligenceDateValue(b)))
+}
+
 export function intelligenceDateValue(candidate) {
   return candidate?.value?.date || candidate?.sort_value || ''
 }

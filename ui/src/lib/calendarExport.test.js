@@ -32,11 +32,23 @@ test('exports one all-day reviewed fact with a private document link and UTC sta
     'URL:https://archive.example.test/suchi/#/doc/28',
     'CLASS:PRIVATE',
     'TRANSP:TRANSPARENT',
+    'BEGIN:VALARM',
+    'ACTION:DISPLAY',
+    'TRIGGER:-P7D',
+    'DESCRIPTION:Renewal: Home insurance renewal',
+    'END:VALARM',
     'END:VEVENT',
     'END:VCALENDAR',
     '',
   ])
   assert.equal(contents.includes(reviewedDate.evidence_text), false)
+})
+
+test('reminds a day before a due date and not at all for an issue date', () => {
+  const due = unfold(calendarDateFile({ ...reviewedDate, role: 'due' }, archiveURL, now).contents)
+  assert.ok(due.includes('\r\nTRIGGER:-P1D\r\n'))
+  const issued = unfold(calendarDateFile({ ...reviewedDate, role: 'issued' }, archiveURL, now).contents)
+  assert.equal(issued.includes('BEGIN:VALARM'), false)
 })
 
 test('exports every known role but never automatic, unresolved, malformed or partial dates', () => {

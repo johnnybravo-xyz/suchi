@@ -2,7 +2,7 @@
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { canReviewDate, formatIntelligenceDate, groupCalendarEvents, intelligenceDateValue, reviewFailure } from './intelligence.js'
+import { addDays, canReviewDate, daysUntil, formatIntelligenceDate, groupCalendarEvents, intelligenceDateValue, reviewFailure, upcomingDates } from './intelligence.js'
 
 test('formats dates only to their recorded precision, including storage placeholders', () => {
   const fullDate = { year: 'numeric', month: 'short', day: 'numeric' }
@@ -62,4 +62,15 @@ test('review failures distinguish changed text, hidden documents, revoked access
   assert.match(reviewFailure({ code: 'forbidden', status: 403 }), /no longer review.*Sign in again/)
   assert.match(reviewFailure(new TypeError('Failed to fetch')), /may not have been saved.*reconnect/)
   assert.match(reviewFailure({ code: 'no_task', status: 404 }), /no longer available to you/)
+})
+
+test('lists upcoming due, expiry and renewal dates soonest first from today', () => {
+  const event = (id, role, date, precision = 'day') => ({ id, role, value: { date, precision } })
+  const events = [
+    event(1, 'renewal', '2026-11-20'), event(2, 'due', '2026-10-25'), event(3, 'issued', '2026-10-24'),
+    event(4, 'expiry', '2026-10-22'), event(5, 'expiry', '2026-11-01', 'month'), event(6, 'due', '2026-10-23'),
+  ]
+  assert.deepEqual(upcomingDates(events, '2026-10-23').map(item => item.id), [6, 2, 1])
+  assert.equal(daysUntil('2026-11-22', '2026-10-23'), 30)
+  assert.equal(addDays('2026-10-23', 30), '2026-11-22')
 })

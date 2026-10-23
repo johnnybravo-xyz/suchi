@@ -28,6 +28,14 @@ export function formatDate(value, options = { year: 'numeric', month: 'short', d
   return formatter(`date:${JSON.stringify(options)}`, () => new Intl.DateTimeFormat(localeState.locale, options)).format(date)
 }
 
+// "today", "tomorrow", "in 3 days", "in 2 weeks", "in 4 months" for a whole-day distance.
+export function formatDaysAway(days) {
+  const relative = formatter('relative', () => new Intl.RelativeTimeFormat(localeState.locale, { numeric: 'auto' }))
+  if (Math.abs(days) < 14) return relative.format(days, 'day')
+  if (Math.abs(days) < 60) return relative.format(Math.round(days / 7), 'week')
+  return relative.format(Math.round(days / 30), 'month')
+}
+
 export function formatNumber(value, options = {}) {
   return formatter(`number:${JSON.stringify(options)}`, () => new Intl.NumberFormat(localeState.locale, options)).format(value)
 }

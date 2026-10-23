@@ -3,14 +3,16 @@
   import { t as translate } from "../lib/i18n.svelte.js";
   import { scopedHash as filingHref } from '../lib/systems.svelte.js'
   import { onDestroy } from 'svelte'
-  import { listSavedViews } from '../lib/api.js'
+  import { listIntelligence, listSavedViews } from '../lib/api.js'
   import { documentListHash, parseSavedViewFilters } from '../lib/documentFilters.js'
-  import { fmtDate, sensDot } from '../lib/format.js'
+  import { fmtDate, formatDaysAway, sensDot } from '../lib/format.js'
+  import { addDays, daysUntil, formatIntelligenceDate, intelligenceRoleLabel, localISODate, upcomingDates } from '../lib/intelligence.js'
   import Icon from '../lib/Icon.svelte'
 
   let {
     st, statsError = '', inboxCategory, taxonomyLoaded = false, taxonomyError = '', recent,
     recentError = '', onRetryRecent, setupNeeded = false, setupError = false, onRetrySetup,
+    canViewDates = false,
   } = $props()
   const inboxCount = $derived(st?.inbox_count ?? 0)
   const pending = $derived((st?.pending_approvals ?? 0) + (st?.pending_intelligence ?? 0))
@@ -24,6 +26,11 @@
   let viewTotal = $state(0)
   let loadVersion = 0
   let activeController
+  // Accepted exact-day due, expiry and renewal dates in the next 30 days.
+  const comingUpDays = 30
+  const comingUpLimit = 5
+  let comingUp = $state([])
+  const comingUpController = new AbortController()
 
   const onboarding = $derived.by(() => {
     if (setupNeeded) {
@@ -121,6 +128,20 @@
     }
   }
 
+  async function loadComingUp() {
+    if (!canViewDates) return
+    const today = localISODate()
+    try {
+      const res = await listIntelligence({
+        status: 'accepted', type: 'date', precision: 'day',
+        sort_from: today, sort_to: addDays(today, comingUpDays), page_size: 50,
+      }, comingUpController.signal)
+      comingUp = upcomingDates(res?.results, today)
+    } catch {
+      comingUp = []
+    }
+  }
+
   function filterSummary(f) {
     const parts = []
     if (f.q) parts.push(`“${f.q}”`)
@@ -132,9 +153,11 @@
   }
 
   load()
+  void loadComingUp()
   onDestroy(() => {
     loadVersion++
     activeController?.abort()
+    comingUpController.abort()
   })
 </script>
 
@@ -218,6 +241,26 @@
   </div>
 
   <div>
+    {#if comingUp.length}
+      <div class="dash-head">
+        <h3>{translate("dashboard.comingUp")}</h3>
+        <a class="btn sm" href={filingHref("#/calendar")}>{translate("dashboard.calendar")}</a>
+      </div>
+      <div class="index coming-up">
+        {#each comingUp.slice(0, comingUpLimit) as event (event.id)}
+          <a class="irow" href={filingHref(`#/doc/${event.document_id}`)}>
+            <span class="coming-when">
+              <b>{formatIntelligenceDate(event, { month: 'short', day: 'numeric' })}</b>
+              <small>{formatDaysAway(daysUntil(event.value.date))}</small>
+            </span>
+            <span class="grow coming-what">
+              <span class="title">{event.document_title || translate("dashboard.documentValue", { "id": event.document_id })}</span>
+              <span class="sub">{intelligenceRoleLabel(event.role)}</span>
+            </span>
+          </a>
+        {/each}
+      </div>
+    {/if}
     <div class="dash-head">
       <h3>{translate("dashboard.views")}</h3>
       <a class="btn sm" href={filingHref("#/views?new=1")}><Icon name="plus" size={13} /> {translate("dashboard.newView")}</a>

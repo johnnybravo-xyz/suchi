@@ -8152,3 +8152,41 @@ test('files an Inbox document under its pending suggestion in one click', async 
   await notice.getByRole('button', { name: /Undo/ }).click()
   await expect.poll(() => writes).toEqual([{ jd_category_id: 49 }])
 })
+
+test('shows coming-up dates on the Dashboard and a document date with a calendar file', async ({ page }) => {
+  await page.clock.setFixedTime(new Date('2026-10-23T12:00:00'))
+  const date = (id, document_id, document_title, role, value) => ({
+    id, document_id, document_title, type: 'date', role, status: 'accepted', reviewed_at: 1780200000,
+    value: { date: value, precision: 'day' }, sort_value: value,
+  })
+  const queries = []
+  await mockAPI(page, {
+    filingTreeChosen: true,
+    capabilities: ['archive_intelligence'],
+    documentDetails: { 42: { document: { title: 'Car insurance policy' } } },
+    intelligenceQueries: queries,
+    intelligence: query => query.document_ids === '42'
+      ? { results: [date(9, 42, 'Car insurance policy', 'renewal', '2026-11-20')] }
+      : { results: [
+        date(7, 41, 'Electricity bill', 'due', '2026-10-25'),
+        date(8, 43, 'Lease agreement', 'issued', '2026-10-24'),
+        date(9, 42, 'Car insurance policy', 'renewal', '2026-11-20'),
+      ] },
+  })
+  await page.goto('/#/dashboard')
+  const comingUp = page.locator('.coming-up')
+  await expect(comingUp.locator('.irow')).toHaveCount(2)
+  await expect(comingUp.locator('.irow').first()).toContainText('Electricity bill')
+  await expect(comingUp.locator('.irow').first()).toContainText('in 2 days')
+  await expect(comingUp.locator('.irow').nth(1)).toHaveAttribute('href', '#/doc/42')
+  const range = queries.find(query => query.sort_from)
+  expect([range.status, range.precision, range.sort_from, range.sort_to]).toEqual(['accepted', 'day', '2026-10-23', '2026-11-22'])
+
+  await page.goto('/#/doc/42')
+  const dates = page.locator('.document-dates')
+  await expect(dates).toContainText('Renewal')
+  await expect(dates).toContainText('in 4 weeks')
+  const download = page.waitForEvent('download')
+  await dates.getByRole('button', { name: 'Add to calendar', exact: true }).click()
+  expect((await download).suggestedFilename()).toBe('suchi-date-9-2026-11-20.ics')
+})
