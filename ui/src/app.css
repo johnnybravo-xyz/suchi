@@ -223,6 +223,8 @@ input, select, textarea { font: inherit; color: inherit; }
 
 @media (max-width: 700px) {
   .topbar { flex-wrap: wrap; gap: 8px; padding: 8px 12px; }
+  .notice { max-width: 60vw; }
+  .notice-undo kbd { display: none; }
   .topbar h1 { margin-right: auto; }
   .topbar > .omni { order: 10; flex-basis: 100%; max-width: none; margin-left: 0; }
   .topbar-upload { padding: 8px 11px; }
@@ -466,14 +468,21 @@ textarea.input { resize: vertical; font-family: ui-monospace, monospace; font-si
 .login-card { width: 360px; }
 .login-card .brand { justify-content: center; padding-bottom: 18px; }
 
-/* ---------- toast ---------- */
-.toast {
-  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
-  background: var(--ink); color: var(--bg);
-  border-radius: 99px; padding: 9px 20px; font-size: .85rem; z-index: 99;
-  animation: rise .25s ease backwards;
+/* ---------- notice ---------- */
+/* Sits in the top bar beside the status ribbons, so it never covers the rows
+   an action came from. */
+.notice {
+  display: inline-flex; flex: 0 1 auto; align-items: center; gap: 10px; min-width: 0; max-width: 380px;
+  padding: 4px 4px 4px 12px; border: 1px solid var(--line-strong); border-radius: 8px;
+  background: var(--surface); color: var(--ink); font-size: .78rem;
+  animation: notice-in .15s ease-out;
 }
-@keyframes rise { from { opacity: 0; transform: translate(-50%, 8px); } }
+.notice:not(:has(.notice-undo)) { padding: 7px 12px; }
+.notice-message { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notice-undo { flex: none; gap: 8px; font-weight: 650; }
+.notice-undo kbd { font: 500 .68rem ui-monospace, monospace; color: var(--muted); }
+@keyframes notice-in { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .notice { animation: none; } }
 
 /* ---------- drop zone ---------- */
 .drop {

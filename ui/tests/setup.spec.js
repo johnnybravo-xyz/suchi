@@ -3395,7 +3395,7 @@ test('lets an administrator reset another users two-factor authentication', asyn
   await expect(dialog).toHaveCount(0)
   await expect(member.getByText('2FA', { exact: true })).toHaveCount(0)
   await expect(member.getByRole('button', { name: 'Reset 2FA', exact: true })).toHaveCount(0)
-  await expect(page.locator('.toast[role="status"]')).toHaveText('Reset two-factor authentication for member@example.test')
+  await expect(page.locator('.notice[role="status"]')).toHaveText('Reset two-factor authentication for member@example.test')
   expect(requests).toEqual([
     { current_password: 'wrong-password', two_factor_code: '111111' },
     { current_password: 'admin-password', two_factor_code: '222222' },
@@ -3757,7 +3757,7 @@ test('keeps human titles pinned until the owner unpins them', async ({ page }) =
 
   await page.getByRole('button', { name: 'Unpin', exact: true }).click()
   await expect.poll(() => writes).toEqual([{ title_owner: 'auto' }])
-  await expect(page.locator('.toast')).toContainText('Suchi may rename this the next time it analyses the document.')
+  await expect(page.locator('.notice')).toContainText('Suchi may rename this the next time it analyses the document.')
   await expect(pinned).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Unpin', exact: true })).toHaveCount(0)
 
@@ -3766,7 +3766,7 @@ test('keeps human titles pinned until the owner unpins them', async ({ page }) =
   await page.getByRole('textbox', { name: 'Document title', exact: true }).press('Enter')
   await expect.poll(() => writes).toEqual([{ title_owner: 'auto' }, { title: 'Pinned bill title' }])
   await expect(page.getByTitle('Rename', { exact: true })).toContainText('Pinned bill title')
-  await expect(page.locator('.toast')).toContainText('Title saved and pinned')
+  await expect(page.locator('.notice')).toContainText('Title saved and pinned')
   await expect(pinned).toBeVisible()
 })
 
@@ -4386,7 +4386,7 @@ for (const screen of ['list', 'detail']) {
         : page.getByRole('dialog', { name: 'Share document' })
       const link = panel.getByRole('textbox', { name: 'Share link', exact: true })
       await expect(link).toHaveValue(url)
-      await expect(page.locator('.toast[role="status"][aria-live="polite"][aria-atomic="true"]')).toHaveText(clipboard === 'available'
+      await expect(page.locator('.notice[role="status"][aria-live="polite"][aria-atomic="true"]')).toHaveText(clipboard === 'available'
         ? 'Share link copied'
         : 'Share link ready. Select the link and copy it manually.')
       expect(creations).toHaveLength(1)
@@ -4405,7 +4405,7 @@ for (const screen of ['list', 'detail']) {
         })
       })
       await panel.getByRole('button', { name: 'Copy link', exact: true }).click()
-      await expect(page.locator('.toast[role="status"][aria-live="polite"][aria-atomic="true"]')).toHaveText('Share link copied')
+      await expect(page.locator('.notice[role="status"][aria-live="polite"][aria-atomic="true"]')).toHaveText('Share link copied')
       expect(await page.evaluate(() => window.copiedLinks)).toEqual(clipboard === 'available' ? [url, url] : [url])
       expect(creations).toHaveLength(1)
     })
@@ -4596,7 +4596,7 @@ test('changes a password-managed sign-in email through focused reauthentication'
 
   await expect(dialog).toHaveCount(0)
   await expect(profile.getByLabel('Email', { exact: true })).toHaveValue('changed@example.test')
-  await expect(page.locator('.toast[role="status"]')).toHaveText('Sign-in email changed')
+  await expect(page.locator('.notice[role="status"]')).toHaveText('Sign-in email changed')
   expect(requests).toEqual([
     { email: 'changed@example.test', current_password: 'wrong password' },
     { email: 'changed@example.test', current_password: 'correct password' },
@@ -4690,7 +4690,7 @@ test('uses provider reauthentication for OIDC-managed email and consumes fixed n
   await expect(profile.getByRole('button', { name: 'Change email', exact: true })).toHaveCount(0)
   await expect(page.getByRole('heading', { name: 'Security', exact: true })).toHaveCount(0)
   await profile.getByRole('button', { name: 'Sync from identity provider', exact: true }).click()
-  await expect(page.locator('.toast[role="status"]')).toHaveText('Sign-in email changed')
+  await expect(page.locator('.notice[role="status"]')).toHaveText('Sign-in email changed')
   await expect(page).toHaveURL(/\/#\/settings$/)
   expect(new URL(page.url()).searchParams.has('account_notice')).toBe(false)
   expect(syncRequests).toEqual([{ method: 'POST', origin: 'http://127.0.0.1:5173' }])
@@ -4700,7 +4700,7 @@ test('uses provider reauthentication for OIDC-managed email and consumes fixed n
     ['email_checked', 'Sign-in email is up to date'],
   ]) {
     await page.goto(`/?account_notice=${notice}#/settings`)
-    await expect(page.locator('.toast[role="status"]')).toHaveText(message)
+    await expect(page.locator('.notice[role="status"]')).toHaveText(message)
     expect(new URL(page.url()).searchParams.has('account_notice')).toBe(false)
     expect(new URL(page.url()).hash).toBe('#/settings')
   }
@@ -4708,7 +4708,7 @@ test('uses provider reauthentication for OIDC-managed email and consumes fixed n
   await page.goto('/?account_notice=untrusted-detail#/settings')
   // Wait for the app to consume the notice before checking no toast appeared.
   await expect.poll(() => new URL(page.url()).searchParams.has('account_notice')).toBe(false)
-  await expect(page.locator('.toast[role="status"]')).toHaveCount(0)
+  await expect(page.locator('.notice[role="status"]')).toHaveCount(0)
   expect(new URL(page.url()).hash).toBe('#/settings')
 })
 
@@ -6429,7 +6429,7 @@ test('offers only safe date actions and preserves failed date decisions for revi
   await expect(candidates.nth(0).getByRole('alert')).toContainText('Nothing was applied')
   await expect(candidates).toHaveCount(3)
   await expect(candidates.nth(0).getByRole('button', { name: 'Add to Calendar' })).toBeDisabled()
-  await expect(page.locator('.toast')).toContainText('No dates were changed')
+  await expect(page.locator('.notice')).toContainText('No dates were changed')
 })
 
 test('keeps automatic dates quiet and labels reviewed and previously accepted history', async ({ page }) => {
@@ -8077,4 +8077,37 @@ test('refreshes a processing document once archive status reports finished work'
   await expect(note).toHaveCount(0)
   await expect(page.locator('.processing-ribbon')).toHaveCount(0)
   await expect(page.locator('.title-rename')).toHaveText('Electricity bill March 2026')
+})
+
+test('undoes Inbox filing from the notice and with the keyboard shortcut', async ({ page }) => {
+  const writes = []
+  await mockAPI(page, {
+    filingTreeChosen: true,
+    jdCategories: [
+      { id: 21, code: 21, name: 'Banking', area_code: 20, area_name: 'Money' },
+      { id: 49, code: 49, name: 'Inbox', area_code: 40, area_name: 'System', system: true },
+    ],
+    documents: [{ id: 42, title: 'Unfiled receipt', jd_category_id: 49, created_at: 1780000000, tags: [] }],
+  })
+  await page.route('**/api/documents/42', route => {
+    if (route.request().method() !== 'PATCH') return route.fallback()
+    writes.push(route.request().postDataJSON())
+    return route.fulfill({ status: 204 })
+  })
+  await page.goto('/#/inbox')
+  const fileUnder = page.getByRole('combobox', { name: 'File Unfiled receipt under', exact: true })
+
+  await fileUnder.selectOption({ label: '21 Banking' })
+  const notice = page.locator('.topbar .notice')
+  await expect(notice).toContainText('Filed')
+  await notice.getByRole('button', { name: /Undo/ }).click()
+  await expect.poll(() => writes).toEqual([{ jd_category_id: 21 }, { jd_category_id: 49 }])
+  await expect(notice).toHaveText('Undone')
+
+  await fileUnder.selectOption({ label: '21 Banking' })
+  await expect(notice.getByRole('button', { name: /Undo/ })).toBeVisible()
+  await page.locator('body').click({ position: { x: 5, y: 5 } })
+  await page.keyboard.press('ControlOrMeta+z')
+  await expect.poll(() => writes.length).toBe(4)
+  expect(writes.at(-1)).toEqual({ jd_category_id: 49 })
 })

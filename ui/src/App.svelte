@@ -129,33 +129,56 @@
   async function handleArchiveTaxonomyChanged() {
     await Promise.all([refreshSetupState(), loadTaxonomy()])
   }
-  let toast = $state('')
-  let toastTimer
-  let accountToast = $state('')
-  let accountToastTimer
+  // One notice at a time, in the top bar beside the status ribbons. `undo` is
+  // an async function that reverses the action; while the notice is hovered
+  // or focused it stays open.
+  let notice = $state(null)            // { message, undo, busy }
+  let noticeTimer
+  let noticeHeld = false
   let pollTimer
+  const undoShortcut = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘Z' : 'Ctrl+Z'
 
   const scopedNotify = $derived.by(() => {
     const scope = captureScope()
-    return message => { if (scopeCurrent(scope)) notify(message) }
+    return (message, options) => { if (scopeCurrent(scope)) notify(message, options) }
   })
 
-  export function notify(msg) {
-    toast = msg
-    clearTimeout(toastTimer)
-    toastTimer = setTimeout(() => (toast = ''), 2400)
+  export function notify(message, { undo = null } = {}) {
+    notice = message ? { message, undo, busy: false } : null
+    scheduleNoticeClose()
   }
 
-  function accountNotify(message) {
-    accountToast = message
-    clearTimeout(accountToastTimer)
-    accountToastTimer = setTimeout(() => (accountToast = ''), 4000)
+  function scheduleNoticeClose() {
+    clearTimeout(noticeTimer)
+    if (notice && !noticeHeld) noticeTimer = setTimeout(() => (notice = null), notice.undo ? 8000 : 4000)
+  }
+
+  function holdNotice(held) {
+    noticeHeld = held
+    scheduleNoticeClose()
+  }
+
+  async function undoNotice() {
+    const current = notice
+    if (!current?.undo || current.busy) return
+    current.busy = true
+    clearTimeout(noticeTimer)
+    try {
+      await current.undo()
+      if (notice === current) notify(translate("app.undone"))
+    } catch (ex) {
+      if (notice === current) notify(ex.message || translate("app.couldNotUndo"))
+    }
+  }
+
+  function isTyping(target) {
+    return target?.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName)
   }
 
   function consumeAccountNotice() {
     const url = new URL(location.href)
     if (!url.searchParams.has('account_notice')) return
-    const notice = url.searchParams.get('account_notice')
+    const kind = url.searchParams.get('account_notice')
     const messages = {
       identity_bound: translate("app.identityProviderConnected"),
       email_changed: translate("app.signInEmailChanged"),
@@ -163,7 +186,7 @@
     }
     url.searchParams.delete('account_notice')
     history.replaceState(history.state, '', `${url.pathname}${url.search}${url.hash}`)
-    if (messages[notice]) accountNotify(messages[notice])
+    if (messages[kind]) notify(messages[kind])
   }
 
   async function initializeSession() {
@@ -324,6 +347,10 @@
 
   function onKey(e) {
     if (e.key === 'Escape') mobileNavOpen = false
+    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'z' && notice?.undo && !isTyping(e.target)) {
+      e.preventDefault()
+      void undoNotice()
+    }
   }
 
   function currentChatScope() {
@@ -383,15 +410,16 @@
 
   async function handleSignOut() {
     await signOut()
-    clearTimeout(accountToastTimer)
-    accountToast = ''
+    notify('')
     clearScopedState()
   }
 
   function clearScopedState() {
     clearInterval(pollTimer)
     statsPolling = false
-    clearTimeout(toastTimer)
+    // An undo belongs to the scope it was offered in; plain messages, such
+    // as an account notice shown while systems load, may stay.
+    if (notice?.undo) notify('')
     jdTree = []
     inboxCategory = null
     taxonomyLoaded = false
@@ -407,7 +435,6 @@
     mobileNavOpen = false
     uploadFiles = []
     dragDepth = 0
-    toast = ''
     chatStatusInfo = { enabled: false, provider: '', local: false }
     chatOpen = false
     chatParked = false
@@ -628,6 +655,19 @@
         {#if scopeReady}<Omnibox pages={session.user?.role === 'admin'
           ? [...PAGES, { href: '#/settings?tab=archive', label: translate("app.archiveConfiguration"), ico: 'settings' }, { href: '#/settings?tab=archive&section=users', label: translate("app.people"), ico: 'shield' }, { href: '#/settings?tab=archive&section=metadata', label: translate("app.metadata"), ico: 'tag' }]
           : PAGES} commands={COMMANDS} canAsk={chatEnabled && canUseArchiveChat} onAsk={openArchiveChat} />{/if}
+        {#if notice}
+          <div class="notice" role="status" aria-live="polite" aria-atomic="true"
+               onmouseenter={() => holdNotice(true)} onmouseleave={() => holdNotice(false)}
+               onfocusin={() => holdNotice(true)} onfocusout={() => holdNotice(false)}>
+            <span class="notice-message">{notice.message}</span>
+            {#if notice.undo}
+              <button class="btn sm notice-undo" disabled={notice.busy} onclick={undoNotice}
+                      aria-keyshortcuts={undoShortcut === '⌘Z' ? 'Meta+Z' : 'Control+Z'}>
+                {translate("app.undo")}<kbd>{undoShortcut}</kbd>
+              </button>
+            {/if}
+          </div>
+        {/if}
         {#if chatParked && ChatDrawer}
           <button class="research-ribbon" bind:this={chatRibbon} onclick={resumeArchiveChat}
                   aria-label={translate("app.returnToYourDocumentQuestion")} title={translate("app.returnToYourDocumentQuestion")}>
@@ -686,7 +726,7 @@
           {#if page !== 'settings'}<a class="btn" href={filingHref('#/settings')}>{translate("app.myAccount")}</a>{/if}
           </div>
           {#if page === 'settings'}
-            <Lazy load={lazyRoutes.account} props={{ notify: scopedNotify, accountNotify, profileOnly: true }} />
+            <Lazy load={lazyRoutes.account} props={{ notify: scopedNotify, accountNotify: notify, profileOnly: true }} />
           {/if}
         {:else if page === 'dashboard'}<Lazy load={lazyRoutes.dashboard} props={{ st, statsError, inboxCategory, taxonomyLoaded, taxonomyError, recent: recentDocs, recentError, onRetryRecent: loadRecentDocuments, setupNeeded, setupError, onRetrySetup: refreshSetupState }} />
         {:else if page === 'documents'}<Lazy load={lazyRoutes.documents} props={{ notify: scopedNotify, jdCategories, canAskArchive: chatEnabled && canUseArchiveChat, canReviewIntelligence, onAskDocuments: askSelectedDocuments, onScopeChange: publishChatScope }} />
@@ -699,7 +739,7 @@
           <div class="upload-wrap">
             <Lazy load={lazyRoutes.upload} props={{ initialFiles: uploadFiles, onInitialFilesConsumed: () => (uploadFiles = []) }} />
           </div>
-        {:else if page === 'settings'}<Lazy load={lazyRoutes.settings} props={{ notify: scopedNotify, accountNotify, initialTab: route.query.get('tab'), initialSection: route.query.get('section'), initialPeople: route.query.get('people'), initialMetadata: route.query.get('metadata'), setupNeeded, setupError, onRetrySetup: refreshSetupState, onTaxonomyChanged: handleArchiveTaxonomyChanged }} />
+        {:else if page === 'settings'}<Lazy load={lazyRoutes.settings} props={{ notify: scopedNotify, accountNotify: notify, initialTab: route.query.get('tab'), initialSection: route.query.get('section'), initialPeople: route.query.get('people'), initialMetadata: route.query.get('metadata'), setupNeeded, setupError, onRetrySetup: refreshSetupState, onTaxonomyChanged: handleArchiveTaxonomyChanged }} />
         {:else if page === 'trash'}<Lazy load={lazyRoutes.trash} props={{ notify: scopedNotify }} />
         {:else if page === 'views'}<Lazy load={lazyRoutes.views} props={{ notify: scopedNotify, canShare: canShareViews, startCreate: route.query.get('new') === '1', createQuery: route.query.get('q') || '', createDocumentIDs: route.query.get('ids') || '', jdCategories }} />
         {:else if page === 'calendar'}
@@ -723,8 +763,3 @@
 
 {/if}
 
-{#if accountToast}
-  <div class="toast" role="status" aria-live="polite" aria-atomic="true">{accountToast}</div>
-{:else if toast}
-  <div class="toast" role="status" aria-live="polite" aria-atomic="true">{toast}</div>
-{/if}

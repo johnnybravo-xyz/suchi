@@ -6,6 +6,11 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Added
 
+- Filing, refiling and moving documents to Trash can be undone from a notice in
+  the top bar, or with **⌘ Z** / **Ctrl Z**. Notices replace the dark toast at the
+  bottom of the screen and no longer cover the page. Refiling on Document Detail
+  also updates the filing chip straight away.
+
 - Native archive serial numbers can now be assigned from retained QR labels,
   split feeder scans into atomically created documents, edited from Document
   Detail, searched with `asn:`, and preserved across replacement versions,

@@ -3,7 +3,7 @@
   import { t as translate } from "../lib/i18n.svelte.js";
   import { scopedHash as filingHref, systems, captureScope, scopeCurrent } from '../lib/systems.svelte.js'
   import { onDestroy, untrack } from 'svelte'
-  import { listDocuments, listTags, listAllTags, listCorrespondents, patchDocument, deleteDocument, bulkEdit, createShareLink, thumbPath, decryptDocument, decryptBatch, extractIntelligence } from '../lib/api.js'
+  import { listDocuments, listTags, listAllTags, listCorrespondents, patchDocument, deleteDocument, restoreDocument, bulkEdit, createShareLink, thumbPath, decryptDocument, decryptBatch, extractIntelligence } from '../lib/api.js'
   import { route, go } from '../lib/router.svelte.js'
   import { uploadBus } from '../lib/upload_bus.svelte.js'
   import { SENSITIVITY_OPTIONS, fmtDate, formatNumber, isHighSensitivity, plural, sensDot } from '../lib/format.js'
@@ -256,10 +256,14 @@
   }
 
   async function fileTo(doc, jdId) {
+    const previous = doc.jd_category_id
     try {
       await patchDocument(doc.id, { jd_category_id: Number(jdId) })
       await load()
-      notify?.(translate("documents.filed"))
+      notify?.(translate("documents.filed"), { undo: async () => {
+        await patchDocument(doc.id, { jd_category_id: previous })
+        await load()
+      } })
     } catch (ex) { notify?.(ex.message || translate("documents.couldNotFileIt")) }
   }
   let trashRequest = $state(null)
@@ -270,14 +274,17 @@
     if (!request) return
     trashBusy = true
     if (request.kind === 'bulk') {
-      await bulk(translate("documents.trashed"), 'delete', {})
+      await bulk(translate("documents.trashed"), 'delete', {}, ids => [[ids, 'restore', {}]])
       trashRequest = null
     } else {
       try {
         await deleteDocument(request.doc.id)
         await load()
         trashRequest = null
-        notify?.(translate("documents.trashed"))
+        notify?.(translate("documents.trashed"), { undo: async () => {
+          await restoreDocument(request.doc.id)
+          await load()
+        } })
       } catch (ex) { notify?.(ex.message || translate("documents.couldNotTrashIt")) }
     }
     trashBusy = false
@@ -393,18 +400,40 @@
     if (!bulkBusy) bulkShareOpen = false
   }
 
-  async function bulk(label, method, parameters) {
+  // `reverse` returns the bulk edits that undo the action; undo is offered
+  // only when every document succeeded.
+  async function bulk(label, method, parameters, reverse = null) {
     bulkBusy = true
+    const ids = [...sel]
+    const undoEdits = reverse?.(ids)
     try {
-      const res = await bulkEdit([...sel], method, parameters)
+      const res = await bulkEdit(ids, method, parameters)
       const failed = (res?.results || []).filter(r => !r.ok).length
-      notify?.(failed ? translate("documents.valueValueDoneValueFailed", { "label": label, "applied": res.applied, "failed": failed }) : plural("documents.bulkResultCount", res?.applied ?? sel.size, { label }))
+      const undo = !failed && undoEdits ? async () => {
+        for (const edit of undoEdits) await bulkEditOrThrow(...edit)
+        await load()
+      } : null
+      notify?.(failed ? translate("documents.valueValueDoneValueFailed", { "label": label, "applied": res.applied, "failed": failed }) : plural("documents.bulkResultCount", res?.applied ?? ids.length, { label }), { undo })
     } catch (ex) { notify?.(ex.message || translate("documents.valueFailed", { "label": label })) }
     bulkBusy = false
     clearSel()
     load()
   }
-  const bulkRefile = (jdId) => bulk(translate("documents.refiled"), 'set_jd_category', { jd_category_id: Number(jdId) })
+  async function bulkEditOrThrow(ids, method, parameters) {
+    const res = await bulkEdit(ids, method, parameters)
+    if ((res?.results || []).some(r => !r.ok)) throw new Error()
+  }
+  // Refiling can be undone only when every document's previous category is known.
+  function previousCategories(ids) {
+    const groups = new Map()
+    for (const id of ids) {
+      const category = docs.find(doc => doc.id === id)?.jd_category_id
+      if (!category) return null
+      groups.set(category, [...(groups.get(category) || []), id])
+    }
+    return [...groups].map(([category, group]) => [group, 'set_jd_category', { jd_category_id: category }])
+  }
+  const bulkRefile = (jdId) => bulk(translate("documents.refiled"), 'set_jd_category', { jd_category_id: Number(jdId) }, previousCategories)
   const bulkSens = (s) => bulk(translate("documents.sensitivitySet"), 'set_sensitivity', { sensitivity: s })
   const bulkCorrespondent = (id) => bulk(translate("documents.correspondentSet"), 'set_correspondent', { correspondent_id: Number(id) })
   const bulkRescan = () => bulk(translate("documents.rescanStarted"), 'rescan_enqueue', {})

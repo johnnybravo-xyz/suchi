@@ -819,20 +819,35 @@
     }
   }
 
-  async function save(patch, label) {
+  // `undoable` offers Undo that restores the patched fields' previous values.
+  async function save(patch, label, { undoable = false } = {}) {
     const version = loadVersion
+    const previous = undoable ? Object.fromEntries(Object.keys(patch).map(key => [key, doc[key]])) : null
     try {
       await patchDocument(id, patch)
       if (disposed || version !== loadVersion) return
       doc = { ...doc, ...patch }
       if ('title' in patch && !('title_owner' in patch)) doc.title_owner = 'human'
       if ('languages' in patch) doc.languages_locked = patch.languages !== ''
+      if ('jd_category_id' in patch) await refreshFiling(version)
       await refreshReviewTags(version, id)
       if (disposed || version !== loadVersion) return
-      notify?.(label || translate("documentDetail.saved"))
+      notify?.(label || translate("documentDetail.saved"), previous ? { undo: async () => {
+        await patchDocument(id, previous)
+        if (disposed || version !== loadVersion) return
+        doc = { ...doc, ...previous }
+        if ('jd_category_id' in previous) await refreshFiling(version)
+      } } : undefined)
     } catch (ex) {
       if (!disposed && version === loadVersion) notify?.(ex.message || translate("documentDetail.couldNotSave"))
     }
+  }
+
+  // The filing chip and labels are server projections of jd_category_id.
+  async function refreshFiling(version) {
+    const fresh = await getDocument(id)
+    if (disposed || version !== loadVersion) return
+    for (const key of ['jd_category_id', 'jd_category_code', 'jd_category_name', 'jd_area_name', 'jd_address']) doc[key] = fresh[key]
   }
 
   async function toggleMoreFields() {
@@ -1319,10 +1334,15 @@
     const version = loadVersion
     trashBusy = true
     try {
-      await deleteDocument(id)
+      const trashedID = id
+      const back = filingHref(`#/doc/${trashedID}`)
+      await deleteDocument(trashedID)
       if (disposed || version !== loadVersion) return
       trashOpen = false
-      notify?.(translate("documentDetail.movedToTrash"))
+      notify?.(translate("documentDetail.movedToTrash"), { undo: async () => {
+        await restoreDocument(trashedID)
+        go(back)
+      } })
       go('#/documents')
     } catch (ex) {
       if (!disposed && version === loadVersion) notify?.(ex.message || translate("documentDetail.couldNotDelete"))
@@ -1523,7 +1543,7 @@
             {#if !trashed && jdCategories.length}
               <select class="input" style="padding:4px 8px;font-size:.8rem"
                       value={doc.jd_category_id}
-                      onchange={(e) => save({ jd_category_id: Number(e.target.value) }, translate("documentDetail.refiled"))}>
+                      onchange={(e) => save({ jd_category_id: Number(e.target.value) }, translate("documentDetail.refiled"), { undoable: true })}>
                 {#each areaGroups as g}
                   <optgroup label={translate("documentDetail.valueValueValue", { "lo": g.lo, "lo2": g.lo + 9, "name": g.name })}>
                     {#each g.categories as c}<option value={c.id}>{c.code} {c.name}</option>{/each}
