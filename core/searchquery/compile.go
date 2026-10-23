@@ -349,6 +349,14 @@ func compileIs(clause ResolvedClause) Predicate {
 			return Predicate{SQL: "NOT EXISTS (SELECT 1 FROM document_intelligence sq_di WHERE sq_di.document_id = d.id AND sq_di.status = 'accepted')"}
 		}
 		return Predicate{SQL: "EXISTS (SELECT 1 FROM document_intelligence sq_di WHERE sq_di.document_id = d.id AND sq_di.status = 'accepted')"}
+	case "processing":
+		// The kinds are postingest.Kind and postingest.PostClassifyKind, which
+		// /api/stats/ counts as processing; postingest imports this package.
+		sql := "EXISTS (SELECT 1 FROM jobs sq_j WHERE sq_j.doc_id = d.id AND sq_j.state IN ('pending', 'running') AND sq_j.kind IN ('post-ingest', 'post-classify'))"
+		if clause.Negated {
+			sql = "NOT " + sql
+		}
+		return Predicate{SQL: sql}
 	default:
 		panic("searchquery: unresolved is value " + clause.Value)
 	}

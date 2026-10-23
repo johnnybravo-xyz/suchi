@@ -873,6 +873,10 @@ deletion timestamps.
 `decrypted` after a successful manual or automatic password unlock. It is
 omitted when no password unlock is recorded. The original blob is preserved.
 
+`processing` is `true` while the document's reading or classification job is
+pending or running, the same rule `/api/stats/` counts and `is:processing`
+matches. It is omitted once processing finishes.
+
 Authenticated owners and administrators can preview and download trashed
 documents until permanent deletion. Other ACL readers
 cannot fetch trashed bytes, and public share links never serve trashed documents.

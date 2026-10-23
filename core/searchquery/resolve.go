@@ -169,11 +169,11 @@ func Resolve(ctx context.Context, query Query, resolver Resolver) (ResolvedQuery
 					return ResolvedQuery{}, err
 				}
 				item.ID = id
-			case "trash", "encrypted", "dated":
+			case "trash", "encrypted", "dated", "processing":
 			default:
 				return ResolvedQuery{}, filterError(clause.Position, clause.Filter,
 					fmt.Sprintf("unknown is value %q", clause.Value),
-					[]string{"inbox", "trash", "encrypted", "dated"})
+					[]string{"inbox", "trash", "encrypted", "dated", "processing"})
 			}
 		case "version":
 			if clause.Negated {

@@ -192,7 +192,7 @@ func (s *Server) queryCompletions(ctx context.Context, raw string, limit int) ([
 	case "date-role":
 		fixed = []string{"issued", "due", "start", "end", "expiry", "renewal", "service", "other"}
 	case "is":
-		fixed = []string{"inbox", "trash", "encrypted", "dated"}
+		fixed = []string{"inbox", "trash", "encrypted", "dated", "processing"}
 	case "version":
 		if !completion.Negated {
 			fixed = []string{"latest", "all", "older"}

@@ -867,7 +867,10 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 // content lands under `content`, correspondent list mirrors the multi-
 // party junction, tags are slugs. Nil-safe: empty slices, not null.
 type DocumentDetail struct {
-	EncryptionState     string                  `json:"encryption_state,omitempty"`
+	EncryptionState string `json:"encryption_state,omitempty"`
+	// Processing matches /api/stats/ and is:processing: reading or
+	// classification has not finished yet.
+	Processing          bool                    `json:"processing,omitempty"`
 	ID                  int64                   `json:"id"`
 	SystemCode          string                  `json:"system_code,omitempty"`
 	JDAddress           string                  `json:"jd_address,omitempty"`
@@ -1076,20 +1079,21 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 		       jc.code, jc.name, ja.name,
 		       d.languages, d.languages_locked,
 		       d.source_mtime, d.content_source, d.device_content_confidence,
-		       d.device_ocr_language, d.device_content_received_at, COALESCE(d.encryption_state, '')
+		       d.device_ocr_language, d.device_content_received_at, COALESCE(d.encryption_state, ''),
+		       EXISTS (SELECT 1 FROM jobs j WHERE j.doc_id = d.id AND j.state IN ('pending', 'running') AND j.kind IN (?, ?))
 		FROM documents d
 		JOIN jd_systems js ON js.id = d.system_id
 		LEFT JOIN jd_categories jc ON jc.id = d.jd_category_id
 		LEFT JOIN jd_areas      ja ON ja.code_start = jc.area_start AND ja.system_id = d.system_id
 		LEFT JOIN storage_paths sp ON sp.id = d.storage_path_id AND sp.system_id = d.system_id
 		WHERE d.id = ?
-	`, includeContent, id).Scan(&d.ID, &d.OwnerID, &d.Title, &d.TitleOwner, &d.SystemCode, &archiveSerialNumber,
+	`, includeContent, postingest.Kind, postingest.PostClassifyKind, id).Scan(&d.ID, &d.OwnerID, &d.Title, &d.TitleOwner, &d.SystemCode, &archiveSerialNumber,
 		&renderedLayoutID, &renderedLayoutName, &renderedLayoutPath, &content, &d.OriginalBlob, &d.OriginalSize,
 		&archBlob, &archSize, &mimeNull,
 		&d.JDCategoryID, &sensitivity, &d.CreatedAt, &d.AddedAt, &d.UpdatedAt, &trashed,
 		&jdCode, &jdName, &jdAreaName, &languagesStored, &languagesLocked,
 		&sourceMTime, &d.ContentSource, &deviceContentConfidence,
-		&d.DeviceOCRLanguage, &deviceContentReceivedAt, &d.EncryptionState)
+		&d.DeviceOCRLanguage, &deviceContentReceivedAt, &d.EncryptionState, &d.Processing)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "document not found")
 		return

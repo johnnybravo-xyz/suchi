@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"testing"
 	"time"
@@ -235,6 +236,16 @@ func TestStats_ProcessingCountsVisibleUnfinishedDocuments(t *testing.T) {
 	if code != 200 || admin.ProcessingReading != 3 || admin.ProcessingClassifying != 1 {
 		t.Fatalf("admin processing: status=%d reading=%d classifying=%d, want 200/3/1",
 			code, admin.ProcessingReading, admin.ProcessingClassifying)
+	}
+
+	// The processing pill links to is:processing, which must list the same documents.
+	listCode, rows, count := doList(t, s, "/api/documents/?q="+url.QueryEscape("is:processing"), memberPrincipal(2))
+	got := map[int64]bool{}
+	for _, row := range rows {
+		got[row.ID] = true
+	}
+	if listCode != 200 || count != 3 || !got[reading] || !got[retrying] || !got[classifying] {
+		t.Fatalf("is:processing: status=%d count=%d rows=%v, want reading, retrying and classifying", listCode, count, got)
 	}
 }
 
