@@ -21,6 +21,9 @@ import (
 // suchi-demo repo. Kept intentionally flat — the demo corpus is
 // human-authored and this struct is the only contract.
 type Manifest struct {
+	// SchemaVersion controls parser compatibility.
+	SchemaVersion int `json:"schema_version"`
+	// Version identifies corpus content and does not control compatibility.
 	Version     string                     `json:"version"`
 	Notes       string                     `json:"notes,omitempty"`
 	Personas    []string                   `json:"personas,omitempty"`
@@ -156,6 +159,9 @@ func ReadManifest(corpusDir string) (*Manifest, error) {
 	if err := json.Unmarshal(b, &m); err != nil {
 		return nil, fmt.Errorf("parse manifest.json: %w (is this a suchi-demo tarball?)", err)
 	}
+	if m.SchemaVersion == 0 {
+		return nil, errors.New("manifest.json missing 'schema_version'")
+	}
 	if m.Version == "" {
 		return nil, errors.New("manifest.json missing 'version'")
 	}
@@ -201,8 +207,8 @@ func SeedFromManifest(ctx context.Context, opts SeedOptions) (Stats, error) {
 	if err != nil {
 		return s, err
 	}
-	if m.Version != DemoCorpusVersion {
-		return s, fmt.Errorf("demo corpus version %q is incompatible with this build (want %q)", m.Version, DemoCorpusVersion)
+	if m.SchemaVersion != ManifestSchemaVersion {
+		return s, fmt.Errorf("demo corpus schema %d is incompatible with this build (want %d)", m.SchemaVersion, ManifestSchemaVersion)
 	}
 	if err := validateFixtureReferences(m.Fixtures); err != nil {
 		return s, err
@@ -212,6 +218,7 @@ func SeedFromManifest(ctx context.Context, opts SeedOptions) (Stats, error) {
 		log = slog.Default()
 	}
 	log.Info("demo.seed.manifest",
+		"schema_version", m.SchemaVersion,
 		"version", m.Version,
 		"clusters", len(m.Clusters),
 		"fixtures", len(m.Fixtures),

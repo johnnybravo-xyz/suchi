@@ -4,6 +4,14 @@ Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-24
+
+### Fixed
+
+- Demo corpus compatibility now follows an explicit manifest
+  `schema_version`, independent of the corpus content release. The built-in
+  default advances to corpus v0.4.1 with its published checksum.
+
 ## [0.4.0] - 2026-10-23
 
 ### Added
@@ -837,7 +845,8 @@ version. Installations keep using the v0.2.0 artifacts.
   and saved document passwords are sealed at rest.
 - Setup, demo isolation, error responses, and capability removal fail closed.
 
-[Unreleased]: https://github.com/johnnybravo-xyz/suchi/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/johnnybravo-xyz/suchi/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/johnnybravo-xyz/suchi/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/johnnybravo-xyz/suchi/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/johnnybravo-xyz/suchi/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/johnnybravo-xyz/suchi/compare/v0.2.0...v0.2.1

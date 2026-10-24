@@ -36,7 +36,7 @@ func TestFetchDefaultRequiresPinnedWarmCache(t *testing.T) {
 		t.Fatal("unverified warm cache bypassed the built-in corpus checksum")
 	}
 
-	if err := os.WriteFile(cache+".sha256", []byte(demo.DemoCorpusSHA256), 0o600); err != nil {
+	if err := os.WriteFile(cache+".sha256", []byte(demo.DefaultCorpusSHA256), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	got, err := demo.Fetch(cancelled, demo.FetchOptions{
@@ -64,7 +64,7 @@ func TestFetchDefaultRejectsUnknownVersionWithoutChecksum(t *testing.T) {
 func TestFetchUnverifiedLocalFileReplacesWarmCacheAndClearsMarker(t *testing.T) {
 	root := t.TempDir()
 	cache := filepath.Join(root, "corpus")
-	primeCache(t, cache, `{"name":"built-in"}`, demo.DemoCorpusSHA256)
+	primeCache(t, cache, `{"name":"built-in"}`, demo.DefaultCorpusSHA256)
 	archive := corpusArchive(t, `{"name":"custom-file"}`)
 	archivePath := filepath.Join(root, "custom.tar.gz")
 	if err := os.WriteFile(archivePath, archive, 0o600); err != nil {
@@ -83,7 +83,7 @@ func TestFetchUnverifiedLocalFileReplacesWarmCacheAndClearsMarker(t *testing.T) 
 
 func TestFetchUnverifiedURLReplacesWarmCacheAndClearsMarker(t *testing.T) {
 	cache := filepath.Join(t.TempDir(), "corpus")
-	primeCache(t, cache, `{"name":"built-in"}`, demo.DemoCorpusSHA256)
+	primeCache(t, cache, `{"name":"built-in"}`, demo.DefaultCorpusSHA256)
 	archive := corpusArchive(t, `{"name":"custom-url"}`)
 	var archiveRequests atomic.Int32
 	var sidecarRequests atomic.Int32
@@ -156,7 +156,7 @@ func TestFetchResolvesURLSidecarBeforeWarmCacheReuse(t *testing.T) {
 func TestFetchVerifiedReplacementWritesMarker(t *testing.T) {
 	root := t.TempDir()
 	cache := filepath.Join(root, "corpus")
-	primeCache(t, cache, `{"name":"stale"}`, demo.DemoCorpusSHA256)
+	primeCache(t, cache, `{"name":"stale"}`, demo.DefaultCorpusSHA256)
 	archive := corpusArchive(t, `{"name":"verified"}`)
 	checksum := archiveChecksum(archive)
 	archivePath := filepath.Join(root, "verified.tar.gz")

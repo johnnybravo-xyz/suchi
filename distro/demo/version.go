@@ -9,11 +9,14 @@
 // the only contract.
 package demo
 
-// DemoCorpusVersion names the corpus release this build was tested
-// against. Bumped in the same PR that lands a corpus-breaking change.
-// Consumers may point at any tarball; the seeder errors clearly on
-// shape mismatch (see seed.go).
+// ManifestSchemaVersion is the corpus manifest shape this build supports.
+// Corpus release versions identify content and may advance independently while
+// the schema remains compatible.
+const ManifestSchemaVersion = 1
+
+// DefaultCorpusVersion and DefaultCorpusSHA256 select the authenticated corpus
+// release fetched when the operator does not supply a source.
 const (
-	DemoCorpusVersion = "v0.3.0"
-	DemoCorpusSHA256  = "d6532894d851f47ef1351bef622271f4f25d34595fc4022c70cf078c5ef83261"
+	DefaultCorpusVersion = "v0.4.1"
+	DefaultCorpusSHA256  = "704a93467bdf5c72502481dfe2913c598a4c6c22c18685c051471f07833f2430"
 )

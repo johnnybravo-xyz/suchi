@@ -109,7 +109,11 @@ func TestDemoManifestReseedingPreservesDocumentTagsAndJobs(t *testing.T) {
 		{name: "one new fixture", count: 3, seeded: 1, existing: 2},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			body, err := json.Marshal(demo.Manifest{Version: demo.DemoCorpusVersion, Fixtures: fixtures[:test.count]})
+			body, err := json.Marshal(demo.Manifest{
+				SchemaVersion: demo.ManifestSchemaVersion,
+				Version:       demo.DefaultCorpusVersion,
+				Fixtures:      fixtures[:test.count],
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -186,7 +190,11 @@ func TestDemoManifestSeedsVersionsAndLinks(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	body, err := json.Marshal(demo.Manifest{Version: demo.DemoCorpusVersion, Fixtures: fixtures})
+	body, err := json.Marshal(demo.Manifest{
+		SchemaVersion: demo.ManifestSchemaVersion,
+		Version:       demo.DefaultCorpusVersion,
+		Fixtures:      fixtures,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +243,11 @@ func TestDemoManifestSeedsVersionsAndLinks(t *testing.T) {
 
 	broken := append([]demo.ManifestFixture(nil), fixtures...)
 	broken[0].PreviousVersion = "quote-rev2.txt"
-	body, err = json.Marshal(demo.Manifest{Version: demo.DemoCorpusVersion, Fixtures: broken})
+	body, err = json.Marshal(demo.Manifest{
+		SchemaVersion: demo.ManifestSchemaVersion,
+		Version:       demo.DefaultCorpusVersion,
+		Fixtures:      broken,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +281,11 @@ func TestDemoManifestSeedsArchiveSerialNumbers(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		body, err := json.Marshal(demo.Manifest{Version: demo.DemoCorpusVersion, Fixtures: fixtures})
+		body, err := json.Marshal(demo.Manifest{
+			SchemaVersion: demo.ManifestSchemaVersion,
+			Version:       demo.DefaultCorpusVersion,
+			Fixtures:      fixtures,
+		})
 		if err != nil {
 			t.Fatal(err)
 		}

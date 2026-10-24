@@ -243,7 +243,7 @@ do not duplicate them here.
    the exact commit and tag to GitHub:
 
    ```sh
-   export VERSION=v0.4.0
+   export VERSION=v0.4.1
    git tag -s "$VERSION" -m "suchi ${VERSION#v}"
    ./hack/verify-release-tag.sh "$VERSION"
    git push gh main
@@ -303,7 +303,7 @@ the release artifacts to verify and deploy.
 Set the release coordinates on every build machine:
 
 ```sh
-export VERSION=v0.4.0
+export VERSION=v0.4.1
 export IMAGE=ghcr.io/johnnybravo-xyz/suchi
 export CACHE_AMD64="$IMAGE:buildcache-amd64"
 export CACHE_ARM64="$IMAGE:buildcache-arm64"

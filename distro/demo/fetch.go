@@ -47,8 +47,8 @@ type FetchOptions struct {
 	// $HOME/.cache/suchi/demo-corpus-<version>/.
 	CacheDir string
 
-	// Version — corpus version string, used only to name the cache
-	// subdirectory. Defaults to DemoCorpusVersion.
+	// Version — corpus content release, used only to select the default
+	// artifact and name the cache subdirectory. Defaults to DefaultCorpusVersion.
 	Version string
 }
 
@@ -63,7 +63,7 @@ func DefaultCorpusURL(version string) string {
 // with matching sha short-circuits.
 func Fetch(ctx context.Context, opts FetchOptions) (string, error) {
 	if opts.Version == "" {
-		opts.Version = DemoCorpusVersion
+		opts.Version = DefaultCorpusVersion
 	}
 	if opts.CacheDir == "" {
 		base, err := defaultCacheBase()
@@ -74,10 +74,10 @@ func Fetch(ctx context.Context, opts FetchOptions) (string, error) {
 	}
 	if opts.LocalFile == "" && opts.URL == "" {
 		opts.URL = DefaultCorpusURL(opts.Version)
-		if opts.Version != DemoCorpusVersion {
+		if opts.Version != DefaultCorpusVersion {
 			return "", fmt.Errorf("no built-in checksum for demo corpus %q", opts.Version)
 		}
-		opts.ExpectedSHA256 = DemoCorpusSHA256
+		opts.ExpectedSHA256 = DefaultCorpusSHA256
 	}
 	if opts.LocalFile == "" && opts.ExpectedSHA256 == "" {
 		// Resolve a custom URL's optional sidecar before considering the cache.

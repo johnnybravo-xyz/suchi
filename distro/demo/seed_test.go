@@ -19,7 +19,8 @@ import (
 func TestSeedFromManifestSavedViews(t *testing.T) {
 	dir := t.TempDir()
 	manifest := demo.Manifest{
-		Version: demo.DemoCorpusVersion,
+		SchemaVersion: demo.ManifestSchemaVersion,
+		Version:       demo.DefaultCorpusVersion,
 		SavedViews: []demo.ManifestSavedView{
 			{Name: "Inbox", FilterJSON: json.RawMessage(`{"q":"invoice"}`)},
 			{Name: "Existing", FilterJSON: json.RawMessage(`{}`)},
@@ -55,7 +56,8 @@ func TestSeedFromManifestSavedViews(t *testing.T) {
 func TestSeedFromManifestAutomations(t *testing.T) {
 	dir := t.TempDir()
 	writeManifest(t, dir, demo.Manifest{
-		Version: demo.DemoCorpusVersion,
+		SchemaVersion: demo.ManifestSchemaVersion,
+		Version:       demo.DefaultCorpusVersion,
 		Automations: []demo.ManifestAutomation{
 			{Name: "Route utilities", Trigger: demo.ManifestTrigger{Type: 2}, Actions: []demo.ManifestAction{{Kind: "assign_tags"}}},
 			{Name: "Existing", Trigger: demo.ManifestTrigger{Type: 2}, Actions: []demo.ManifestAction{{Kind: "assign_tags"}}},
@@ -79,11 +81,16 @@ func TestSeedFromManifestAutomations(t *testing.T) {
 	}
 }
 
-func TestSeedFromManifestRejectsOtherCorpusVersion(t *testing.T) {
+func TestSeedFromManifestUsesSchemaVersionForCompatibility(t *testing.T) {
 	dir := t.TempDir()
-	writeManifest(t, dir, demo.Manifest{Version: "v9.9.9"})
+	writeManifest(t, dir, demo.Manifest{SchemaVersion: demo.ManifestSchemaVersion, Version: "v99.0.0"})
+	if _, err := demo.SeedFromManifest(context.Background(), demo.SeedOptions{CorpusDir: dir}); err != nil {
+		t.Fatalf("independent corpus release was rejected: %v", err)
+	}
+
+	writeManifest(t, dir, demo.Manifest{SchemaVersion: demo.ManifestSchemaVersion + 1, Version: demo.DefaultCorpusVersion})
 	if _, err := demo.SeedFromManifest(context.Background(), demo.SeedOptions{CorpusDir: dir}); err == nil {
-		t.Fatal("expected incompatible corpus version error")
+		t.Fatal("unsupported corpus schema was accepted")
 	}
 }
 
@@ -99,8 +106,9 @@ func TestSeedFromManifestDistinguishesNewAndExistingFixtures(t *testing.T) {
 		}
 	}
 	writeManifest(t, dir, demo.Manifest{
-		Version:  demo.DemoCorpusVersion,
-		Fixtures: []demo.ManifestFixture{{Filename: "new.pdf"}, {Filename: "existing.pdf"}},
+		SchemaVersion: demo.ManifestSchemaVersion,
+		Version:       demo.DefaultCorpusVersion,
+		Fixtures:      []demo.ManifestFixture{{Filename: "new.pdf"}, {Filename: "existing.pdf"}},
 	})
 	stats, err := demo.SeedFromManifest(context.Background(), demo.SeedOptions{
 		CorpusDir: dir,
@@ -132,7 +140,8 @@ func TestSeedFromManifestRejectsUnsafeFixtureNamesAndNonRegularFiles(t *testing.
 		t.Fatal(err)
 	}
 	writeManifest(t, dir, demo.Manifest{
-		Version: demo.DemoCorpusVersion,
+		SchemaVersion: demo.ManifestSchemaVersion,
+		Version:       demo.DefaultCorpusVersion,
 		Fixtures: []demo.ManifestFixture{
 			{Filename: "../outside.txt"},
 			{Filename: filepath.Join(dir, "outside.txt")},
@@ -182,8 +191,9 @@ func TestSeedFromManifestRejectsSymlinkFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeManifest(t, dir, demo.Manifest{
-		Version:  demo.DemoCorpusVersion,
-		Fixtures: []demo.ManifestFixture{{Filename: "linked.txt"}},
+		SchemaVersion: demo.ManifestSchemaVersion,
+		Version:       demo.DefaultCorpusVersion,
+		Fixtures:      []demo.ManifestFixture{{Filename: "linked.txt"}},
 	})
 
 	called := false
@@ -217,8 +227,9 @@ func TestSeedFromManifestPassesOpenedFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeManifest(t, dir, demo.Manifest{
-		Version:  demo.DemoCorpusVersion,
-		Fixtures: []demo.ManifestFixture{{Filename: "fixture.txt"}},
+		SchemaVersion: demo.ManifestSchemaVersion,
+		Version:       demo.DefaultCorpusVersion,
+		Fixtures:      []demo.ManifestFixture{{Filename: "fixture.txt"}},
 	})
 
 	var got string
@@ -256,7 +267,8 @@ func TestDefaultCorpusURL(t *testing.T) {
 func TestSeedFromManifestSavedViewsDryRun(t *testing.T) {
 	dir := t.TempDir()
 	writeManifest(t, dir, demo.Manifest{
-		Version: demo.DemoCorpusVersion,
+		SchemaVersion: demo.ManifestSchemaVersion,
+		Version:       demo.DefaultCorpusVersion,
 		SavedViews: []demo.ManifestSavedView{
 			{Name: "Inbox", FilterJSON: json.RawMessage(`{}`)},
 			{Name: "Recent"},

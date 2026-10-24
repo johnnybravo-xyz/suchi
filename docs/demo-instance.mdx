@@ -31,11 +31,13 @@ Useful flags:
 | `--corpus-dir <path>`  | Seed from an already extracted corpus.      |
 | `--fetch-only`         | Stop after source resolution, before database seeding. |
 
-Without a corpus flag, the command fetches the release tested with this build.
-Its URL and SHA-256 digest are compiled into Suchi. A mismatched download is
-rejected, and a warm built-in cache is reused only when its checksum marker
-matches that compiled digest. An unknown default corpus version without a pinned
-digest is refused. The hosted image embeds the matching tarball and seeds only
+Without a corpus flag, the command fetches the default content release selected
+by this build. Its URL and SHA-256 digest are compiled into Suchi. A mismatched
+download is rejected, and a warm built-in cache is reused only when its checksum
+marker matches that compiled digest. An unknown default corpus version without a
+pinned digest is refused. The manifest's integer `schema_version` controls
+compatibility; its content `version` may advance independently while the schema
+stays supported. The hosted image embeds the selected tarball and seeds only
 when its dedicated data volume has no database. Normal `suchi serve` startup
 never fetches content.
 
@@ -64,7 +66,7 @@ and `extractor=demo-corpus`; no model confidence or human review is invented.
 Evidence must come from the fixture. Reseeding preserves existing documents;
 updated fixtures take effect on a fresh demo volume at the next reset.
 
-Corpus v0.3.0 places three public multilingual examples at the front of the
+Corpus v0.4.1 places three public multilingual examples at the front of the
 dashboard's recent-document pile: a Japanese electricity bill, a Korean mobile
 bill, and a German electricity statement. The seeder preserves manifest order;
 because one seed run gives fixtures the same timestamp, the document list's
