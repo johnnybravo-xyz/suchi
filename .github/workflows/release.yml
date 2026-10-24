@@ -1,22 +1,21 @@
 name: release
 
-# Manual-only trigger. `git push --tags` does NOT fire this workflow —
-# a human still has to click "Run workflow" in the GitHub UI or run
-# `make release VERSION=vX.Y.Z` locally. The two-step cut:
+# Manual-only trigger. `git push --tags` does not run this workflow.
+# Dispatch from an existing signed release tag:
 #
 #   1. git tag -s vX.Y.Z -m "suchi X.Y.Z"; git push gh vX.Y.Z
-#   2. click "Run workflow" against ref=vX.Y.Z (or `make release
-#      VERSION=vX.Y.Z`)
+#   2. click "Run workflow" against ref=vX.Y.Z, or run
+#      `make release VERSION=vX.Y.Z`
 #
-# The tag has to exist on GitHub first — the dispatch uses `ref` to
-# check out the commit so every step downstream sees `github.ref_name
-# = vX.Y.Z`. See docs/release-process.mdx for the full runbook.
+# `publish=true` runs the full publication graph. `publish=false` validates the
+# signed tag and release gates without packaging or publishing release
+# artifacts. See docs/release-process.mdx for the full runbook.
 
 on:
   workflow_dispatch:
     inputs:
       publish:
-        description: 'Publish a GitHub Release (true) or artifacts-only smoke test (false)'
+        description: 'Publish release artifacts (true) or validate the signed tag only (false)'
         required: false
         default: 'true'
 
@@ -83,21 +82,20 @@ jobs:
           docker compose config --quiet
           make docs-check
           git diff --check
-      - name: validate publish ref
-        if: inputs.publish == 'true'
+      - name: validate signed release tag
         env:
           REF_NAME: ${{ github.ref_name }}
           REF_TYPE: ${{ github.ref_type }}
         run: |
           set -euo pipefail
           if [ "$REF_TYPE" != "tag" ]; then
-            echo "publishing requires a tag ref; got $REF_TYPE '$REF_NAME'" >&2
+            echo "release validation requires a tag ref; got $REF_TYPE '$REF_NAME'" >&2
             exit 1
           fi
 
           semver='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
           if [[ ! "$REF_NAME" =~ $semver ]]; then
-            echo "publishing requires a SemVer tag such as v0.1.0 or v0.1.0-beta.1" >&2
+            echo "release validation requires a SemVer tag such as v0.1.0 or v0.1.0-beta.1" >&2
             exit 1
           fi
 
@@ -126,7 +124,7 @@ jobs:
           client_id=$(awk -F'"' '/^[[:space:]]*DefaultClientID = "/ { print $2; exit }' \
             core/ingest/emailwatch/oauth/microsoft.go)
           if [ -z "$client_id" ] || [ "$client_id" = "00000000-0000-0000-0000-000000000000" ]; then
-            echo "publishing requires the tested Suchi Microsoft public client ID" >&2
+            echo "release validation requires the tested Suchi Microsoft public client ID" >&2
             exit 1
           fi
 
@@ -137,6 +135,7 @@ jobs:
   # moving channel tags.
   # -------------------------------------------------------------------
   notes:
+    if: inputs.publish == 'true'
     runs-on: ubuntu-latest
     needs: preflight
     outputs:
@@ -149,9 +148,6 @@ jobs:
         run: |
           set -euo pipefail
           artifact_version="$GITHUB_REF_NAME"
-          if [ "${{ inputs.publish }}" != "true" ]; then
-            artifact_version="snapshot-${GITHUB_SHA:0:12}"
-          fi
           echo "artifact_version=$artifact_version" >> "$GITHUB_OUTPUT"
           ver=${GITHUB_REF_NAME#v}
           echo "prerelease=$([[ "$ver" == *-* ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
@@ -161,20 +157,15 @@ jobs:
             *)       echo "channel=stable" >> "$GITHUB_OUTPUT" ;;
           esac
 
-          # Published tags have a matching section, enforced by preflight.
-          # Artifact-only branch runs use [Unreleased].
+          # Every workflow run targets a signed release tag.
           awk -v h="## [$ver]" '
             $0 == h || index($0, h " - ") == 1 { flag=1; next }
             flag && /^## \[/                    { exit }
             flag                                { print }
           ' CHANGELOG.md > /tmp/notes.md
           if [ ! -s /tmp/notes.md ]; then
-            if [ "${{ inputs.publish }}" = "true" ]; then
-              echo "release notes for $ver are empty" >&2
-              exit 1
-            fi
-            awk '/^## \[Unreleased\]/ { flag=1; next } flag && /^## \[/ { exit } flag { print }' \
-              CHANGELOG.md > /tmp/notes.md
+            echo "release notes for $ver are empty" >&2
+            exit 1
           fi
       # GitHub may suppress long job outputs that resemble a secret. The notes
       # are public changelog text; carry the file through the existing collector.
@@ -188,6 +179,7 @@ jobs:
   # Build and sign both image variants for linux/amd64 and linux/arm64.
   # -------------------------------------------------------------------
   images:
+    if: inputs.publish == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -322,6 +314,7 @@ jobs:
   # downloaders can verify without invoking cosign.
   # -------------------------------------------------------------------
   binaries:
+    if: inputs.publish == 'true'
     runs-on: ubuntu-latest
     needs: notes
     strategy:
@@ -378,6 +371,7 @@ jobs:
   # Dockerfile owns the build recipe and all toolchain/source pins.
   # -------------------------------------------------------------------
   anydoc-binaries:
+    if: inputs.publish == 'true'
     runs-on: ubuntu-latest
     needs: notes
     strategy:
@@ -442,6 +436,7 @@ jobs:
   # whole bundle to the GitHub release.
   # -------------------------------------------------------------------
   collect:
+    if: inputs.publish == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -476,11 +471,6 @@ jobs:
             SHA256SUMS
 
       - name: publish release
-        # Manual dispatch only — publish when the operator explicitly
-        # asks (`publish: true`, which is the default from the "Run
-        # workflow" button). Set publish=false for artifacts-only
-        # smoke runs against a branch.
-        if: inputs.publish == 'true'
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           name: suchi ${{ github.ref_name }}

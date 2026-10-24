@@ -4,6 +4,11 @@ Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
 
+### Changed
+
+- Manual release runs with `publish=false` now validate the signed tag and
+  release gates without packaging or publishing release artifacts.
+
 ## [0.4.1] - 2026-10-24
 
 ### Fixed
