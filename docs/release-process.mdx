@@ -257,8 +257,9 @@ do not duplicate them here.
    ```
 
    This verifies that the local and GitHub tags resolve to the same commit. Use
-   `PUBLISH=false` for an artifacts-only run. The checked-in proposal policy is
-   identical across every binary and image built from the tag. Zero thresholds
+   `PUBLISH=false` to validate the signed tag and release gates without
+   packaging or publishing release artifacts. The checked-in proposal policy
+   remains identical across every published binary and image. Zero thresholds
    do not cancel existing reminders, and explicit rescans remain available.
 
 The workflow builds standard and full multi-architecture images, cross-platform
@@ -454,8 +455,10 @@ wrong-key, locally divergent and remotely divergent tags.
 Images wait for both binary matrices before publication and reuse the AnyDoc
 matrix's verified binaries rather than rebuilding them. Release runs are
 serialized because moving image channels are shared mutable state.
-Artifacts-only branch runs use `snapshot-<commit>` names and skip signing and
-publication; they still produce ordinary workflow artifacts and GHA caches.
+Validation-only tag runs execute the reusable checks and release preflight, then
+skip release notes, binary and image packaging, the artifact collector, GitHub
+Release creation, and channel promotion. Reusable checks may carry their
+short-lived SPA build between jobs; it is not a release artifact.
 
 For a security hotfix, branch from the affected tag, land the fix and changelog
 entry, publish the patch release, then merge the fix back into `main`.
