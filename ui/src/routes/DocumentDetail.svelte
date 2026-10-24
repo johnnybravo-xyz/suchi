@@ -6,7 +6,7 @@
   import { onDestroy, tick, untrack } from 'svelte'
   import { listIntelligence, getDocument, getDocumentIntrinsic, patchDocument, deleteDocument, restoreDocument, permanentlyDeleteDocument, documentVersions, documentBacklinks, uploadDocumentVersion, setDocumentCustomField, clearDocumentCustomField, createDocumentNote, updateDocumentNote, deleteDocumentNote, createShareLink, listShareLinks, deleteShareLink, previewPath, downloadPath, similarDocs, listGrants, putGrant, deleteGrant, listAllTags, listCorrespondents, listCustomFields, listDocuments, bulkEdit } from '../lib/api.js'
   import { go } from '../lib/router.svelte.js'
-  import { SENSITIVITY_OPTIONS, compareLocalized, customFieldLabel, fmtDate, fmtBytes, formatDaysAway, formatLabel, isHighSensitivity, sensDot, sensitivityLabel } from '../lib/format.js'
+  import { SENSITIVITY_OPTIONS, compareLocalized, customFieldLabel, fmtDate, fmtBytes, formatDaysAway, formatLabel, isHighSensitivity, plural, sensDot, sensitivityLabel } from '../lib/format.js'
   import { originalNames, sourceGroups } from '../lib/documentSources.js'
   import { session } from '../lib/session.svelte.js'
   import { hasCapability } from '../lib/capabilities.js'
@@ -188,8 +188,12 @@
   const originalFileDate = $derived(doc?.source_mtime ||
     (doc?.created_at && doc.created_at !== doc.added_at ? doc.created_at : null))
   const setCustomFieldCount = $derived(displayedOrdinaryCustomFields.filter(field => field.is_set).length)
-  const hasMoreFields = $derived(archiveSerialNumberInMore || displayedOrdinaryCustomFields.length > 0 ||
+  const hasMoreFields = $derived(laterDates.length > 0 || archiveSerialNumberInMore || displayedOrdinaryCustomFields.length > 0 ||
     (!trashed && availableOrdinaryCustomFields.length > 0))
+  const moreSummary = $derived([
+    laterDates.length ? plural("documentDetail.dateCount", laterDates.length) : '',
+    setCustomFieldCount === 1 ? translate("documentDetail.moreFieldsOne") : setCustomFieldCount ? translate("documentDetail.moreFieldsMany", { count: String(setCustomFieldCount) }) : '',
+  ].filter(Boolean).join(' · '))
   const documentLinkFields = $derived.by(() => {
     const fields = new Map()
     for (const field of customFieldDefinitions) {
@@ -239,13 +243,18 @@
   })
 
   // Accepted dates found in this document, such as an expiry or due date.
+  // A long schedule keeps its first dates on the card; the rest sit behind More.
+  const DATE_PREVIEW = 3
   let documentDates = $state([])
+  let collapsibleDates = $derived(documentDates.length > DATE_PREVIEW + 1)
+  let visibleDates = $derived(collapsibleDates ? documentDates.slice(0, DATE_PREVIEW) : documentDates)
+  let laterDates = $derived(collapsibleDates ? documentDates.slice(DATE_PREVIEW) : [])
 
   async function loadDocumentDates(documentID, version, scope) {
     documentDates = []
     if (!canViewDates) return
     try {
-      const res = await listIntelligence({ status: 'accepted', type: 'date', document_ids: documentID, page_size: 20 })
+      const res = await listIntelligence({ status: 'accepted', type: 'date', document_ids: documentID, page_size: 100 })
       if (!disposed && version === loadVersion && scopeCurrent(scope)) documentDates = res?.results || []
     } catch {}
   }
@@ -1585,16 +1594,7 @@
           {#if documentDates.length}
             <dt>{translate("documentDetail.dates")}</dt>
             <dd class="document-dates">
-              {#each documentDates as event (event.id)}
-                {@const days = event.value?.precision === 'day' ? daysUntil(event.value.date) : null}
-                <span class="document-date">
-                  <span><b>{intelligenceRoleLabel(event.role)}</b> · {formatIntelligenceDate(event)}</span>
-                  {#if days !== null && days >= 0}<span class="date-distance">{formatDaysAway(days)}</span>{/if}
-                  {#if days !== null && days >= 0 && canExportCalendarDate(event)}
-                    <button class="btn sm" type="button" onclick={() => addToCalendar(event)}>{translate("documentDetail.addToCalendar")}</button>
-                  {/if}
-                </span>
-              {/each}
+              {#each visibleDates as event (event.id)}{@render documentDate(event)}{/each}
             </dd>
           {/if}
           <dt>{translate("documentDetail.sensitivity")}</dt>
@@ -1759,6 +1759,12 @@
           </dd>
           {#if showMoreFields}
             <div class="more-fields" bind:this={moreFieldsElement}>
+              {#if laterDates.length}
+                <dt>{translate("documentDetail.laterDates")}</dt>
+                <dd class="document-dates">
+                  {#each laterDates as event (event.id)}{@render documentDate(event)}{/each}
+                </dd>
+              {/if}
               {#if archiveSerialNumberInMore}{@render archiveSerialNumberRow()}{/if}
               {#each displayedOrdinaryCustomFields as field (field.field_id)}
                 {@const editor = customFieldEditors[field.field_id]}
@@ -1856,7 +1862,7 @@
           <button class="more-fields-toggle" type="button" bind:this={moreToggleElement}
                   aria-expanded={showMoreFields} onclick={toggleMoreFields}>
             {showMoreFields ? translate("documentDetail.lessFields") : translate("documentDetail.moreFields")}
-            {#if !showMoreFields && setCustomFieldCount}<span class="sub">· {setCustomFieldCount === 1 ? translate("documentDetail.moreFieldsOne") : translate("documentDetail.moreFieldsMany", { count: String(setCustomFieldCount) })}</span>{/if}
+            {#if !showMoreFields && moreSummary}<span class="sub">· {moreSummary}</span>{/if}
             <span class="more-fields-chevron" class:open={showMoreFields} aria-hidden="true">▾</span>
           </button>
         {/if}
@@ -2379,6 +2385,17 @@
     onConfirm={revokeShare}
     onCancel={() => (sharePendingRevoke = null)} />
 {/if}
+
+{#snippet documentDate(event)}
+  {@const days = event.value?.precision === 'day' ? daysUntil(event.value.date) : null}
+  <span class="document-date">
+    <span><b>{intelligenceRoleLabel(event.role)}</b> · {formatIntelligenceDate(event)}</span>
+    {#if days !== null && days >= 0}<span class="date-distance">{formatDaysAway(days)}</span>{/if}
+    {#if days !== null && days >= 0 && canExportCalendarDate(event)}
+      <button class="btn sm" type="button" onclick={() => addToCalendar(event)}>{translate("documentDetail.addToCalendar")}</button>
+    {/if}
+  </span>
+{/snippet}
 
 {#snippet archiveSerialNumberRow()}
 <dt>{translate("documentDetail.archiveSerialNumber")}</dt>
