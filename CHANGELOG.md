@@ -8,9 +8,10 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
-- Demo corpus compatibility now follows an explicit manifest
-  `schema_version`, independent of the corpus content release. The built-in
-  default advances to corpus v0.4.1 with its published checksum.
+- Demo corpus compatibility now follows `manifest.schema_version`, independent
+  of the corpus content release. `suchi demo` requires one explicit local
+  archive, extracted directory, or URL and no longer embeds a private release
+  URL or checksum.
 
 ## [0.4.0] - 2026-10-23
 

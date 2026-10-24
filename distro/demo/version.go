@@ -13,10 +13,3 @@ package demo
 // Corpus release versions identify content and may advance independently while
 // the schema remains compatible.
 const ManifestSchemaVersion = 1
-
-// DefaultCorpusVersion and DefaultCorpusSHA256 select the authenticated corpus
-// release fetched when the operator does not supply a source.
-const (
-	DefaultCorpusVersion = "v0.4.1"
-	DefaultCorpusSHA256  = "704a93467bdf5c72502481dfe2913c598a4c6c22c18685c051471f07833f2430"
-)

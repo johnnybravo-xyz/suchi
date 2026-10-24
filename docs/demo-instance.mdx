@@ -18,7 +18,7 @@ maintained separately in
 PUBLIC_URL=http://localhost:8000 \
 DATA_DIR=./demo-data \
 SUCHI_DEMO_MODE=1 \
-suchi demo
+suchi demo --corpus-file ./corpus-v0.4.1.tar.gz
 ```
 
 Useful flags:
@@ -31,21 +31,24 @@ Useful flags:
 | `--corpus-dir <path>`  | Seed from an already extracted corpus.      |
 | `--fetch-only`         | Stop after source resolution, before database seeding. |
 
-Without a corpus flag, the command fetches the default content release selected
-by this build. Its URL and SHA-256 digest are compiled into Suchi. A mismatched
-download is rejected, and a warm built-in cache is reused only when its checksum
-marker matches that compiled digest. An unknown default corpus version without a
-pinned digest is refused. The manifest's integer `schema_version` controls
-compatibility; its content `version` may advance independently while the schema
-stays supported. The hosted image embeds the selected tarball and seeds only
-when its dedicated data volume has no database. Normal `suchi serve` startup
-never fetches content.
+Exactly one of `--corpus-url`, `--corpus-file`, or `--corpus-dir` is required.
+Suchi never chooses or downloads a corpus release implicitly. The manifest's
+integer `schema_version` is the only compatibility gate; its `version` identifies
+the content and may advance independently while the schema remains supported.
+The hosted image embeds its reviewed tarball and seeds only when its dedicated
+data directory has no database. Normal `suchi serve` startup never fetches
+content.
 
-`--corpus-url`, `--corpus-file`, and `--corpus-dir` are operator-selected trust
-overrides. A custom URL uses its `.sha256` sidecar when available, but remains
-accepted without one; a local archive or extracted directory is not authenticated
-by the CLI. Verify custom inputs independently and use HTTPS for remote sources.
-A checksum proves byte identity, not that a corpus is appropriate or harmless.
+All three sources are operator-selected trust boundaries. A URL uses its
+`.sha256` sidecar when available and can also receive an explicit expected
+checksum, but remains accepted without either. A local archive or extracted
+directory is not authenticated by the CLI. Verify inputs independently and use
+HTTPS for remote sources. A checksum proves byte identity, not that a corpus is
+appropriate or harmless.
+
+Downloaded and local archives share a neutral corpus cache. Verified content
+reuses the cache only when its checksum marker matches; an unverified source is
+read or fetched again and replaces the prior cache every time.
 
 Local and remote corpus archives are limited to 256 MiB compressed, 1 GiB
 extracted, and 10,000 entries; remote checksum responses are limited to 4 KiB.

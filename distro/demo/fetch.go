@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -33,55 +34,41 @@ type FetchOptions struct {
 	// Dockerfile bakes the tarball in and passes --corpus-file).
 	LocalFile string
 
-	// URL — HTTPS fetch endpoint. Ignored if LocalFile is set.
-	// Empty => the corpus release tested with this Suchi build.
+	// URL is an explicit HTTP(S) fetch endpoint. It cannot be combined with
+	// LocalFile.
 	URL string
 
-	// ExpectedSHA256 — hex-encoded sha256. The built-in release always uses
-	// the checksum compiled into this Suchi build. For an operator-supplied URL,
-	// an empty value falls back to the URL's .sha256 sidecar when available.
+	// ExpectedSHA256 is an optional hex-encoded sha256. For a URL, an empty
+	// value falls back to the URL's .sha256 sidecar when available.
 	ExpectedSHA256 string
 
-	// CacheDir — where the extracted corpus lands. Defaults to
-	// $XDG_CACHE_HOME/suchi/demo-corpus-<version>/ or
-	// $HOME/.cache/suchi/demo-corpus-<version>/.
+	// CacheDir is where the extracted corpus lands. Defaults to
+	// $XDG_CACHE_HOME/suchi/demo-corpus or
+	// $HOME/.cache/suchi/demo-corpus.
 	CacheDir string
-
-	// Version — corpus content release, used only to select the default
-	// artifact and name the cache subdirectory. Defaults to DefaultCorpusVersion.
-	Version string
 }
 
-// DefaultCorpusURL returns the release asset tested with this build.
-func DefaultCorpusURL(version string) string {
-	return fmt.Sprintf("https://github.com/johnnybravo-xyz/suchi-demo/releases/download/corpus-%s/corpus-%s.tar.gz", version, version)
-}
-
-// Fetch resolves the corpus tarball (local or HTTPS), verifies its
-// sha256 if one is available, extracts into CacheDir if the cache is
-// cold, and returns the extracted path. Idempotent — a warm cache
-// with matching sha short-circuits.
+// Fetch resolves one explicit corpus tarball source, verifies its sha256 when
+// one is available, extracts into CacheDir, and returns the extracted path.
+// Verified content may reuse a warm cache with a matching marker. Unverified
+// content always replaces the cache.
 func Fetch(ctx context.Context, opts FetchOptions) (string, error) {
-	if opts.Version == "" {
-		opts.Version = DefaultCorpusVersion
+	hasLocalFile := opts.LocalFile != ""
+	hasURL := opts.URL != ""
+	if hasLocalFile == hasURL {
+		return "", errors.New("exactly one of LocalFile and URL is required")
 	}
 	if opts.CacheDir == "" {
 		base, err := defaultCacheBase()
 		if err != nil {
 			return "", err
 		}
-		opts.CacheDir = filepath.Join(base, "suchi", "demo-corpus-"+opts.Version)
+		opts.CacheDir = filepath.Join(base, "suchi", "demo-corpus")
 	}
-	if opts.LocalFile == "" && opts.URL == "" {
-		opts.URL = DefaultCorpusURL(opts.Version)
-		if opts.Version != DefaultCorpusVersion {
-			return "", fmt.Errorf("no built-in checksum for demo corpus %q", opts.Version)
-		}
-		opts.ExpectedSHA256 = DefaultCorpusSHA256
-	}
-	if opts.LocalFile == "" && opts.ExpectedSHA256 == "" {
-		// Resolve a custom URL's optional sidecar before considering the cache.
-		// Without a checksum, the source cannot be tied to existing cache bytes.
+	if hasURL && opts.ExpectedSHA256 == "" {
+		// Resolve an explicit URL's optional sidecar before considering the
+		// cache. Without a checksum, no identity ties existing cache bytes to
+		// this source.
 		if checksum, err := httpGet(ctx, opts.URL+".sha256", maxChecksumBytes); err == nil {
 			opts.ExpectedSHA256 = firstHexToken(string(checksum))
 		}

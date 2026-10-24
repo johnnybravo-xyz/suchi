@@ -45,6 +45,24 @@ func newDemoTestDB(t *testing.T) *db.DB {
 	return d
 }
 
+func TestRunDemoRequiresExactlyOneCorpusSource(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args []string
+	}{
+		{name: "missing", args: []string{"--fetch-only"}},
+		{name: "file and directory", args: []string{"--corpus-file", "corpus.tar.gz", "--corpus-dir", "corpus"}},
+		{name: "file and URL", args: []string{"--corpus-file", "corpus.tar.gz", "--corpus-url", "https://example.test/corpus.tar.gz"}},
+		{name: "directory and URL", args: []string{"--corpus-dir", "corpus", "--corpus-url", "https://example.test/corpus.tar.gz"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if code := runDemo(test.args); code != 2 {
+				t.Fatalf("runDemo exit = %d, want 2", code)
+			}
+		})
+	}
+}
+
 func TestMakeSavedViewIngestIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	d := newDemoTestDB(t)
@@ -111,7 +129,7 @@ func TestDemoManifestReseedingPreservesDocumentTagsAndJobs(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			body, err := json.Marshal(demo.Manifest{
 				SchemaVersion: demo.ManifestSchemaVersion,
-				Version:       demo.DefaultCorpusVersion,
+				Version:       "reseeding-content",
 				Fixtures:      fixtures[:test.count],
 			})
 			if err != nil {
@@ -192,7 +210,7 @@ func TestDemoManifestSeedsVersionsAndLinks(t *testing.T) {
 	}
 	body, err := json.Marshal(demo.Manifest{
 		SchemaVersion: demo.ManifestSchemaVersion,
-		Version:       demo.DefaultCorpusVersion,
+		Version:       "versions-and-links-content",
 		Fixtures:      fixtures,
 	})
 	if err != nil {
@@ -245,7 +263,7 @@ func TestDemoManifestSeedsVersionsAndLinks(t *testing.T) {
 	broken[0].PreviousVersion = "quote-rev2.txt"
 	body, err = json.Marshal(demo.Manifest{
 		SchemaVersion: demo.ManifestSchemaVersion,
-		Version:       demo.DefaultCorpusVersion,
+		Version:       "broken-version-links-content",
 		Fixtures:      broken,
 	})
 	if err != nil {
@@ -283,7 +301,7 @@ func TestDemoManifestSeedsArchiveSerialNumbers(t *testing.T) {
 		}
 		body, err := json.Marshal(demo.Manifest{
 			SchemaVersion: demo.ManifestSchemaVersion,
-			Version:       demo.DefaultCorpusVersion,
+			Version:       "archive-serial-content",
 			Fixtures:      fixtures,
 		})
 		if err != nil {

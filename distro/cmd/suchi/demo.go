@@ -45,11 +45,27 @@ func runDemo(args []string) int {
 	fs := flag.NewFlagSet("suchi demo", flag.ContinueOnError)
 	dataDir := fs.String("data-dir", "", "DATA_DIR to seed; defaults to $DATA_DIR or /data")
 	corpusFile := fs.String("corpus-file", "", "path to a suchi-demo corpus tarball (skips HTTP fetch)")
-	corpusURL := fs.String("corpus-url", "", "HTTPS URL of a compatible suchi-demo corpus tarball; defaults to the tested release")
+	corpusURL := fs.String("corpus-url", "", "HTTPS URL of a compatible suchi-demo corpus tarball")
 	corpusDirFlag := fs.String("corpus-dir", "", "path to an already-extracted corpus directory (skips tarball fetch + extract)")
 	fetchOnly := fs.Bool("fetch-only", false, "download + extract the corpus into the cache; do not seed the DB")
 	if err := fs.Parse(args); err != nil {
 		return flagParseExit(err)
+	}
+
+	sourceCount := 0
+	if *corpusFile != "" {
+		sourceCount++
+	}
+	if *corpusDirFlag != "" {
+		sourceCount++
+	}
+	if *corpusURL != "" {
+		sourceCount++
+	}
+	if sourceCount != 1 {
+		fmt.Fprintln(os.Stderr, "suchi demo requires exactly one of --corpus-file, --corpus-dir, or --corpus-url")
+		fs.Usage()
+		return 2
 	}
 
 	cfg, err := config.Load()
@@ -66,8 +82,7 @@ func runDemo(args []string) int {
 
 	ctx := context.Background()
 
-	// Resolve the tested release unless the operator supplied a local
-	// tarball or extracted directory. --fetch-only exits after extraction.
+	// Resolve the selected source. --fetch-only exits after extraction.
 	var corpusDir string
 	switch {
 	case *corpusDirFlag != "":

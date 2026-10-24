@@ -21,27 +21,38 @@ import (
 	"github.com/johnnybravo-xyz/suchi/distro/demo"
 )
 
-func TestFetchDefaultRequiresPinnedWarmCache(t *testing.T) {
-	cache := filepath.Join(t.TempDir(), "corpus")
-	if err := os.Mkdir(cache, 0o700); err != nil {
-		t.Fatal(err)
+func TestFetchRequiresExactlyOneSource(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		opts demo.FetchOptions
+	}{
+		{name: "missing"},
+		{name: "local and URL", opts: demo.FetchOptions{
+			LocalFile: "/tmp/corpus.tar.gz",
+			URL:       "https://example.test/corpus.tar.gz",
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := demo.Fetch(context.Background(), test.opts)
+			if err == nil || !strings.Contains(err.Error(), "exactly one of LocalFile and URL") {
+				t.Fatalf("Fetch error = %v", err)
+			}
+		})
 	}
-	if err := os.WriteFile(filepath.Join(cache, "manifest.json"), []byte(`{}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
+}
+
+func TestFetchVerifiedWarmCacheRequiresMatchingMarker(t *testing.T) {
+	root := t.TempDir()
+	cache := filepath.Join(root, "corpus")
+	checksum := strings.Repeat("a", 64)
+	primeCache(t, cache, `{"name":"verified"}`, checksum)
 
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := demo.Fetch(cancelled, demo.FetchOptions{CacheDir: cache}); err == nil {
-		t.Fatal("unverified warm cache bypassed the built-in corpus checksum")
-	}
-
-	if err := os.WriteFile(cache+".sha256", []byte(demo.DefaultCorpusSHA256), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	got, err := demo.Fetch(cancelled, demo.FetchOptions{
 		CacheDir:       cache,
-		ExpectedSHA256: strings.Repeat("0", 64),
+		LocalFile:      filepath.Join(root, "not-read.tar.gz"),
+		ExpectedSHA256: checksum,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -51,20 +62,10 @@ func TestFetchDefaultRequiresPinnedWarmCache(t *testing.T) {
 	}
 }
 
-func TestFetchDefaultRejectsUnknownVersionWithoutChecksum(t *testing.T) {
-	_, err := demo.Fetch(context.Background(), demo.FetchOptions{
-		CacheDir: filepath.Join(t.TempDir(), "corpus"),
-		Version:  "v9.9.9",
-	})
-	if err == nil {
-		t.Fatal("unknown built-in corpus version was accepted without a pinned checksum")
-	}
-}
-
 func TestFetchUnverifiedLocalFileReplacesWarmCacheAndClearsMarker(t *testing.T) {
 	root := t.TempDir()
 	cache := filepath.Join(root, "corpus")
-	primeCache(t, cache, `{"name":"built-in"}`, demo.DefaultCorpusSHA256)
+	primeCache(t, cache, `{"name":"warm"}`, strings.Repeat("a", 64))
 	archive := corpusArchive(t, `{"name":"custom-file"}`)
 	archivePath := filepath.Join(root, "custom.tar.gz")
 	if err := os.WriteFile(archivePath, archive, 0o600); err != nil {
@@ -83,7 +84,7 @@ func TestFetchUnverifiedLocalFileReplacesWarmCacheAndClearsMarker(t *testing.T) 
 
 func TestFetchUnverifiedURLReplacesWarmCacheAndClearsMarker(t *testing.T) {
 	cache := filepath.Join(t.TempDir(), "corpus")
-	primeCache(t, cache, `{"name":"built-in"}`, demo.DefaultCorpusSHA256)
+	primeCache(t, cache, `{"name":"warm"}`, strings.Repeat("a", 64))
 	archive := corpusArchive(t, `{"name":"custom-url"}`)
 	var archiveRequests atomic.Int32
 	var sidecarRequests atomic.Int32
@@ -156,7 +157,7 @@ func TestFetchResolvesURLSidecarBeforeWarmCacheReuse(t *testing.T) {
 func TestFetchVerifiedReplacementWritesMarker(t *testing.T) {
 	root := t.TempDir()
 	cache := filepath.Join(root, "corpus")
-	primeCache(t, cache, `{"name":"stale"}`, demo.DefaultCorpusSHA256)
+	primeCache(t, cache, `{"name":"stale"}`, strings.Repeat("a", 64))
 	archive := corpusArchive(t, `{"name":"verified"}`)
 	checksum := archiveChecksum(archive)
 	archivePath := filepath.Join(root, "verified.tar.gz")
@@ -181,14 +182,73 @@ func TestFetchVerifiedReplacementWritesMarker(t *testing.T) {
 	}
 }
 
+func TestFetchRejectsChecksumMismatch(t *testing.T) {
+	root := t.TempDir()
+	archivePath := filepath.Join(root, "corpus.tar.gz")
+	if err := os.WriteFile(archivePath, corpusArchive(t, `{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := demo.Fetch(context.Background(), demo.FetchOptions{
+		CacheDir:       filepath.Join(root, "cache"),
+		LocalFile:      archivePath,
+		ExpectedSHA256: strings.Repeat("0", 64),
+	})
+	if err == nil || !strings.Contains(err.Error(), "sha256 mismatch") {
+		t.Fatalf("Fetch error = %v", err)
+	}
+}
+
+func TestFetchRejectsOversizedLocalArchive(t *testing.T) {
+	root := t.TempDir()
+	archivePath := filepath.Join(root, "oversized.tar.gz")
+	file, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Truncate((256 << 20) + 1); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, err = demo.Fetch(context.Background(), demo.FetchOptions{
+		CacheDir:  filepath.Join(root, "cache"),
+		LocalFile: archivePath,
+	})
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("Fetch error = %v", err)
+	}
+}
+
+func TestFetchRejectsUnsafeArchiveEntry(t *testing.T) {
+	root := t.TempDir()
+	archivePath := filepath.Join(root, "unsafe.tar.gz")
+	archive := archiveWithEntry(t, "../outside", []byte("escape"))
+	if err := os.WriteFile(archivePath, archive, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := demo.Fetch(context.Background(), demo.FetchOptions{
+		CacheDir:  filepath.Join(root, "cache"),
+		LocalFile: archivePath,
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsafe tar entry") {
+		t.Fatalf("Fetch error = %v", err)
+	}
+}
+
 func corpusArchive(t *testing.T, manifest string) []byte {
+	t.Helper()
+	return archiveWithEntry(t, "manifest.json", []byte(manifest))
+}
+
+func archiveWithEntry(t *testing.T, name string, content []byte) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
-	content := []byte(manifest)
 	if err := tw.WriteHeader(&tar.Header{
-		Name: "manifest.json",
+		Name: name,
 		Mode: 0o644,
 		Size: int64(len(content)),
 	}); err != nil {

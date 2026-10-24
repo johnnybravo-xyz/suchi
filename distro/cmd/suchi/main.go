@@ -137,7 +137,7 @@ Usage:
   suchi taxonomy <command>        validate, import, export, or merge taxonomy
   suchi doctor [flags]            diagnostic report; optionally scrub CAS integrity
   suchi mcp [--http :port]        start an MCP server (stdio by default, Streamable HTTP with --http)
-  suchi demo [--data-dir DIR]     seed DATA_DIR from the tested demo corpus manifest
+  suchi demo --corpus-file FILE   seed DATA_DIR from an explicit demo corpus
   suchi refile [flags]            re-run automations + enqueue re-render on every live doc after filing changes
   suchi rescan [flags]            re-run content extraction on selected docs (--stale/--jd/--tag/…; --dry-run + --estimate first)
   suchi export --out FILE.zip     write a portable takeout of documents + taxonomy (optionally --owner-id N or --all)

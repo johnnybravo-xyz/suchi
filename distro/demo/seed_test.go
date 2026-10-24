@@ -20,7 +20,7 @@ func TestSeedFromManifestSavedViews(t *testing.T) {
 	dir := t.TempDir()
 	manifest := demo.Manifest{
 		SchemaVersion: demo.ManifestSchemaVersion,
-		Version:       demo.DefaultCorpusVersion,
+		Version:       "saved-views-content",
 		SavedViews: []demo.ManifestSavedView{
 			{Name: "Inbox", FilterJSON: json.RawMessage(`{"q":"invoice"}`)},
 			{Name: "Existing", FilterJSON: json.RawMessage(`{}`)},
@@ -57,7 +57,7 @@ func TestSeedFromManifestAutomations(t *testing.T) {
 	dir := t.TempDir()
 	writeManifest(t, dir, demo.Manifest{
 		SchemaVersion: demo.ManifestSchemaVersion,
-		Version:       demo.DefaultCorpusVersion,
+		Version:       "automations-content",
 		Automations: []demo.ManifestAutomation{
 			{Name: "Route utilities", Trigger: demo.ManifestTrigger{Type: 2}, Actions: []demo.ManifestAction{{Kind: "assign_tags"}}},
 			{Name: "Existing", Trigger: demo.ManifestTrigger{Type: 2}, Actions: []demo.ManifestAction{{Kind: "assign_tags"}}},
@@ -88,7 +88,7 @@ func TestSeedFromManifestUsesSchemaVersionForCompatibility(t *testing.T) {
 		t.Fatalf("independent corpus release was rejected: %v", err)
 	}
 
-	writeManifest(t, dir, demo.Manifest{SchemaVersion: demo.ManifestSchemaVersion + 1, Version: demo.DefaultCorpusVersion})
+	writeManifest(t, dir, demo.Manifest{SchemaVersion: demo.ManifestSchemaVersion + 1, Version: "schema-two-content"})
 	if _, err := demo.SeedFromManifest(context.Background(), demo.SeedOptions{CorpusDir: dir}); err == nil {
 		t.Fatal("unsupported corpus schema was accepted")
 	}
@@ -107,7 +107,7 @@ func TestSeedFromManifestDistinguishesNewAndExistingFixtures(t *testing.T) {
 	}
 	writeManifest(t, dir, demo.Manifest{
 		SchemaVersion: demo.ManifestSchemaVersion,
-		Version:       demo.DefaultCorpusVersion,
+		Version:       "fixtures-content",
 		Fixtures:      []demo.ManifestFixture{{Filename: "new.pdf"}, {Filename: "existing.pdf"}},
 	})
 	stats, err := demo.SeedFromManifest(context.Background(), demo.SeedOptions{
@@ -141,7 +141,7 @@ func TestSeedFromManifestRejectsUnsafeFixtureNamesAndNonRegularFiles(t *testing.
 	}
 	writeManifest(t, dir, demo.Manifest{
 		SchemaVersion: demo.ManifestSchemaVersion,
-		Version:       demo.DefaultCorpusVersion,
+		Version:       "unsafe-fixtures-content",
 		Fixtures: []demo.ManifestFixture{
 			{Filename: "../outside.txt"},
 			{Filename: filepath.Join(dir, "outside.txt")},
@@ -192,7 +192,7 @@ func TestSeedFromManifestRejectsSymlinkFixture(t *testing.T) {
 	}
 	writeManifest(t, dir, demo.Manifest{
 		SchemaVersion: demo.ManifestSchemaVersion,
-		Version:       demo.DefaultCorpusVersion,
+		Version:       "symlink-content",
 		Fixtures:      []demo.ManifestFixture{{Filename: "linked.txt"}},
 	})
 
@@ -228,7 +228,7 @@ func TestSeedFromManifestPassesOpenedFixture(t *testing.T) {
 	}
 	writeManifest(t, dir, demo.Manifest{
 		SchemaVersion: demo.ManifestSchemaVersion,
-		Version:       demo.DefaultCorpusVersion,
+		Version:       "opened-fixture-content",
 		Fixtures:      []demo.ManifestFixture{{Filename: "fixture.txt"}},
 	})
 
@@ -256,19 +256,11 @@ func TestSeedFromManifestPassesOpenedFixture(t *testing.T) {
 	}
 }
 
-func TestDefaultCorpusURL(t *testing.T) {
-	got := demo.DefaultCorpusURL("v0.1.0")
-	want := "https://github.com/johnnybravo-xyz/suchi-demo/releases/download/corpus-v0.1.0/corpus-v0.1.0.tar.gz"
-	if got != want {
-		t.Fatalf("DefaultCorpusURL = %q, want %q", got, want)
-	}
-}
-
 func TestSeedFromManifestSavedViewsDryRun(t *testing.T) {
 	dir := t.TempDir()
 	writeManifest(t, dir, demo.Manifest{
 		SchemaVersion: demo.ManifestSchemaVersion,
-		Version:       demo.DefaultCorpusVersion,
+		Version:       "dry-run-content",
 		SavedViews: []demo.ManifestSavedView{
 			{Name: "Inbox", FilterJSON: json.RawMessage(`{}`)},
 			{Name: "Recent"},
