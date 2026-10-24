@@ -8191,6 +8191,35 @@ test('shows coming-up dates on the Dashboard and a document date with a calendar
   expect((await download).suggestedFilename()).toBe('suchi-date-9-2026-11-20.ics')
 })
 
+test('moves the rest of a long document date schedule behind More', async ({ page }) => {
+  await page.clock.setFixedTime(new Date('2026-10-23T12:00:00'))
+  const schedule = Array.from({ length: 16 }, (_, index) => {
+    const value = index ? new Date(Date.UTC(2026, 9 + index, 5)).toISOString().slice(0, 10) : '2026-10-12'
+    return {
+      id: index + 1, document_id: 42, document_title: 'Car loan schedule', type: 'date', role: index ? 'due' : 'issued',
+      status: 'accepted', reviewed_at: 1780200000, value: { date: value, precision: 'day' }, sort_value: value,
+    }
+  })
+  await mockAPI(page, {
+    filingTreeChosen: true,
+    capabilities: ['archive_intelligence'],
+    documentDetails: { 42: { document: { title: 'Car loan schedule' } } },
+    intelligence: () => ({ results: schedule, total: schedule.length }),
+  })
+  await page.goto('/#/doc/42')
+  const dates = page.locator('.document-dates').first()
+  await expect(dates.locator('.document-date')).toHaveCount(3)
+  await expect(dates.locator('.document-date').first()).toContainText('Issued')
+  const more = page.locator('.more-fields-toggle')
+  await expect(more).toContainText('13 dates')
+  await more.click()
+  const laterDates = page.locator('.more-fields .document-dates')
+  await expect(laterDates.locator('.document-date')).toHaveCount(13)
+  await expect(laterDates.locator('.document-date').first()).toContainText('Jan 5, 2027')
+  await expect(page.locator('.more-fields dt').first()).toHaveText('Later dates')
+  await expect(laterDates.locator('.document-date').last()).toContainText('Jan 5, 2028')
+})
+
 test('finds documents, recent documents, views and commands from the Omnibox', async ({ page }) => {
   await mockAPI(page, {
     filingTreeChosen: true,

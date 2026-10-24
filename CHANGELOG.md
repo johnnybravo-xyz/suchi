@@ -8,6 +8,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 - Manual release runs with `publish=false` now validate the signed tag and
   release gates without packaging or publishing release artifacts.
+- Document Detail keeps the first three dates of a longer schedule on the card
+  and lists the rest under **Later dates** in **More**, whose label counts them.
 
 ## [0.4.1] - 2026-10-24
 
