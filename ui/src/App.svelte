@@ -322,7 +322,7 @@
       recentError = ''
     }
     try {
-      const r = await listDocuments({ page_size: 6, ordering: '-created_at' })
+      const r = await listDocuments({ page_size: 6, ordering: '-added_at' })
       if (!scopeCurrent(scope)) return
       recentDocs = r?.results || []
     } catch (ex) {

@@ -245,7 +245,7 @@
             <span class="dot {sensDot(d.sensitivity)}" class:accent={!d.sensitivity}></span>
             <span class="filing-code filing-code-column" title={d.jd_category_name}>{d.jd_address || d.jd_category_code || ''}</span>
             <span class="title grow">{d.title || translate("dashboard.documentValue", { "id": d.id })}</span>
-            <span class="sub">{fmtDate(d.created_at)}</span>
+            <span class="sub">{fmtDate(d.added_at)}</span>
           </a>
         {/each}
       </div>

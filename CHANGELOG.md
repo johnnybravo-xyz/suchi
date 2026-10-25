@@ -14,6 +14,13 @@ Notable user-visible changes to Suchi are recorded here.
   and group can reach it. Container images create `/data` as 0750, and the
   systemd template has systemd create `/var/lib/suchi` as 0750.
 
+### Fixed
+
+- The Dashboard's **Recently added** list sorts and dates documents by when
+  Suchi added them. An emailed attachment or imported file with an older
+  upstream date no longer sinks below newer uploads. Document lists accept
+  `ordering=added_at` and `-added_at`, and each row carries `added_at`.
+
 ## [0.4.1] - 2026-10-24
 
 ### Fixed

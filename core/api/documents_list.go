@@ -65,9 +65,12 @@ type DocumentListRow struct {
 	// this to render an inline unlock affordance on the Inbox row —
 	// no separate /pending-decryption round-trip needed.
 	EncryptionState string `json:"encryption_state,omitempty"`
-	CreatedAt       int64  `json:"created_at"`
-	UpdatedAt       int64  `json:"updated_at"`
-	TrashedAt       *int64 `json:"trashed_at,omitempty"`
+	// AddedAt is when Suchi ingested the document; CreatedAt carries the
+	// upstream date (an email's Date header or an import sidecar).
+	AddedAt   int64  `json:"added_at"`
+	CreatedAt int64  `json:"created_at"`
+	UpdatedAt int64  `json:"updated_at"`
+	TrashedAt *int64 `json:"trashed_at,omitempty"`
 	// Tags + correspondents surfaced as the flat forms the SPA row
 	// renders. Empty slices, not null.
 	Tags           []string `json:"tags"`
@@ -80,6 +83,9 @@ type DocumentListRow struct {
 var listOrderingAllow = map[string]string{
 	"created_at":  "d.created_at, d.id",
 	"-created_at": "d.created_at DESC, d.id DESC",
+	// Rows from before added_at existed fall back to created_at.
+	"added_at":    "COALESCE(d.added_at, d.created_at), d.id",
+	"-added_at":   "COALESCE(d.added_at, d.created_at) DESC, d.id DESC",
 	"updated_at":  "d.updated_at, d.id",
 	"-updated_at": "d.updated_at DESC, d.id DESC",
 	"title":       "d.title, d.id",
@@ -197,7 +203,7 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 		       d.split_origin_id, d.split_index,
 		       d.archive_serial_number,
 		       COALESCE(d.encryption_state, ''),
-		       d.created_at, d.updated_at, d.trashed_at
+		       COALESCE(d.added_at, d.created_at), d.created_at, d.updated_at, d.trashed_at
 		  FROM `+fromSQL+`
 		  JOIN jd_systems js ON js.id = d.system_id
 		  LEFT JOIN jd_categories jc ON jc.id = d.jd_category_id
@@ -223,7 +229,7 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(&row.ID, &row.Title, &row.SystemCode, &row.MIME, &row.OriginalSize,
 			&row.JDCategoryID, &row.JDCategoryCode, &row.JDCategoryName, &row.JDAreaName,
 			&row.Sensitivity, &row.ThumbSHA, &row.SplitOriginID, &splitIndex, &archiveNumber,
-			&row.EncryptionState, &row.CreatedAt, &row.UpdatedAt, &trashed); err != nil {
+			&row.EncryptionState, &row.AddedAt, &row.CreatedAt, &row.UpdatedAt, &trashed); err != nil {
 			s.serverErr(w, "docs.list.scan", err)
 			return
 		}

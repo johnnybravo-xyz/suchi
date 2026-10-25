@@ -783,7 +783,7 @@ Query params (all optional):
 | Param                                | Effect                                                                                                                      |
 | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
 | `page`, `page_size`                  | Standard DRF paging (default 50, cap 200).                                                                                  |
-| `ordering`                           | `-created_at` (default), `created_at`, `-updated_at`, `updated_at`, `-title`, `title`. Unknown values fall back to default. |
+| `ordering`                           | `-created_at` (default), `created_at`, `-added_at`, `added_at`, `-updated_at`, `updated_at`, `-title`, `title`. Unknown values fall back to default. |
 | `jd_category_id`                     | Exact filing-chip match.                                                                                                    |
 | `sensitivity`                        | One of `public`, `internal`, `confidential`, `restricted`.                                                                  |
 | `split_origin_id`                    | Positive upload document id; returns its live QR-split children after ACL filtering.                                              |
@@ -835,8 +835,9 @@ detail for that):
       "split_origin_id": 84,
       "split_index": 1,
       "archive_serial_number": 4021,
+      "added_at": 1746666000,
       "created_at": 1746662400,
-      "updated_at": 1746662400,
+      "updated_at": 1746666000,
       "tags": ["utilities", "bescom"],
       "correspondents": ["BESCOM"]
     }
@@ -844,6 +845,9 @@ detail for that):
 }
 ```
 
+`added_at` is when Suchi ingested the document and `created_at` its upstream
+date, such as an email's `Date:` header; a document stored before `added_at`
+was recorded reports its `created_at` for both.
 `thumb_sha` non-empty means the row has a thumbnail at
 `/api/documents/{id}/thumb` (client can render immediately without
 a HEAD probe).

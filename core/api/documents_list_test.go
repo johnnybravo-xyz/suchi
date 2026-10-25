@@ -528,3 +528,45 @@ func TestListDocuments_OrderingAllowList(t *testing.T) {
 		t.Errorf("bad ordering should fall back to -created_at: %+v", rows)
 	}
 }
+
+func TestListDocuments_AddedAtOrderingUsesIngestTime(t *testing.T) {
+	s := newListServer(t)
+	inbox := seedStatsJDInbox(t, s.DB)
+	// An emailed attachment keeps its older message date as created_at but was
+	// added after the upload; a legacy row has no added_at at all.
+	upload := seedStatsDoc(t, s.DB, 1, "sha_upload", "upload", inbox, false, 300)
+	emailed := seedStatsDoc(t, s.DB, 1, "sha_email", "emailed", inbox, false, 100)
+	legacy := seedStatsDoc(t, s.DB, 1, "sha_legacy", "legacy", inbox, false, 200)
+	for id, added := range map[int64]int64{upload: 300, emailed: 500} {
+		if _, err := s.DB.Write.ExecContext(context.Background(),
+			`UPDATE documents SET added_at = ? WHERE id = ?`, added, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, test := range []struct {
+		ordering string
+		want     []int64
+	}{
+		{"-created_at", []int64{upload, legacy, emailed}},
+		{"-added_at", []int64{emailed, upload, legacy}},
+		{"added_at", []int64{legacy, upload, emailed}},
+	} {
+		_, rows, _ := doList(t, s, "/api/documents/?ordering="+test.ordering, adminPrincipal(1))
+		got := make([]int64, len(rows))
+		for i, row := range rows {
+			got[i] = row.ID
+		}
+		if len(got) != len(test.want) || got[0] != test.want[0] || got[1] != test.want[1] || got[2] != test.want[2] {
+			t.Fatalf("ordering=%s ids=%v, want %v", test.ordering, got, test.want)
+		}
+	}
+
+	_, rows, _ := doList(t, s, "/api/documents/?ordering=-added_at", adminPrincipal(1))
+	if rows[0].AddedAt != 500 || rows[0].CreatedAt != 100 {
+		t.Fatalf("emailed row added_at=%d created_at=%d, want 500 and 100", rows[0].AddedAt, rows[0].CreatedAt)
+	}
+	if rows[2].AddedAt != 200 {
+		t.Fatalf("legacy row added_at=%d, want created_at fallback 200", rows[2].AddedAt)
+	}
+}

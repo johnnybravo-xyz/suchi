@@ -3112,6 +3112,7 @@ test('loads recent dashboard documents once per navigation', async ({ page }) =>
   page.on('request', request => {
     const url = new URL(request.url())
     if (url.pathname === '/api/documents/' && url.searchParams.get('page_size') === '6') {
+      expect(url.searchParams.get('ordering')).toBe('-added_at')
       recentRequests++
     }
   })
