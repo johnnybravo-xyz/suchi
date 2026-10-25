@@ -76,7 +76,7 @@ Download the binary for your platform from
 
 ```sh
 install -m 0755 suchi /usr/local/bin/suchi
-mkdir -p "$HOME/.local/share/suchi"
+mkdir -p -m 0700 "$HOME/.local/share/suchi"
 PUBLIC_URL=http://127.0.0.1:8000 \
 DATA_DIR="$HOME/.local/share/suchi" \
 suchi serve

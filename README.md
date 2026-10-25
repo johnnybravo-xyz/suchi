@@ -186,7 +186,8 @@ graphs. The empty `ui` module keeps Go tooling out of frontend dependencies.
 `make build` uses Bun to install locked frontend dependencies, generates the
 ignored SPA bundle, and produces `dist/suchi`; `suchi doctor` inventories
 configured egress, pipeline tools, schema and taxonomy state, data-directory
-writability, and selected job, backup, audit, upload-limit, and CAS indicators.
+writability and permissions, and selected job, backup, audit, upload-limit, and
+CAS indicators.
 
 ## Documentation
 

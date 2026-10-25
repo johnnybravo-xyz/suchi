@@ -220,7 +220,8 @@ One-shot diagnostic report. Prints:
 - Configured, installed, and missing Tesseract language packs
 - Database schema version compared with the embedded target
 - Imported taxonomy preset, version, and content hash per system when available
-- `$DATA_DIR` writability
+- `$DATA_DIR` writability, and a warning when accounts other than its owner
+  and group can reach it
 - Operational indicators: last-backup age (WARN past 2× `BACKUP_INTERVAL`),
   dead-job count, oldest running job (WARN >15m), effective upload cap,
   last boot's orphaned-job reclaim count, and the

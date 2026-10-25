@@ -110,6 +110,7 @@ ln -sfn "${PROVIDER}.mbsyncrc.tmpl" templates/mbsyncrc.tmpl
 
 # ---------- create bind-mount dirs ----------
 mkdir -p maildir ingest suchi-data
+chmod 0750 suchi-data
 [ "$PROVIDER" = "proton" ] && mkdir -p bridge-data
 
 echo

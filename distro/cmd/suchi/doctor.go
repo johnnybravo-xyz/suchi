@@ -44,6 +44,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/netutil"
 	"github.com/johnnybravo-xyz/suchi/core/sandbox"
 	"github.com/johnnybravo-xyz/suchi/core/settings"
+	"github.com/johnnybravo-xyz/suchi/distro/app"
 	"github.com/johnnybravo-xyz/suchi/distro/internal/diagnostics"
 	llmclassifier "github.com/johnnybravo-xyz/suchi/plugins/llm-classifier"
 )
@@ -201,6 +202,9 @@ func runDoctor(args []string) int {
 		fmt.Printf("  ✗ DATA_DIR %s: %v\n", cfg.DataDir, err)
 	} else {
 		fmt.Printf("  ✓ DATA_DIR %s writable\n", cfg.DataDir)
+	}
+	if mode, exposed, err := app.DataDirExposed(cfg.DataDir); err == nil && exposed {
+		fmt.Printf("  ! DATA_DIR %s is open to other accounts (mode %04o); run chmod o-rwx %s\n", cfg.DataDir, mode, cfg.DataDir)
 	}
 	fmt.Println()
 

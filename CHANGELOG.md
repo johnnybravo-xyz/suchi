@@ -10,6 +10,9 @@ Notable user-visible changes to Suchi are recorded here.
   release gates without packaging or publishing release artifacts.
 - Document Detail keeps the first three dates of a longer schedule on the card
   and lists the rest under **Later dates** in **More**, whose label counts them.
+- Startup and `suchi doctor` warn when accounts other than `DATA_DIR`'s owner
+  and group can reach it. Container images create `/data` as 0750, and the
+  systemd template has systemd create `/var/lib/suchi` as 0750.
 
 ## [0.4.1] - 2026-10-24
 

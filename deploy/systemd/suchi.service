@@ -30,7 +30,8 @@ RestartSec=5s
 # DATA_DIR and /tmp for scratch. Everything below is defense in
 # depth — remove them if they conflict with your storage layout.
 ProtectSystem=strict
-ReadWritePaths=/var/lib/suchi
+StateDirectory=suchi
+StateDirectoryMode=0750
 ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true

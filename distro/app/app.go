@@ -127,6 +127,12 @@ func Run(ctx context.Context, opts Options) error {
 		return fmt.Errorf("main.datadir.mkdir: %w", err)
 	}
 	log.Info("main.datadir", "path", cfg.DataDir)
+	if mode, exposed, err := DataDirExposed(cfg.DataDir); err != nil {
+		log.Warn("main.datadir.permissions", "path", cfg.DataDir, "err", err.Error())
+	} else if exposed {
+		log.Warn("main.datadir.permissions", "path", cfg.DataDir, "mode", fmt.Sprintf("%04o", mode),
+			"detail", "other accounts on this host can reach the archive; run chmod o-rwx on DATA_DIR")
+	}
 
 	d, err := db.Open(ctx, cfg.DataDir+"/suchi.db")
 	if err != nil {

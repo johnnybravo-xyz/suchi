@@ -124,7 +124,7 @@ RUN apt-get update && \
 # stays with Poppler.
 RUN sed -i 's|<policy domain="coder" rights="none" pattern="PDF" />|<policy domain="coder" rights="write" pattern="{PDF,PDFA,AI,EPDF,POCKETMOD}" />|; /<\/policymap>/i\  <policy domain="coder" rights="none" pattern="{PS,PS2,PS3,EPS,EPS2,EPS3,EPSF,EPSI,EPI,XPS}" />' /etc/ImageMagick-6/policy.xml
 RUN useradd -u 65532 -m -s /usr/sbin/nologin suchi && \
-    mkdir -p /data && chown 65532:65532 /data
+    mkdir -p /data && chown 65532:65532 /data && chmod 0750 /data
 
 COPY --from=build /out/suchi /usr/local/bin/suchi
 ARG TARGETARCH
@@ -166,7 +166,7 @@ RUN apk add --no-cache \
 RUN sed -i '/<\/policymap>/i\  <policy domain="coder" rights="write" pattern="{PDF,PDFA,AI,EPDF,POCKETMOD}" />\n  <policy domain="coder" rights="none" pattern="{PS,PS2,PS3,EPS,EPS2,EPS3,EPSF,EPSI,EPI,XPS}" />' /etc/ImageMagick-7/policy.xml
 
 RUN adduser -D -u 65532 -s /sbin/nologin suchi && \
-    mkdir -p /data && chown 65532:65532 /data
+    mkdir -p /data && chown 65532:65532 /data && chmod 0750 /data
 
 COPY --from=build /out/suchi /usr/local/bin/suchi
 ARG TARGETARCH

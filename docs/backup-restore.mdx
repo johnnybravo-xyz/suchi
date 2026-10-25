@@ -122,6 +122,7 @@ mv /var/lib/suchi /var/lib/suchi.old
 mkdir -p /var/lib/suchi
 tar -xzf suchi-backup-2026-08-19.tar.gz -C /var/lib
 chown -R suchi:suchi /var/lib/suchi
+chmod 750 /var/lib/suchi
 chmod 600 /var/lib/suchi/.decrypt-key
 systemctl start suchi
 ```
