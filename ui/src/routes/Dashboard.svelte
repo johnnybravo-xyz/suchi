@@ -5,7 +5,7 @@
   import { onDestroy } from 'svelte'
   import { listIntelligence, listSavedViews } from '../lib/api.js'
   import { documentListHash, parseSavedViewFilters } from '../lib/documentFilters.js'
-  import { fmtDate, formatDaysAway, sensDot } from '../lib/format.js'
+  import { formatDate, formatDaysAway, formatNumber, plural, sensDot } from '../lib/format.js'
   import { addDays, daysUntil, formatIntelligenceDate, intelligenceRoleLabel, localISODate, upcomingDates } from '../lib/intelligence.js'
   import { session } from '../lib/session.svelte.js'
   import { hasCapability } from '../lib/capabilities.js'
@@ -29,9 +29,10 @@
   let loadVersion = 0
   let activeController
   // Accepted exact-day due, expiry and renewal dates in the next 30 days.
+  // null until loaded; a failed load keeps the card hidden rather than empty.
   const comingUpDays = 30
-  const comingUpLimit = 5
-  let comingUp = $state([])
+  const comingUpLimit = 3
+  let comingUp = $state(null)
   const comingUpController = new AbortController()
 
   // Intake routes besides upload, offered while the archive is empty. Watched
@@ -150,8 +151,17 @@
       }, comingUpController.signal)
       comingUp = upcomingDates(res?.results, today)
     } catch {
-      comingUp = []
+      comingUp = null
     }
+  }
+
+  // Recent rows drop the year while it is the current one.
+  function recentDate(unix) {
+    if (!unix) return ''
+    const date = new Date(unix * 1000)
+    return date.getFullYear() === new Date().getFullYear()
+      ? formatDate(date, { month: 'short', day: 'numeric' })
+      : formatDate(date)
   }
 
   function filterSummary(f) {
@@ -245,7 +255,7 @@
             <span class="dot {sensDot(d.sensitivity)}" class:accent={!d.sensitivity}></span>
             <span class="filing-code filing-code-column" title={d.jd_category_name}>{d.jd_address || d.jd_category_code || ''}</span>
             <span class="title grow">{d.title || translate("dashboard.documentValue", { "id": d.id })}</span>
-            <span class="sub">{fmtDate(d.added_at)}</span>
+            <span class="sub">{recentDate(d.added_at)}</span>
           </a>
         {/each}
       </div>
@@ -259,11 +269,17 @@
   </div>
 
   <div>
-    {#if comingUp.length}
+    {#if comingUp}
       <div class="dash-head">
-        <h3>{translate("dashboard.comingUp")}</h3>
+        <h3>{translate("dashboard.comingUp")}{#if comingUp.length > comingUpLimit}<span class="coming-count" title={plural("dashboard.comingUpCount", comingUp.length, { days: comingUpDays })}>{' · '}{formatNumber(comingUp.length)}</span>{/if}</h3>
         <a class="btn sm" href={filingHref("#/calendar")}>{translate("dashboard.calendar")}</a>
       </div>
+    {/if}
+    {#if comingUp && !comingUp.length}
+      <div class="card coming-up" style="color:var(--muted);font-size:.86rem">
+        {translate("dashboard.nothingInTheNextDays", { days: comingUpDays })}
+      </div>
+    {:else if comingUp}
       <div class="index coming-up">
         {#each comingUp.slice(0, comingUpLimit) as event (event.id)}
           <a class="irow" href={filingHref(`#/doc/${event.document_id}`)}>
@@ -293,7 +309,7 @@
       <div class="views">
         {#each views as v (v.id)}
           <a class="card view" href={filingHref(documentListHash(v.filters))}>
-            <span class="m-label">{v.name}</span>
+            <span class="view-name">{v.name}</span>
             <span class="m-sub mono" style="font-size:.68rem">{filterSummary(v.filters)}</span>
           </a>
         {/each}

@@ -19,6 +19,10 @@ Notable user-visible changes to Suchi are recorded here.
   import, `?format=huml` on export, or `suchi taxonomy export --format huml`.
   HuML remains a first-class option everywhere a taxonomy format can be
   selected or supplied.
+- The Dashboard's **Recently added** list shows seven documents and omits the
+  year for dates in the current year. **Coming up** shows the next three dates
+  and counts every date due in the next 30 days in its heading, and says
+  **Nothing in the next 30 days.** instead of disappearing when none are due.
 
 ### Fixed
 

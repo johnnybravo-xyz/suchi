@@ -3133,7 +3133,7 @@ test('loads recent dashboard documents once per navigation', async ({ page }) =>
   let recentRequests = 0
   page.on('request', request => {
     const url = new URL(request.url())
-    if (url.pathname === '/api/documents/' && url.searchParams.get('page_size') === '6') {
+    if (url.pathname === '/api/documents/' && url.searchParams.get('page_size') === '7') {
       expect(url.searchParams.get('ordering')).toBe('-added_at')
       recentRequests++
     }
@@ -8241,6 +8241,40 @@ test('moves the rest of a long document date schedule behind More', async ({ pag
   await expect(laterDates.locator('.document-date').first()).toContainText('Jan 5, 2027')
   await expect(page.locator('.more-fields dt').first()).toHaveText('Later dates')
   await expect(laterDates.locator('.document-date').last()).toContainText('Jan 5, 2028')
+})
+
+test('caps Coming up at three dates and counts the rest in its heading', async ({ page }) => {
+  await page.clock.setFixedTime(new Date('2026-10-24T12:00:00'))
+  const dates = Array.from({ length: 18 }, (_, index) => {
+    const value = `2026-11-${String(index + 1).padStart(2, '0')}`
+    return {
+      id: index + 1, document_id: 100 + index, document_title: `Bill ${index + 1}`, type: 'date', role: 'due',
+      status: 'accepted', reviewed_at: 1780200000, value: { date: value, precision: 'day' }, sort_value: value,
+    }
+  })
+  await mockAPI(page, {
+    filingTreeChosen: true,
+    capabilities: ['archive_intelligence'],
+    intelligence: () => ({ results: dates }),
+  })
+  await page.goto('/#/dashboard')
+  const comingUp = page.locator('.coming-up')
+  await expect(comingUp.locator('.irow')).toHaveCount(3)
+  const count = page.locator('.coming-count')
+  await expect(count).toHaveText(' · 18')
+  await expect(count).toHaveAttribute('title', '18 dates in the next 30 days')
+})
+
+test('keeps Coming up in place with one line when the next 30 days are empty', async ({ page }) => {
+  await mockAPI(page, {
+    filingTreeChosen: true,
+    capabilities: ['archive_intelligence'],
+    intelligence: () => ({ results: [] }),
+  })
+  await page.goto('/#/dashboard')
+  await expect(page.getByRole('heading', { name: 'Coming up' })).toBeVisible()
+  await expect(page.locator('.coming-up')).toHaveText('Nothing in the next 30 days.')
+  await expect(page.locator('.dash-head').filter({ hasText: 'Coming up' }).getByRole('link', { name: 'Calendar', exact: true })).toHaveAttribute('href', '#/calendar')
 })
 
 test('finds documents, recent documents, views and commands from the Omnibox', async ({ page }) => {
