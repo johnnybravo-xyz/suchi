@@ -4,6 +4,12 @@ Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
 
+### Added
+
+- Document Detail now has a **Rescan** action that re-runs processing for the
+  open document and remains disabled while that document is already processing.
+  It is hidden while the document still needs its password.
+
 ### Changed
 
 - Manual release runs with `publish=false` now validate the signed tag and

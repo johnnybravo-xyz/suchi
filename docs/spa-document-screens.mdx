@@ -61,6 +61,16 @@ the shared type-to-select picker before sending one
 selected primary sender or clears sender roles with ID `0`, preserves other role
 relations in local state, and rejects late responses through the same generation
 guard.
+The detail-toolbar **Rescan** action sends one guarded `bulk_edit
+rescan_enqueue` operation for the open live document. It is hidden while the
+document is waiting for its PDF password, and a caller without change
+permission gets the same refusal notice as the other detail editors. It
+disables during the request and while `document.processing` is true, then marks
+the local document as processing and asks App to poll `/api/stats/` at once, so
+repeat clicks cannot create duplicate work and the processing indicators update
+without waiting for the next poll. Late responses cannot alter a different
+document or filing-system scope; the shared processing bus refreshes the
+completed document without resetting open editors.
 
 Archive serial number editing is detail-owned state with the same route
 generation guard. The browser accepts only decimal safe positive integers or an

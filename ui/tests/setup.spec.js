@@ -3664,6 +3664,50 @@ test('reopens an existing password-protected share QR and clears it on revocatio
   expect(deleted).toBe(true)
 })
 
+test('rescans one document from its detail toolbar without duplicate enqueue', async ({ page }, testInfo) => {
+  const documentDetails = {}
+  await mockAPI(page, { documentDetails })
+  const writes = []
+  let pending
+  await page.route('**/api/documents/bulk_edit', route => {
+    writes.push(route.request().postDataJSON())
+    pending = route
+  })
+
+  await page.goto('/#/doc/42')
+  const rescan = page.getByRole('button', { name: 'Rescan', exact: true })
+  await expect(rescan).toHaveAttribute('title', 'Read and process this document again')
+  await page.screenshot({ path: testInfo.outputPath('document-detail-rescan.png'), fullPage: true })
+  await rescan.click()
+  await expect(page.getByRole('button', { name: 'Working…', exact: true })).toBeDisabled()
+  expect(writes).toEqual([{ documents: [42], method: 'rescan_enqueue', parameters: {} }])
+
+  // The enqueued job makes the server report the document as processing.
+  documentDetails[42] = { document: { processing: true } }
+  const statusPoll = page.waitForRequest(request => new URL(request.url()).pathname === '/api/stats/')
+  await pending.fulfill({ json: { applied: 1, results: [{ id: 42, ok: true }] } })
+  await statusPoll
+  await expect(page.locator('.notice')).toContainText('Rescan started')
+  await expect(rescan).toBeDisabled()
+  await expect(rescan).toHaveAttribute('title', /Still processing/)
+  await expect(page.getByText('Still processing. Text, filing and suggestions appear here when it finishes.')).toBeVisible()
+  expect(writes).toHaveLength(1)
+})
+
+test('offers Rescan only for a document that is not waiting for its password', async ({ page }) => {
+  await mockAPI(page, {
+    documentDetails: {
+      43: { document: { encryption_state: 'encrypted' } },
+      44: { document: {} },
+    },
+  })
+  for (const [id, visible] of [[43, false], [44, true]]) {
+    await page.goto(`/#/doc/${id}`)
+    await expect(page.getByRole('button', { name: 'Download' }).or(page.getByRole('link', { name: 'Download' }))).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Rescan', exact: true })).toHaveCount(visible ? 1 : 0)
+  }
+})
+
 test('edits document tags inline and preserves tags when a change is refused', async ({ page }, testInfo) => {
   await mockAPI(page)
   const tags = [

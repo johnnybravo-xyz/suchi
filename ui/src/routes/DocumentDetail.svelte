@@ -20,7 +20,7 @@
   import DocumentLinkDialog from '../lib/DocumentLinkDialog.svelte'
   import ShareLinkForm from '../lib/ShareLinkForm.svelte'
   import { markUploaded } from '../lib/upload_bus.svelte.js'
-  import { processingBus } from '../lib/processing_bus.svelte.js'
+  import { processingBus, requestStatusRefresh } from '../lib/processing_bus.svelte.js'
   import { daysUntil, formatIntelligenceDate, intelligenceRoleLabel } from '../lib/intelligence.js'
   import { canExportCalendarDate, downloadCalendarDate } from '../lib/calendarExport.js'
   import { parseDocumentReference } from '../lib/documentReferences.js'
@@ -96,6 +96,7 @@
   let trashBusy = $state(false)
   let deleteOpen = $state(false)
   let recoveryBusy = $state(false)
+  let rescanBusy = $state(false)
   let noteDraft = $state('')
   let noteEditID = $state(null)
   let noteEditDraft = $state('')
@@ -146,6 +147,8 @@
   const canRestore = $derived(canManageTrash && doc?.deletes_at > Math.floor(Date.now() / 1000))
   const canReadFile = $derived(!trashed || canManageTrash)
   const canShareLinks = $derived(!trashed && hasCapability(session.user, 'share_links'))
+  // A document still waiting for its password cannot be read again until it is unlocked.
+  const canRescan = $derived(!trashed && doc?.encryption_state !== 'encrypted')
   const visibleRelatedTabs = $derived(trashed ? RELATED_TABS.filter(tab => tab.id === 'notes') : RELATED_TABS)
   const ordinaryCustomFields = $derived.by(() => {
     const fields = new Map()
@@ -354,6 +357,7 @@
     trashBusy = false
     deleteOpen = false
     recoveryBusy = false
+    rescanBusy = false
     noteDraft = ''
     noteEditID = null
     noteEditDraft = ''
@@ -1366,6 +1370,33 @@
     }
   }
 
+  async function rescanDocument() {
+    if (rescanBusy || !canRescan || doc?.processing) return
+    const version = loadVersion
+    const scope = captureScope()
+    const documentID = Number(id)
+    rescanBusy = true
+    try {
+      const result = await bulkEdit([documentID], 'rescan_enqueue', {})
+      if (disposed || version !== loadVersion || !scopeCurrent(scope)) return
+      const outcome = result?.results?.find(item => item.id === documentID)
+      if (!outcome?.ok) {
+        throw new Error(outcome?.code === 'forbidden'
+          ? translate("documentDetail.youDoNotHavePermissionToEditThis")
+          : translate("documentDetail.couldNotStartRescan"))
+      }
+      doc = { ...doc, processing: true }
+      requestStatusRefresh()
+      notify?.(translate("documentDetail.rescanStarted"))
+    } catch (ex) {
+      if (!disposed && version === loadVersion && scopeCurrent(scope)) {
+        notify?.(ex.message || translate("documentDetail.couldNotStartRescan"))
+      }
+    } finally {
+      if (!disposed && version === loadVersion && scopeCurrent(scope)) rescanBusy = false
+    }
+  }
+
   async function trash() {
     const version = loadVersion
     trashBusy = true
@@ -1470,6 +1501,12 @@
       </button>
     {/if}
     {#if canReadFile}<a class="btn sm" href={downloadPath(id)} download><Icon name="download" size={13} /> {translate("documentDetail.download")}</a>{/if}
+    {#if canRescan}
+      <button class="btn sm" disabled={rescanBusy || doc.processing} onclick={rescanDocument}
+              title={doc.processing ? translate("documentDetail.stillProcessing") : translate("documentDetail.readAndProcessThisDocumentAgain")}>
+        <Icon name="refresh" size={13} /> {rescanBusy ? translate("common.working") : translate("documentDetail.rescan")}
+      </button>
+    {/if}
     {#if canManageAccess}
       <button class="btn sm" onclick={() => (accessOpen = true)}><Icon name="shield" size={13} /> {translate("documentDetail.access")}</button>
     {/if}
@@ -1569,7 +1606,7 @@
           </div>
         {/if}
 
-        <dl class="kv" style="margin-top:12px">
+        <dl class="kv document-metadata">
           {#if doc.encryption_state === 'decrypted'}
             <dt>{translate("documentDetail.password")}</dt>
             <dd><DocumentUnlockStatus state={doc.encryption_state} expanded /></dd>
@@ -2466,8 +2503,9 @@
   .title-pin { display:flex; flex-wrap:wrap; align-items:center; gap:6px; color:var(--muted); font-size:.75rem; }
   .title-pin .btn.sm { padding:1px 8px; font-size:.7rem; }
   .document-tags { min-width:0 }
+  .document-metadata { margin:12px 0 0; }
   .more-fields { display:contents; }
-  .more-fields-toggle { display:inline-flex; align-items:center; gap:6px; margin-top:10px; padding:4px 0; border:0; background:none; color:var(--accent); font:inherit; font-size:.82rem; cursor:pointer; }
+  .more-fields-toggle { display:inline-flex; align-items:center; gap:6px; margin-top:4px; padding:4px 0; border:0; background:none; color:var(--accent); font:inherit; font-size:.82rem; cursor:pointer; }
   .more-fields-toggle:hover { text-decoration:underline; }
   .more-fields-toggle .sub { color:var(--muted); }
   .more-fields-chevron { display:inline-block; transition:transform 150ms ease; }
