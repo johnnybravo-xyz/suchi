@@ -33,6 +33,9 @@ Notable user-visible changes to Suchi are recorded here.
 - Pasting a TOML or HuML taxonomy now selects the matching parser from its
   required `format` header. The file picker is now an explicit upload button,
   and **File format** stays on one line.
+- Watched-folder reload failures now log their underlying runtime error and tell
+  administrators when the Suchi process cannot read the selected server
+  directory. Failed changes still restore the previous settings.
 
 ## [0.4.1] - 2026-10-24
 

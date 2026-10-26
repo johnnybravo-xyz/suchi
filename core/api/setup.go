@@ -1143,7 +1143,15 @@ func (s *Server) SaveIngestSettings(w http.ResponseWriter, r *http.Request) {
 				s.Log.Info("api.settings.fswatch.rollback_skipped",
 					"reason", "settings changed after failed reload")
 			}
+			s.Log.Warn("api.settings.fswatch.reload_failed",
+				"dir", body.FSWatchDir,
+				"err", err.Error(),
+				"settings_restored", restored,
+			)
 			message := "ingest source could not be applied"
+			if errors.Is(err, fs.ErrPermission) {
+				message = "watched directory cannot be read by the Suchi process: " + body.FSWatchDir
+			}
 			if restored {
 				message += "; previous settings restored"
 			} else {

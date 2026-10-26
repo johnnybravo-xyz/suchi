@@ -694,14 +694,21 @@ func TestSetupRuntimeSettingsApplyLiveAndReadBack(t *testing.T) {
 		t.Fatalf("failed reload persisted invalid scan settings: %+v", rolledBackScan)
 	}
 
-	s.FSWatchReloader = func(context.Context) error { return errors.New("invalid watch directory") }
+	badDir := t.TempDir()
+	s.FSWatchReloader = func(context.Context) error {
+		return fmt.Errorf("fswatch: open root %s: %w", badDir, os.ErrPermission)
+	}
 	badReq := httptest.NewRequest(http.MethodPost, "/api/admin/settings/ingest",
-		strings.NewReader(`{"fs_watch_dir":"`+t.TempDir()+`","fs_watch_owner_email":"u1@t.local"}`))
+		strings.NewReader(`{"fs_watch_dir":"`+badDir+`","fs_watch_owner_email":"u1@t.local"}`))
 	badReq = badReq.WithContext(auth.WithPrincipal(badReq.Context(), admin))
 	badRec := httptest.NewRecorder()
 	s.SaveIngestSettings(badRec, badReq)
 	if badRec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("failed reload status=%d body=%s", badRec.Code, badRec.Body.String())
+	}
+	if body := badRec.Body.String(); !strings.Contains(body, "cannot be read by the Suchi process") ||
+		!strings.Contains(body, badDir) {
+		t.Fatalf("failed reload hid permission cause: %s", body)
 	}
 	rolledBack := settings.ResolveFSWatchConfig(context.Background(), s.DB, settings.FSWatchConfig{})
 	if rolledBack.Dir != inbox || rolledBack.OwnerID != 1 {
