@@ -258,7 +258,7 @@ func (w *Watcher) ingestOpen(ctx context.Context, path, relativePath string, f *
 				return err
 			}
 			if side.JDSystem != target.Code {
-				return errors.New("fswatch: sidecar jd_system does not match configured system")
+				return blockIngest(errors.New("fswatch: sidecar jd_system does not match configured system"))
 			}
 		}
 		record := func(id int64) error {
@@ -397,7 +397,7 @@ func applySidecar(ctx context.Context, tx *sql.Tx, docID int64, s *sidecar.V1, o
 	now := time.Now().Unix()
 	if s.ArchiveSerialNumber != nil {
 		if err := asn.ValidateValue(*s.ArchiveSerialNumber); err != nil {
-			return fmt.Errorf("archive serial number: %w", err)
+			return blockIngest(fmt.Errorf("archive serial number: %w", err))
 		}
 		var conflict bool
 		if err := tx.QueryRowContext(ctx, `
@@ -474,7 +474,7 @@ func applySidecar(ctx context.Context, tx *sql.Tx, docID int64, s *sidecar.V1, o
 	for name, raw := range s.CustomFields {
 		name = strings.TrimSpace(name)
 		if name == "" {
-			return errors.New("custom field name must not be empty")
+			return blockIngest(errors.New("custom field name must not be empty"))
 		}
 		var (
 			fieldID  int64
@@ -487,14 +487,14 @@ func applySidecar(ctx context.Context, tx *sql.Tx, docID int64, s *sidecar.V1, o
 			WHERE system_id = ? AND name = ?
 		`, systemID, name).Scan(&fieldID, &dataType, &extra); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				return fmt.Errorf("custom field %q is not defined in this filing system", name)
+				return blockIngest(fmt.Errorf("custom field %q is not defined in this filing system", name))
 			}
 			return fmt.Errorf("resolve custom field %q: %w", name, err)
 		}
 		handler := customfield.Lookup(dataType)
 		typed, err := handler.Validate(json.RawMessage(extra), raw)
 		if err != nil {
-			return fmt.Errorf("custom field %q: %w", name, err)
+			return blockIngest(fmt.Errorf("custom field %q: %w", name, err))
 		}
 		if err := handler.Write(ctx, tx, docID, fieldID, typed); err != nil {
 			return fmt.Errorf("custom field %q: %w", name, err)

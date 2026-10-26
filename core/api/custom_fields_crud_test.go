@@ -37,6 +37,31 @@ func TestCustomFieldDef_Roundtrip(t *testing.T) {
 	ctx := auth.WithPrincipal(context.Background(),
 		&pluginapi.Principal{Kind: "user", UserID: 1, Email: "a@example.com", Role: "admin"})
 
+	insertBlocked := func(path string) {
+		t.Helper()
+		if _, err := d.Write.ExecContext(t.Context(), `
+			INSERT INTO fs_watch_observations(
+				root_path, owner_id, system_id, relative_path,
+				file_size, file_mtime_ns, sidecar_size, sidecar_mtime_ns,
+				state, last_error, updated_at
+			) VALUES ('/watch', 1, 1, ?, 1, 1, -1, 0, 'blocked', 'invalid metadata', 1)
+		`, path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertBlockedRetried := func(operation string) {
+		t.Helper()
+		var count int
+		if err := d.Read.QueryRowContext(t.Context(),
+			`SELECT count(*) FROM fs_watch_observations WHERE system_id = 1 AND state = 'blocked'`).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("%s left %d blocked watcher observations", operation, count)
+		}
+	}
+
+	insertBlocked("create")
 	// Create.
 	body := mustJSON(t, map[string]any{
 		"name":       "priority",
@@ -49,6 +74,7 @@ func TestCustomFieldDef_Roundtrip(t *testing.T) {
 	if rec.Code != 201 {
 		t.Fatalf("create: status=%d body=%s", rec.Code, rec.Body.String())
 	}
+	assertBlockedRetried("create")
 	var createOut struct {
 		ID int64 `json:"id"`
 	}
@@ -77,6 +103,7 @@ func TestCustomFieldDef_Roundtrip(t *testing.T) {
 		t.Errorf("list: extra_data.choices not preserved. body=%s", rec.Body.String())
 	}
 
+	insertBlocked("update")
 	// Update the name only. extra_data must survive since we don't
 	// touch it.
 	body = mustJSON(t, map[string]any{"name": "urgency"})
@@ -89,6 +116,7 @@ func TestCustomFieldDef_Roundtrip(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatalf("update: status=%d body=%s", rec.Code, rec.Body.String())
 	}
+	assertBlockedRetried("update")
 
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest("GET", "/api/custom_fields/", nil).WithContext(ctx)
@@ -103,6 +131,7 @@ func TestCustomFieldDef_Roundtrip(t *testing.T) {
 		t.Errorf("update: extra_data.choices lost after name update. body=%s", rec.Body.String())
 	}
 
+	insertBlocked("delete")
 	// Delete.
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest("DELETE",
@@ -113,6 +142,7 @@ func TestCustomFieldDef_Roundtrip(t *testing.T) {
 	if rec.Code != 204 {
 		t.Fatalf("delete: status=%d body=%s", rec.Code, rec.Body.String())
 	}
+	assertBlockedRetried("delete")
 
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest("GET", "/api/custom_fields/", nil).WithContext(ctx)

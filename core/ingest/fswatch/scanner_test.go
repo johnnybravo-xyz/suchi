@@ -168,7 +168,7 @@ func TestRecursionCanBeDisabledAndSymlinksAreIgnored(t *testing.T) {
 	}
 }
 
-func TestFailureStaysInPlaceAndRetriesAfterSidecarChange(t *testing.T) {
+func TestBlockedSidecarStaysInPlaceAndRetriesAfterSidecarChange(t *testing.T) {
 	source := t.TempDir()
 	documentPath := filepath.Join(source, "broken.txt")
 	sidecarPath := filepath.Join(source, "broken.json")
@@ -186,15 +186,37 @@ func TestFailureStaysInPlaceAndRetriesAfterSidecarChange(t *testing.T) {
 			t.Fatalf("failed source was changed: %s: %v", path, err)
 		}
 	}
-	var failed, documents int
+	var blocked, documents int
 	if err := database.Read.QueryRowContext(t.Context(), `
-		SELECT (SELECT count(*) FROM fs_watch_observations WHERE state='failed'),
+		SELECT (SELECT count(*) FROM fs_watch_observations WHERE state='blocked'),
 		       (SELECT count(*) FROM documents)
-	`).Scan(&failed, &documents); err != nil {
+	`).Scan(&blocked, &documents); err != nil {
 		t.Fatal(err)
 	}
-	if failed != 1 || documents != 0 {
-		t.Fatalf("failed/documents = %d/%d, want 1/0", failed, documents)
+	if blocked != 1 || documents != 0 {
+		t.Fatalf("blocked/documents = %d/%d, want 1/0", blocked, documents)
+	}
+	// Past the five-minute failure retry but inside the hourly blocked retry.
+	recent := time.Now().Add(-10 * time.Minute).Unix()
+	blockedUpdatedAt := func(set int64) int64 {
+		t.Helper()
+		if _, err := database.Write.ExecContext(t.Context(),
+			`UPDATE fs_watch_observations SET updated_at = ? WHERE state = 'blocked'`, set); err != nil {
+			t.Fatal(err)
+		}
+		scanTestSource(t, watcher)
+		var updatedAt int64
+		if err := database.Read.QueryRowContext(t.Context(),
+			`SELECT updated_at FROM fs_watch_observations WHERE state = 'blocked'`).Scan(&updatedAt); err != nil {
+			t.Fatal(err)
+		}
+		return updatedAt
+	}
+	if got := blockedUpdatedAt(recent); got != recent {
+		t.Fatalf("unchanged blocked sidecar retried within the hour: updated_at=%d", got)
+	}
+	if got := blockedUpdatedAt(1); got == 1 {
+		t.Fatal("unchanged blocked sidecar was not retried after an hour")
 	}
 
 	if err := os.WriteFile(sidecarPath, []byte(`{"version":1,"title":"Recovered"}`), 0o600); err != nil {
@@ -211,6 +233,31 @@ func TestFailureStaysInPlaceAndRetriesAfterSidecarChange(t *testing.T) {
 	}
 	if title != "Recovered" {
 		t.Fatalf("recovered title = %q", title)
+	}
+}
+
+func TestInvalidCustomFieldSidecarIsBlockedAtomically(t *testing.T) {
+	source := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "report.txt"), []byte("document"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "report.json"),
+		[]byte(`{"suchi_sidecar":1,"custom_fields":{"Missing field":"value"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	watcher, database := newScannerTestWatcher(t, source, true)
+	scanTestSource(t, watcher)
+
+	var state string
+	var documents int
+	if err := database.Read.QueryRowContext(t.Context(), `
+		SELECT state, (SELECT count(*) FROM documents)
+		FROM fs_watch_observations WHERE relative_path = 'report.txt'
+	`).Scan(&state, &documents); err != nil {
+		t.Fatal(err)
+	}
+	if state != "blocked" || documents != 0 {
+		t.Fatalf("state/documents = %q/%d, want blocked/0", state, documents)
 	}
 }
 

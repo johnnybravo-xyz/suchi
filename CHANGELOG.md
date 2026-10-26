@@ -42,6 +42,10 @@ Notable user-visible changes to Suchi are recorded here.
 - Watched-folder reload failures now log their underlying runtime error and tell
   administrators when the Suchi process cannot read the selected server
   directory. Failed changes still restore the previous settings.
+- Deterministic watched-folder sidecar errors now retry hourly instead of
+  retrying and logging every five minutes. Sidecar changes and custom-field
+  definition changes retry affected intake at once, without partially applying
+  or silently dropping metadata. Transient failures keep the five-minute retry.
 
 ## [0.4.1] - 2026-10-24
 

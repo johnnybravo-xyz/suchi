@@ -724,11 +724,15 @@ Version, split and attachment documents inherit their source system.
 **Source of truth**: `core/ingest/sidecar/sidecar.go` parses the wire shape;
 `core/ingest/fswatch` applies it. Sensitivity, metadata, ASN, the note, typed
 custom fields, and the ingest outbox commit together. An invalid sensitivity,
-occupied ASN, unknown custom field, invalid typed value, bad JSON, or
+unknown custom field, invalid typed value, invalid ASN value, bad JSON, or
 explicit-but-mismatched `suchi_sidecar` version rejects the intake without
-partial metadata. The read-only watcher retains the source file and records the
-bounded failure in Suchi-owned state. Producers that omit `suchi_sidecar` get
-the flat-JSON compatibility shape
+partial metadata. The read-only watcher retains the source file and records a
+blocked observation, retried hourly rather than every five minutes. Changing
+the sidecar retries that file at once; changing a custom-field definition
+retries blocked files in that filing system. An occupied ASN and transient
+filesystem/database failures retain their delayed retry because archive state
+can resolve them without changing the source. Producers that omit
+`suchi_sidecar` get the flat-JSON compatibility shape
 (`title`/`title_owner`/`created`/`correspondent`/`tags` only); fields outside
 that shape, including `sensitivity`, are ignored.
 

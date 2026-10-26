@@ -536,8 +536,10 @@ profiles, watched folders, OCR/models, and backups are server-wide.
 **Watched folder** names its read-only contract and shows whether server
 configuration includes subfolders. The source directory must already exist and
 be readable by the Suchi process; a failed live reload reports permission
-failures and restores the previous settings. Suchi does not move, rename, delete
-or write files and sidecars.
+failures and restores the previous settings. Invalid sidecars remain atomic and
+blocked, retried hourly rather than every five minutes, and never partially
+applied. Editing the sidecar, or correcting its custom-field definition under
+**Metadata**, retries it at once. Suchi does not move, rename, delete or write files and sidecars.
 **Classification** keeps its controls in separate cards. Under **Suggestions**,
 choose **Review first** or **Apply when confident**, then use **Save application
 mode**. **Similar documents** and its review/automatic thresholds expand under

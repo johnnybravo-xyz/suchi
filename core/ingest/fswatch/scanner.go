@@ -24,6 +24,22 @@ const (
 
 var errSourceChanged = errors.New("fswatch: source changed while reading")
 
+type blockedIngestError struct {
+	err error
+}
+
+func (e *blockedIngestError) Error() string {
+	return e.err.Error()
+}
+
+func (e *blockedIngestError) Unwrap() error {
+	return e.err
+}
+
+func blockIngest(err error) error {
+	return &blockedIngestError{err: err}
+}
+
 // Run reconciles the read-only source periodically. One open root and the
 // directory currently being read are the only filesystem descriptors retained;
 // recursion never allocates one kernel watch per directory.
@@ -175,7 +191,7 @@ func (w *Watcher) processEntry(ctx context.Context, root *os.Root, rootInfo os.F
 	var side *sidecar.V1
 	if sidecarInfo != nil {
 		if sidecarInfo.Size() > maxSidecarBytes {
-			w.fail(ctx, relativePath, fingerprint, fmt.Errorf("sidecar exceeds %d bytes", maxSidecarBytes))
+			w.fail(ctx, relativePath, fingerprint, blockIngest(fmt.Errorf("sidecar exceeds %d bytes", maxSidecarBytes)))
 			return
 		}
 		contents, err := root.ReadFile(sidecarPath)
@@ -191,7 +207,7 @@ func (w *Watcher) processEntry(ctx context.Context, root *os.Root, rootInfo os.F
 		}
 		side, err = sidecar.Parse(contents)
 		if err != nil {
-			w.fail(ctx, relativePath, fingerprint, err)
+			w.fail(ctx, relativePath, fingerprint, blockIngest(err))
 			return
 		}
 	}
@@ -247,13 +263,21 @@ func findSidecar(root *os.Root, relativePath string) (string, os.FileInfo, error
 	return "", nil, nil
 }
 
+// fail records an attempt that did not ingest. Errors wrapped by blockIngest
+// are deterministic, so they are recorded as blocked and retried hourly instead
+// of every five minutes.
 func (w *Watcher) fail(ctx context.Context, relativePath string, fingerprint sourceFingerprint, ingestErr error) {
-	if err := w.recordObservation(ctx, relativePath, fingerprint, "failed", ingestErr.Error()); err != nil {
+	state, logEvent, auditAction := "failed", "fswatch.ingest_failed", "document.ingest.failed"
+	var blocked *blockedIngestError
+	if errors.As(ingestErr, &blocked) {
+		state, logEvent, auditAction = "blocked", "fswatch.ingest_blocked", "document.ingest.blocked"
+	}
+	if err := w.recordObservation(ctx, relativePath, fingerprint, state, ingestErr.Error()); err != nil {
 		w.log.Warn("fswatch.observation", "path", relativePath, "err", err.Error())
 	}
-	w.log.Warn("fswatch.ingest_failed", "path", relativePath, "err", ingestErr.Error())
+	w.log.Warn(logEvent, "path", relativePath, "err", ingestErr.Error())
 	audit.Log(ctx, w.db, w.log, audit.Event{
-		SystemID: w.systemID, Action: "document.ingest.failed", ObjectKind: "ingest",
+		SystemID: w.systemID, Action: auditAction, ObjectKind: "ingest",
 		After: map[string]any{"source": "watched_folder", "filename": relativePath, "error": ingestErr.Error()},
 	})
 }

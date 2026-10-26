@@ -15,6 +15,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -229,7 +230,10 @@ func (s *Server) CreateCustomFieldDef(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		id, err = res.LastInsertId()
-		return err
+		if err != nil {
+			return err
+		}
+		return retryBlockedFSWatchInTx(r.Context(), tx, systemID)
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -395,9 +399,11 @@ func (s *Server) UpdateCustomFieldDef(w http.ResponseWriter, r *http.Request) {
 		}
 		sets = append(sets, "updated_at = ?")
 		args = append(args, time.Now().Unix(), id)
-		_, err = tx.ExecContext(r.Context(),
-			"UPDATE custom_fields SET "+strings.Join(sets, ", ")+" WHERE id = ?", args...)
-		return err
+		if _, err = tx.ExecContext(r.Context(),
+			"UPDATE custom_fields SET "+strings.Join(sets, ", ")+" WHERE id = ?", args...); err != nil {
+			return err
+		}
+		return retryBlockedFSWatchInTx(r.Context(), tx, systemID)
 	})
 	switch {
 	case writeCustomFieldInputError(s, w, err):
@@ -475,7 +481,7 @@ func (s *Server) DeleteCustomFieldDef(w http.ResponseWriter, r *http.Request) {
 		if n == 0 {
 			return errNotFound
 		}
-		return nil
+		return retryBlockedFSWatchInTx(r.Context(), tx, systemID)
 	})
 	if err != nil {
 		if errors.Is(err, errNotFound) {
@@ -490,4 +496,12 @@ func (s *Server) DeleteCustomFieldDef(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func retryBlockedFSWatchInTx(ctx context.Context, tx *sql.Tx, systemID int64) error {
+	_, err := tx.ExecContext(ctx, `
+		DELETE FROM fs_watch_observations
+		WHERE system_id = ? AND state = 'blocked'
+	`, systemID)
+	return err
 }

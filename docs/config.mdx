@@ -383,11 +383,17 @@ event queue. It processes one file at a time, never follows symbolic links,
 ignores hidden paths and the legacy top-level `errors/` directory, skips special
 files and mounted filesystems beneath the source, and stops descent after 64
 levels. A database checkpoint avoids rehashing unchanged files. Changed files
-and sidecars are reconsidered; unchanged failures retry after five minutes.
+and sidecars are reconsidered. Transient failures retry after five minutes;
+deterministic sidecar/schema failures are blocked and retried hourly. Changing
+the sidecar retries that file at once, and creating, updating or deleting a
+custom-field definition under **Metadata** retries blocked files in that filing
+system. Blocked files are logged as `fswatch.ingest_blocked` and recorded as
+`document.ingest.blocked` archive events with the reason.
 
-Sidecars (`<name>.json`) remain read-only and apply metadata. Failures stay at
-their source path and appear in logs and archive events; Suchi never moves them
-into the old `errors/` directory. Intake rechecks owner entry; sidecars cannot
+Sidecars (`<name>.json`) remain read-only and apply metadata atomically. Failures
+stay at their source path and appear in logs and archive events; Suchi never
+moves them into the old `errors/` directory or silently drops invalid fields.
+Intake rechecks owner entry; sidecars cannot
 redirect the configured system. Optional sidecar `jd_system` must agree.
 `jd_address` is informational, category-level, and potentially repeated; it
 never allocates, identifies, or routes a document.

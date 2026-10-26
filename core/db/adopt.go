@@ -22,7 +22,7 @@ import (
 
 const (
 	// StableSchemaVersion is the current core schema version in the stable-v1 lineage.
-	StableSchemaVersion = 5
+	StableSchemaVersion = 6
 
 	stableLineage    = "stable-v1"
 	finalBetaLineage = "final-beta-schema-3"
@@ -31,7 +31,8 @@ const (
 	stableV2Fingerprint             = "645e7798d663fff83d120182f661e7148fbd68d263517de9d44783d80aaebae3"
 	stableV3Fingerprint             = "cfbdda9e3e80f35be33f763ad14c1c0d83a22ead62e91d04f6dc900331742a82"
 	stableV4Fingerprint             = "360611dcca51a4ce23d0114e58c82b5208ce72e7575afa25e0c350be7d3100b4"
-	stableFingerprint               = "8f13f6a89fc56a04e027b0cdb19156a405445b8ee6bf6a80629f32e54c1e3d04"
+	stableV5Fingerprint             = "8f13f6a89fc56a04e027b0cdb19156a405445b8ee6bf6a80629f32e54c1e3d04"
+	stableFingerprint               = "74801897fe891f378c233a66f66a715400c59f484f884386c269ee4e40f77e25"
 	preIdentityStableFingerprint    = "5d6ac98308eb644b030092178792a46f36e6f8f5041411f020ed2dcf216f46c2"
 	betaOneFingerprint              = "68089660de648a4fcc136bcefc105edc5d29dc4de59dad482124914ea626fb2b"
 	betaTwoFingerprint              = "a341b731c93a7270e3440a18f58911df80b2289bf44cd3baeecff4a2b2b0071c"
@@ -123,6 +124,18 @@ func PrepareStable(ctx context.Context, d *DB, stable, compatibility []Migration
 		}
 		if err := checkForeignKeys(ctx, d.Write); err != nil {
 			return fmt.Errorf("validate stable schema 4 before upgrade: %w", err)
+		}
+		if err := Migrate(ctx, d, stable, log); err != nil {
+			return err
+		}
+		return verifyStableSchema(ctx, d.Write)
+	}
+	if state.version == 5 && state.lineageValid && state.lineage == stableLineage && state.fingerprint == stableV5Fingerprint {
+		if err := checkIntegrity(ctx, d.Write); err != nil {
+			return fmt.Errorf("validate stable schema 5 before upgrade: %w", err)
+		}
+		if err := checkForeignKeys(ctx, d.Write); err != nil {
+			return fmt.Errorf("validate stable schema 5 before upgrade: %w", err)
 		}
 		if err := Migrate(ctx, d, stable, log); err != nil {
 			return err

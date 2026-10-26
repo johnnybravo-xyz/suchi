@@ -16,6 +16,11 @@ type sourceFingerprint struct {
 	SidecarMTimeNS int64
 }
 
+const (
+	failedRetryDelay  = 5 * time.Minute
+	blockedRetryDelay = time.Hour
+)
+
 func (w *Watcher) observationCurrent(ctx context.Context, relativePath string, fingerprint sourceFingerprint) (bool, error) {
 	var (
 		state     string
@@ -36,7 +41,17 @@ func (w *Watcher) observationCurrent(ctx context.Context, relativePath string, f
 	if err != nil {
 		return false, err
 	}
-	return state != "failed" || time.Now().Unix()-updatedAt < int64((5*time.Minute)/time.Second), nil
+	age := time.Now().Unix() - updatedAt
+	switch state {
+	case "failed":
+		return age < int64(failedRetryDelay/time.Second), nil
+	case "blocked":
+		// API field edits clear blocked rows at once; the slow retry recovers
+		// from any other definition change without a schema signal.
+		return age < int64(blockedRetryDelay/time.Second), nil
+	default:
+		return true, nil
+	}
 }
 
 func (w *Watcher) recordObservationInTx(ctx context.Context, tx *sql.Tx, relativePath string,
