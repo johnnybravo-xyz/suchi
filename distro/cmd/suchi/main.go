@@ -143,7 +143,7 @@ Usage:
   suchi export --out FILE.zip     write a portable takeout of documents + taxonomy (optionally --owner-id N or --all)
   suchi version                   print version + build info
 
-Configuration uses environment variables or a HuML/TOML file; see docs.
+Configuration uses environment variables or a TOML/HuML file; see docs.
 PUBLIC_URL is required.`)
 }
 

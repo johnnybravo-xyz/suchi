@@ -42,6 +42,23 @@ func TestV1Compatibility(t *testing.T) {
 	}
 }
 
+func TestOmittedFormatDefaultsToTOML(t *testing.T) {
+	pf, err := Parse([]byte(header+"areas = []\n"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := Marshal(pf, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Parse(data, FormatTOML); err != nil {
+		t.Fatalf("default marshal is not TOML: %v", err)
+	}
+	if _, err := Parse([]byte("format: \"suchi-taxonomy/v1\"\n"), ""); err == nil {
+		t.Fatal("omitted format parsed HuML instead of TOML")
+	}
+}
+
 func TestRawShapeCannotDisappearDuringNormalization(t *testing.T) {
 	cases := map[string]string{
 		"missing areas":        "",
@@ -178,9 +195,6 @@ func TestFileFormatAndReadBoundaries(t *testing.T) {
 		if _, err := Parse(data, FormatHuML); err == nil {
 			t.Fatal("invalid document accepted")
 		}
-	}
-	if _, err := Parse(readFile(t, "testdata/valid.toml"), ""); err == nil {
-		t.Fatal("sniffed TOML")
 	}
 }
 

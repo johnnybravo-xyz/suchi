@@ -45,7 +45,7 @@ export const resolveIntelligence = (body) => api.post('/api/intelligence/resolve
 
 // suchi-taxonomy/v1 admin import/export.
 export const importTaxonomy = (b, signal) => req('POST', '/api/admin/taxonomy/import', b, { signal })
-export const exportTaxonomy = (format = 'huml') =>
+export const exportTaxonomy = (format = 'toml') =>
   req('GET', `/api/admin/taxonomy/export${qs({ format })}`,
     undefined, { responseType: 'text' })
 

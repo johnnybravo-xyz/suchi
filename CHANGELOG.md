@@ -13,6 +13,12 @@ Notable user-visible changes to Suchi are recorded here.
 - Startup and `suchi doctor` warn when accounts other than `DATA_DIR`'s owner
   and group can reach it. Container images create `/data` as 0750, and the
   systemd template has systemd create `/var/lib/suchi` as 0750.
+- **Breaking:** TOML is now the default taxonomy format in the web app, API,
+  CLI export and format-omitting parser calls. API and CLI callers that relied
+  on an omitted format meaning HuML must now pass it: `"format": "huml"` on
+  import, `?format=huml` on export, or `suchi taxonomy export --format huml`.
+  HuML remains a first-class option everywhere a taxonomy format can be
+  selected or supplied.
 
 ### Fixed
 
@@ -20,6 +26,9 @@ Notable user-visible changes to Suchi are recorded here.
   Suchi added them. An emailed attachment or imported file with an older
   upstream date no longer sinks below newer uploads. Document lists accept
   `ordering=added_at` and `-added_at`, and each row carries `added_at`.
+- Pasting a TOML or HuML taxonomy now selects the matching parser from its
+  required `format` header. The file picker is now an explicit upload button,
+  and **File format** stays on one line.
 
 ## [0.4.1] - 2026-10-24
 

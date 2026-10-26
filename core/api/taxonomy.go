@@ -18,6 +18,8 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/taxonomy/exporter"
 )
 
+const defaultTaxonomyFormat = presetfile.FormatTOML
+
 type TaxonomyImportReq struct {
 	Content            string         `json:"content"`
 	Format             string         `json:"format,omitempty"`
@@ -40,9 +42,9 @@ func (s *Server) ImportTaxonomy(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, 400, "bad_body", err.Error())
 		return
 	}
-	format, ok := taxonomyAuthoringFormat(req.Format, presetfile.FormatHuML)
+	format, ok := taxonomyAuthoringFormat(req.Format, defaultTaxonomyFormat)
 	if !ok {
-		s.writeError(w, 400, "bad_format", "format must be huml or toml")
+		s.writeError(w, 400, "bad_format", "format must be toml or huml")
 		return
 	}
 	pf, err := presetfile.Parse([]byte(req.Content), format)
@@ -128,9 +130,9 @@ func (s *Server) ExportTaxonomy(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	format, ok := taxonomyAuthoringFormat(r.URL.Query().Get("format"), presetfile.FormatHuML)
+	format, ok := taxonomyAuthoringFormat(r.URL.Query().Get("format"), defaultTaxonomyFormat)
 	if !ok {
-		s.writeError(w, 400, "bad_format", "format must be huml or toml")
+		s.writeError(w, 400, "bad_format", "format must be toml or huml")
 		return
 	}
 	pf, err := exporter.BuildExport(r.Context(), s.DB, systemID)

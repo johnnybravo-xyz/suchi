@@ -1868,7 +1868,7 @@ automations.
 ### `POST /api/admin/taxonomy/import`
 
 Session-admin-only, with existing same-origin protections; API tokens cannot
-administer taxonomy. Accepts strict `suchi-taxonomy/v1` HuML or TOML and previews
+administer taxonomy. Accepts strict `suchi-taxonomy/v1` TOML or HuML and previews
 or atomically applies it. Taxonomy content is bounded to 1 MiB; invalid input is
 rejected before mutation. Category `keywords` and `seeds.automations` from
 v0.2 exports are ignored.
@@ -1884,8 +1884,9 @@ v0.2 exports are ignored.
 }
 ```
 
-`format` is `"huml"` or `"toml"`; omitted/empty means HuML, never content
-sniffing. UI callers send it explicitly. `apply=false` returns the preview.
+`format` is `"toml"` or `"huml"`; omitted/empty means TOML, never content
+sniffing. Through 0.4.1 an omitted format meant HuML, so a client that sends
+HuML must now pass `"format": "huml"`. UI callers send it explicitly. `apply=false` returns the preview.
 Apply sends the same content, format and remaps plus
 `"expected_state_hash":"<state_hash from preview>"` and `"apply":true`.
 
@@ -1908,7 +1909,7 @@ The hash is a consistency check, not a permission token or signed session.
 
 | Field | Meaning |
 | --- | --- |
-| `format` | Declared `suchi-taxonomy/v1` schema; HuML/TOML is the separate file format |
+| `format` | Declared `suchi-taxonomy/v1` schema; TOML/HuML is the separate file format |
 | `preset_id`, `preset_version`, `name`, `story` | Submitted author identity, file version, name, and explanation |
 | `content_sha256` | SHA-256 of exact submitted bytes |
 | `state_hash` | Binding of source hash, remaps and relevant current configuration |
@@ -1938,10 +1939,11 @@ and unsupported behavior are errors, never partially accepted extensions.
 
 ### `GET /api/admin/taxonomy/export`
 
-Session-admin-only. Build and validate a consistent current snapshot in HuML
-or TOML: `?format=huml|toml&system=S01` (default HuML and original system).
-Attachment filenames are `<SYS>.taxonomy.huml|toml` after introduction and
-`archive.huml|toml` before it; the current system code/name accompanies the snapshot.
+Session-admin-only. Build and validate a consistent current snapshot in TOML
+or HuML: `?format=toml|huml&system=S01` (default TOML and original system).
+Through 0.4.1 the default was HuML; pass `?format=huml` to keep HuML output.
+Attachment filenames are `<SYS>.taxonomy.toml|huml` after introduction and
+`archive.toml|huml` before it; the current system code/name accompanies the snapshot.
 
 Snapshot header is `id = "archive"`, `version = 1`, separate from last-import
 provenance. Generated System/49 is implicit. Export contains the filing tree

@@ -7,10 +7,11 @@
   import { systems, captureScope, scopeCurrent, selectSystem } from './systems.svelte.js'
   import { refreshSystems } from './system-routing.js'
   import ConfirmDialog from './ConfirmDialog.svelte'
+  import Icon from './Icon.svelte'
 
   let { notify, onApplied, busy = $bindable(false) } = $props()
   let content = $state('')
-  let format = $state('huml')
+  let format = $state('toml')
   let fileName = $state('')
   let diff = $state(null)
   let collisions = $state([])
@@ -24,6 +25,7 @@
   const scope = captureScope()
   let generation = 0
   let reader
+  let fileInput
   let controller
   const canApply = $derived(!!diff?.state_hash && !diff.applied && !diff.collisions?.some(c => !c.resolved))
 
@@ -42,6 +44,20 @@
       separate = false
       existingCode = 'A00'
     }
+  }
+
+  function detectContentFormat(value) {
+    const separator = value.match(/^\s*format\s*([=:])/m)?.[1]
+    if (separator === '=') return 'toml'
+    if (separator === ':') return 'huml'
+    return ''
+  }
+
+  function editContent(value) {
+    fileName = ''
+    const detected = detectContentFormat(value)
+    if (detected) format = detected
+    invalidate(true)
   }
 
   function pick(event) {
@@ -130,21 +146,25 @@
 
 <section class="taximp" aria-label={translate("taxonomyImport.importTaxonomy")}>
   <h3>{translate("taxonomyImport.importTaxonomy")}</h3>
-  <div class="toolbar">
-    <label class="btn sm">
-      {translate("taxonomyImport.chooseHumlToml")}
-      <input type="file" aria-label={translate("taxonomyImport.chooseTaxonomyFile")} accept=".huml,.toml" disabled={busy} onchange={pick} />
-    </label>
-    {#if fileName}<span class="file-name sub">{fileName}</span>{/if}
-    <label class="serialization">{translate("taxonomyImport.fileFormat")}
+  <div class="source-toolbar">
+    <div class="file-source">
+      <button type="button" class="btn file-picker" disabled={busy} onclick={() => fileInput?.click()}>
+        <Icon name="upload" size={14} />
+        {translate("taxonomyImport.chooseTaxonomyFile")}
+      </button>
+      <input bind:this={fileInput} type="file" accept=".huml,.toml" disabled={busy} onchange={pick} />
+      {#if fileName}<span class="file-name sub">{fileName}</span>{/if}
+    </div>
+    <label class="serialization">
+      <span>{translate("taxonomyImport.fileFormat")}</span>
       <select class="input" bind:value={format} disabled={busy} onchange={() => invalidate()}>
-        <option value="huml">{translate("taxonomyImport.huml")}</option><option value="toml">TOML</option>
+        <option value="toml">TOML</option><option value="huml">{translate("taxonomyImport.huml")}</option>
       </select>
     </label>
   </div>
   <label class="content-label" for="taxonomy-content">{translate("taxonomyImport.pasteContent")}</label>
   <textarea id="taxonomy-content" class="input mono" rows="7" bind:value={content} disabled={busy}
-            oninput={() => { fileName = ''; invalidate(true) }} placeholder={translate("taxonomyImport.pasteASuchiTaxonomyV1File")}></textarea>
+            oninput={(event) => editContent(event.currentTarget.value)} placeholder={translate("taxonomyImport.pasteASuchiTaxonomyV1File")}></textarea>
   {#if reading}<p class="sub" role="status">{translate("taxonomyImport.readingFile")}</p>{/if}
   <p class="sub">{translate("taxonomyImport.validationChecksSupportedStructureNotDomainCorrectness")}</p>
   {#if firstDestination && !diff?.applied}
@@ -247,9 +267,18 @@
   .taximp h4 { margin: 12px 0 8px; }
   .taximp p, .taximp li { overflow-wrap: anywhere; }
   .taximp .sub { color: color-mix(in srgb, var(--ink) 75%, var(--muted)); font-size: .78rem; line-height: 1.5; }
-  .taximp input[type=file] { width: 1px; height: 1px; position: absolute; opacity: 0; }
+  .taximp input[type=file] { display: none; }
   .taximp label:focus-within { outline: 2px solid var(--accent); outline-offset: 3px; }
-  .serialization { display: flex; align-items: center; gap: 8px; }
+  .source-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  .file-source { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .file-picker {
+    cursor: pointer; color: var(--accent); background: var(--tint);
+    border-color: color-mix(in srgb, var(--accent) 38%, var(--line));
+  }
+  .file-picker:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .serialization { display: flex; align-items: center; gap: 8px; margin-left: auto; color: var(--muted); font-size: .78rem; font-weight: 600; }
+  .serialization > span { white-space: nowrap; }
+  .serialization .input { min-width: 130px; margin-top: 0; }
   .file-name { overflow-wrap: anywhere; min-width: 0; }
   .content-label { display: block; margin: 8px 0; }
   textarea { width: 100%; resize: vertical; font-size: .78rem; }
@@ -261,5 +290,10 @@
   .hash { overflow-wrap: anywhere; }
   .collision { padding: 8px 0; border-bottom: 1px solid var(--line); }
   .collision select { max-width: 100%; margin-top: 6px; }
-  @media (max-width: 600px) { .trees { grid-template-columns: 1fr; gap: 0; } }
+  @media (max-width: 600px) {
+    .source-toolbar { align-items: flex-start; }
+    .file-source { flex: 1 1 100%; flex-wrap: wrap; }
+    .serialization { margin-left: 0; }
+    .trees { grid-template-columns: 1fr; gap: 0; }
+  }
 </style>

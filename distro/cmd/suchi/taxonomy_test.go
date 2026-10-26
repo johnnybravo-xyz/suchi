@@ -50,7 +50,11 @@ func TestPreferredTaxonomyFormat(t *testing.T) {
 			t.Errorf("preferredTaxonomyFormat(%q): %v", value, err)
 		}
 	}
-	for _, value := range []string{"", "yaml", "json"} {
+	got, err := preferredTaxonomyFormat("")
+	if err != nil || got != "toml" {
+		t.Fatalf("empty format = %q, %v; want toml", got, err)
+	}
+	for _, value := range []string{"yaml", "json"} {
 		if _, err := preferredTaxonomyFormat(value); err == nil {
 			t.Errorf("preferredTaxonomyFormat(%q) succeeded", value)
 		}

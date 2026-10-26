@@ -343,6 +343,16 @@ name = "Identity"
 description = "Passports and identity cards."
 `
 
+const taxonomyHumlContent = `format: "suchi-taxonomy/v1"
+id: "personal-records"
+version: 1
+name: "Personal records"
+market: "global"
+language: "en"
+story: "Keep identity paperwork together."
+areas: []
+`
+
 function taxonomyPreview(overrides = {}) {
   return {
     format: 'suchi-taxonomy/v1', preset_id: 'personal-records', preset_version: 2,
@@ -401,7 +411,8 @@ test('taxonomy import previews a named tree and refreshes setup and sidebar afte
     },
   })
   const importer = await openTaxonomyImport(page)
-  await importer.getByLabel('Choose taxonomy file').setInputFiles({
+  await expect(importer.getByRole('button', { name: 'Choose taxonomy file', exact: true })).toBeVisible()
+  await importer.locator('input[type=file]').setInputFiles({
     name: 'personal.toml', mimeType: 'text/plain', buffer: Buffer.from(taxonomyContent),
   })
   await expect(importer.getByRole('combobox', { name: 'File format', exact: true })).toHaveValue('toml')
@@ -422,7 +433,7 @@ test('taxonomy import previews a named tree and refreshes setup and sidebar afte
   await expect(page.getByRole('link', { name: '11 Identity', exact: true })).toBeVisible()
 })
 
-test('taxonomy import renders server validation failures and never applies invalid input', async ({ page }) => {
+test('taxonomy import detects pasted formats and never applies invalid input', async ({ page }) => {
   const requests = []
   await mockAPI(page, {
     taxonomyImport: async (payload, route) => {
@@ -431,14 +442,23 @@ test('taxonomy import renders server validation failures and never applies inval
     },
   })
   const importer = await openTaxonomyImport(page)
-  await importer.getByLabel('Paste content').fill('unsupported content')
-  await importer.getByRole('combobox', { name: 'File format', exact: true }).selectOption('toml')
+  const format = importer.getByRole('combobox', { name: 'File format', exact: true })
+  await expect(format).toHaveValue('toml')
+  await expect(format.locator('option')).toHaveText(['TOML', 'HuML'])
+  await importer.getByLabel('Paste content').fill(taxonomyContent)
+  await expect(format).toHaveValue('toml')
   await importer.getByRole('button', { name: 'Preview', exact: true }).click()
   await expect(importer.getByRole('alert')).toHaveText('areas[0].code: area 40 is reserved')
-  await expect(importer.getByLabel('Paste content')).toHaveValue('unsupported content')
+  await expect(importer.getByLabel('Paste content')).toHaveValue(taxonomyContent)
+
+  await importer.getByLabel('Paste content').fill(taxonomyHumlContent)
+  await expect(format).toHaveValue('huml')
+  await importer.getByRole('button', { name: 'Preview', exact: true }).click()
   await expect(importer.getByRole('button', { name: 'Apply import', exact: true })).toBeDisabled()
-  expect(requests).toHaveLength(1)
-  expect(requests[0].apply).toBe(false)
+  expect(requests.map(request => ({ format: request.format, apply: request.apply }))).toEqual([
+    { format: 'toml', apply: false },
+    { format: 'huml', apply: false },
+  ])
 })
 
 test('taxonomy import requires explicit previewed collision choices and retains them after invalidation', async ({ page }) => {
@@ -542,7 +562,7 @@ test('taxonomy import ignores late file reads and reports unreadable or unsuppor
     }
   })
   const importer = await openTaxonomyImport(page)
-  const file = importer.getByLabel('Choose taxonomy file')
+  const file = importer.locator('input[type=file]')
   await file.setInputFiles({ name: 'old.toml', mimeType: 'text/plain', buffer: Buffer.from('old') })
   await expect(importer.getByRole('status')).toHaveText('Reading file…')
   await importer.getByLabel('Paste content').fill('new pasted content')
@@ -557,7 +577,7 @@ test('taxonomy import ignores late file reads and reports unreadable or unsuppor
   await expect(importer.getByRole('alert')).toContainText('Could not read broken.huml')
   await expect(importer.getByRole('button', { name: 'Preview', exact: true })).toBeDisabled()
   await file.setInputFiles({ name: 'unsupported.yaml', mimeType: 'text/plain', buffer: Buffer.from('x') })
-  await expect(importer.getByRole('alert')).toContainText('Choose a .huml or .toml file')
+  await expect(importer.getByRole('alert')).toContainText('Choose a .toml or .huml file')
 })
 
 test('taxonomy import disables conflicting requests and discards a preview after navigation', async ({ page }) => {
@@ -587,7 +607,9 @@ test('taxonomy settings exports the filing tree', async ({ page }) => {
   })
   await page.goto('/#/settings?tab=archive&section=filing-tree')
   await page.getByRole('button', { name: 'Import or export' }).click()
-  await page.getByRole('combobox', { name: 'File format', exact: true }).selectOption('toml')
+  const format = page.getByRole('combobox', { name: 'File format', exact: true })
+  await expect(format).toHaveValue('toml')
+  await expect(format.locator('option')).toHaveText(['TOML', 'HuML'])
   const download = page.waitForEvent('download')
   await page.getByRole('button', { name: 'Export tree' }).click()
   expect((await download).suggestedFilename()).toBe('archive.toml')

@@ -25,7 +25,7 @@ const (
 )
 
 // Parse validates author input before expanding flat categories or generating Inbox.
-// An omitted file format means HuML; content is never sniffed.
+// An omitted file format means TOML; content is never sniffed.
 func Parse(data []byte, format SerFormat) (*PresetFile, error) {
 	if len(data) == 0 {
 		return nil, Errors{noPos("empty document")}
@@ -38,16 +38,16 @@ func Parse(data []byte, format SerFormat) (*PresetFile, error) {
 	}
 	var raw map[string]any
 	switch format {
-	case "", FormatHuML:
-		if err := huml.Unmarshal(data, &raw); err != nil {
-			return nil, Errors{syntaxError("huml", err)}
-		}
-	case FormatTOML:
+	case "", FormatTOML:
 		if _, err := toml.Decode(string(data), &raw); err != nil {
 			return nil, Errors{syntaxError("toml", err)}
 		}
+	case FormatHuML:
+		if err := huml.Unmarshal(data, &raw); err != nil {
+			return nil, Errors{syntaxError("huml", err)}
+		}
 	default:
-		return nil, Errors{noPos("unsupported file format %q; use huml or toml", format)}
+		return nil, Errors{noPos("unsupported file format %q; use toml or huml", format)}
 	}
 	// Format dispatch precedes v1 shape diagnostics, including unknown keys.
 	if raw["format"] != Format {
@@ -210,12 +210,12 @@ func decodeRaw(dst reflect.Value, src any, path string) error {
 
 func ParseFromExt(data []byte, ext string) (*PresetFile, error) {
 	switch strings.ToLower(strings.TrimPrefix(ext, ".")) {
-	case "huml":
-		return Parse(data, FormatHuML)
 	case "toml":
 		return Parse(data, FormatTOML)
+	case "huml":
+		return Parse(data, FormatHuML)
 	default:
-		return nil, Errors{noPos("unsupported extension %q; use .huml or .toml", ext)}
+		return nil, Errors{noPos("unsupported extension %q; use .toml or .huml", ext)}
 	}
 }
 
@@ -245,14 +245,14 @@ func Marshal(pf *PresetFile, format SerFormat) ([]byte, error) {
 	}
 	var data []byte
 	switch format {
-	case "", FormatHuML:
-		data, err = huml.Marshal(m)
-	case FormatTOML:
+	case "", FormatTOML:
 		var b bytes.Buffer
 		err = toml.NewEncoder(&b).Encode(m)
 		data = b.Bytes()
+	case FormatHuML:
+		data, err = huml.Marshal(m)
 	default:
-		return nil, Errors{noPos("unsupported file format %q; use huml or toml", format)}
+		return nil, Errors{noPos("unsupported file format %q; use toml or huml", format)}
 	}
 	if err != nil {
 		return nil, err

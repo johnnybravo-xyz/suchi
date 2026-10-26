@@ -36,10 +36,13 @@ relation at all; it is not the same as clearing sender roles.
 `routes/FilingTreeSettings.svelte` owns the standalone Filing tree workspace:
 ready-made selection, the one-set-per-lane composer, reviewed category mappings,
 Blank confirmation, optional post-Apply Refile, and taxonomy import/export.
-`TaxonomyImport.svelte` owns file/paste reads, HuML/TOML choice,
-seed/remap/destination choices and preview freshness within that workspace;
-schema validation stays server-side. Late FileReader/network responses cannot
-replace new input, and conflicting actions are disabled in flight.
+`TaxonomyImport.svelte` owns file/paste reads, TOML/HuML choice,
+seed/remap/destination choices and preview freshness within that workspace.
+TOML is the initial import/export choice; HuML remains selectable. File
+extensions select uploaded content, while the required `format` header syntax
+selects pasted content without duplicating server parsing. Schema validation
+stays server-side. Late FileReader/network responses cannot replace new input,
+and conflicting actions are disabled in flight.
 
 Preset/composer Preview renders the complete target tree and document counts for
 each collision. The screen proposes replacement, free same-decade remap or skip,

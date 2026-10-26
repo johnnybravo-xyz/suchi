@@ -233,7 +233,7 @@ test('failed email change leaves unrelated account requests current', async () =
   }
 })
 
-test('taxonomy exports capture the filing system and preserve the requested text format', async () => {
+test('taxonomy exports default to TOML and capture the filing system', async () => {
   const originalFetch = globalThis.fetch
   resetSystems({ user_id: 1 })
   systems.code = 'S02'
@@ -243,7 +243,7 @@ test('taxonomy exports capture the filing system and preserve the requested text
     return new Response('system = "S02"\n', { headers: { 'content-type': 'text/plain' } })
   }
   try {
-    assert.equal(await exportTaxonomy('toml'), 'system = "S02"\n')
+    assert.equal(await exportTaxonomy(), 'system = "S02"\n')
   } finally {
     globalThis.fetch = originalFetch
     resetSystems()

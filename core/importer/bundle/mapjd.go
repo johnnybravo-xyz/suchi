@@ -57,7 +57,7 @@ type Rule struct {
 	Category int    `huml:"category" toml:"category" yaml:"category"`
 }
 
-// LoadMapping reads a HuML or TOML mapping and validates its shape.
+// LoadMapping reads a TOML or HuML mapping and validates its shape.
 // YAML remains an extension-selected compatibility parser. Empty path
 // returns nil; the caller treats that as
 // "no mapping" and falls through to the inbox for every doc.

@@ -52,7 +52,7 @@ flowchart LR
 | Durable state/work | `core/archivelock` owns process-level archive exclusion; `core/db/db.go`, `core/db/migrations/`, `core/blob/cas.go`, `core/jobs/jobs.go` |
 | Capture/processing | `core/api/documents.go: UploadDocument`, `core/ingest/`, `core/importer/bundle/`, `core/pipeline/postingest/` |
 | Filing/review/retrieval | `core/jd/`, `core/automations/`, `core/approvals/`, `core/searchquery/`, `core/intelligence/`; API projections in `core/api/` |
-| Portable taxonomy | `core/jd/presetfile` validates/normalizes HuML/TOML; `core/jd/importer` previews/applies; `core/taxonomy/exporter` exports |
+| Portable taxonomy | `core/jd/presetfile` validates/normalizes TOML/HuML; `core/jd/importer` previews/applies; `core/taxonomy/exporter` exports |
 | Filing projections | `core/render/index` writes tree-only indexes; `core/render/view` owns document paths |
 | Browser app | `ui/src/`; see [Frontend architecture](/spa-architecture) |
 

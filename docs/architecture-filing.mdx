@@ -72,9 +72,11 @@ them to a new state. Migration expires tasks from terminal or different states.
 
 ## Filing-tree changes
 
-`core/jd/presetfile` validates bounded offline HuML/TOML before expansion/generated
-System/49. `Marshal` reverses only validated generated rows and revalidates output;
-no YAML fallback, runtime catalog, passthrough fields or separate UI schema.
+`core/jd/presetfile` validates bounded offline TOML/HuML before
+expansion/generated System/49. Omitted formats default to TOML; HuML remains an
+explicit first-class format. `Marshal` reverses only validated generated rows
+and revalidates output; no YAML fallback, runtime catalog, passthrough fields or
+separate UI schema.
 `core/jd/sets.go` owns the bounded built-in set catalog and deterministic composed
 trees. `core/jd/preset_change.go` resolves ready-made/composed targets, semantic
 replacement defaults, document counts and the selected system's current

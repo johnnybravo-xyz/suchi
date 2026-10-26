@@ -130,7 +130,7 @@ func TestTaxonomyApplyRequiresCurrentPreview(t *testing.T) {
 		t.Fatal("stale apply changed the database")
 	}
 	input = TaxonomyImportReq{Content: replacementTaxonomy}
-	if response := taxonomyRequest(t, s, input); response.Code != 400 {
-		t.Fatalf("omitted file format guessed TOML: %s", response.Body.String())
+	if response := taxonomyRequest(t, s, input); response.Code != http.StatusOK {
+		t.Fatalf("omitted file format did not default to TOML: %s", response.Body.String())
 	}
 }

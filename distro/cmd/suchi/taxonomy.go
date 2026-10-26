@@ -55,7 +55,7 @@ func printTaxonomyUsage(w io.Writer) {
 	fmt.Fprintln(w, `Usage: suchi taxonomy <command> [flags]
 
 Commands:
-  validate <file>  validate one HuML or TOML taxonomy offline
+  validate <file>  validate one TOML or HuML taxonomy offline
   import <file>    preview or apply a taxonomy
   export           write the selected filing tree
   merge            preview or apply a taxonomy row merge`)
@@ -104,7 +104,7 @@ func runTaxonomyImport(args []string) int {
 	remaps := taxonomyRemaps{}
 	var (
 		apply        = fs.Bool("apply", false, "actually write. Default is dry-run.")
-		format       = fs.String("format", "", "override auto-detect: huml|toml")
+		format       = fs.String("format", "", "override auto-detect: toml|huml")
 		systemCode   = fs.String("system", "", "target system code (default: original archive)")
 		existingCode = fs.String("existing-system-code", "", "preserve the original archive under this code on first SYS import")
 	)
@@ -208,13 +208,13 @@ func runTaxonomyImport(args []string) int {
 
 func runTaxonomyExport(args []string) int {
 	fs := flag.NewFlagSet("suchi taxonomy export", flag.ContinueOnError)
-	format := fs.String("format", "huml", "output format: huml|toml")
+	format := fs.String("format", "", "output format: toml|huml (default: toml)")
 	systemCode := fs.String("system", "", "system code (default: original archive)")
 	if err := fs.Parse(args); err != nil {
 		return flagParseExit(err)
 	}
 	if fs.NArg() != 0 {
-		fmt.Fprintln(os.Stderr, "usage: suchi taxonomy export [--format huml|toml]")
+		fmt.Fprintln(os.Stderr, "usage: suchi taxonomy export [--format toml|huml]")
 		return 2
 	}
 	outputFormat, err := preferredTaxonomyFormat(*format)
@@ -262,12 +262,12 @@ func runTaxonomyExport(args []string) int {
 
 func preferredTaxonomyFormat(raw string) (presetfile.SerFormat, error) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "toml":
+		return presetfile.FormatTOML, nil
 	case "huml":
 		return presetfile.FormatHuML, nil
-	case "toml":
-		return presetfile.FormatTOML, nil
 	default:
-		return "", fmt.Errorf("--format must be huml or toml, got %q", raw)
+		return "", fmt.Errorf("--format must be toml or huml, got %q", raw)
 	}
 }
 
@@ -361,7 +361,7 @@ func (r *taxonomyRemaps) Set(value string) error {
 }
 
 func parseTaxonomyImportArgs(fs *flag.FlagSet, args []string) (string, error) {
-	usage := "usage: suchi taxonomy import <file> [--apply] [--format huml|toml] [--remap incoming:target]"
+	usage := "usage: suchi taxonomy import <file> [--apply] [--format toml|huml] [--remap incoming:target]"
 	path := ""
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		path, args = args[0], args[1:]

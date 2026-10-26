@@ -34,7 +34,7 @@
   let importOpen = $state(false)
   let importBusy = $state(false)
   let exportBusy = $state(false)
-  let exportFormat = $state('huml')
+  let exportFormat = $state('toml')
   let reviewSection = $state()
   let reviewRevealed = $state(false)
 
@@ -260,7 +260,7 @@
           <h3 id="export-heading">{translate("filingTreeSettings.exportThisFilingTree")}</h3>
           <p>{translate("filingTreeSettings.saveTheTreeStructure")}</p>
           <label class="field">{translate("filingTreeSettings.fileFormat")}
-            <select class="input" bind:value={exportFormat} disabled={exportBusy || importBusy}><option value="huml">{translate("filingTreeSettings.huml")}</option><option value="toml">TOML</option></select>
+            <select class="input" bind:value={exportFormat} disabled={exportBusy || importBusy}><option value="toml">TOML</option><option value="huml">{translate("filingTreeSettings.huml")}</option></select>
           </label>
           <div class="toolbar">
             <button class="btn" disabled={exportBusy || importBusy} onclick={doExport}><Icon name="download" size={14} />{translate("filingTreeSettings.exportTree")}</button>
