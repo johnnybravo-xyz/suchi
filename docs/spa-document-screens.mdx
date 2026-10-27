@@ -47,8 +47,14 @@ mobile. Server authorization still governs blobs.
 
 Detail reloads only when its document ID changes or an explicit action requests
 refresh. Arrival of sidebar categories must not restart reads or discard edits.
-Metadata/language saves check that same document generation before updating local
-state, so an earlier save cannot change the next document's sensitivity or Reveal.
+Metadata/language saves capture the document ID before the request. The save
+and its eight-second Undo keep writing that captured document; local state
+follows only while detail shows that same document in the same filing scope,
+including after leaving and returning or a reload. An earlier save or Undo
+therefore cannot change the next document's sensitivity, filing category, or
+Reveal state. A failed filing-label refresh after a successful write still
+reports the save and offers Undo. Access grant, change and revoke results apply
+under the same rule.
 Human-owned titles show a **Title pinned** line under the heading, with a pin
 icon (the lock is reserved for passwords), the protection explanation on hover,
 and an **Unpin** button. Rename completion updates local ownership to `human`;

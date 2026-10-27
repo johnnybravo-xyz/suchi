@@ -812,81 +812,106 @@
     const [principalKind, rawID] = accessDraft.principal.split(':')
     const principalID = Number(rawID)
     if (!principalKind || !principalID) return
+    const documentID = Number(id)
+    const scope = captureScope()
     try {
-      await putGrant('document', id, {
+      await putGrant('document', documentID, {
         principal_kind: principalKind,
         principal_id: principalID,
         perm_bits: Number(accessDraft.perm_bits),
       })
+      if (!showsDocument(documentID, scope)) return
       accessDraft = { principal: '', perm_bits: '1' }
       await loadAccess()
       notify?.(translate("documentDetail.accessGranted"))
-    } catch (ex) { notify?.(ex.message || translate("documentDetail.couldNotGrantAccess")) }
+    } catch (ex) { if (showsDocument(documentID, scope)) notify?.(ex.message || translate("documentDetail.couldNotGrantAccess")) }
   }
 
   async function changeAccess(grant, bits) {
+    const documentID = Number(id)
+    const scope = captureScope()
     try {
-      await putGrant('document', id, {
+      await putGrant('document', documentID, {
         principal_kind: grant.principal_kind,
         principal_id: grant.principal_id,
         perm_bits: Number(bits),
       })
+      if (!showsDocument(documentID, scope)) return
       grant.perm_bits = Number(bits)
       notify?.(translate("documentDetail.accessUpdated"))
-    } catch (ex) { notify?.(ex.message || translate("documentDetail.couldNotUpdateAccess")) }
+    } catch (ex) { if (showsDocument(documentID, scope)) notify?.(ex.message || translate("documentDetail.couldNotUpdateAccess")) }
   }
 
   async function revokeAccess(grant) {
+    const documentID = Number(id)
+    const scope = captureScope()
     try {
-      await deleteGrant('document', id, grant.principal_kind, grant.principal_id)
+      await deleteGrant('document', documentID, grant.principal_kind, grant.principal_id)
+      if (!showsDocument(documentID, scope) || !access) return
       access = { ...access, results: access.results.filter(g => g.id !== grant.id) }
       notify?.(translate("documentDetail.accessRevoked"))
-    } catch (ex) { notify?.(ex.message || translate("documentDetail.couldNotRevokeAccess")) }
+    } catch (ex) { if (showsDocument(documentID, scope)) notify?.(ex.message || translate("documentDetail.couldNotRevokeAccess")) }
   }
 
-  async function refreshReviewTags(version, documentID) {
+  async function refreshReviewTags(version, documentID, scope = captureScope()) {
     const refresh = ++tagRefreshVersion
     if (!doc?.tags?.includes('needs-review')) return
     try {
       const latest = await getDocument(documentID)
-      if (!disposed && version === loadVersion && refresh === tagRefreshVersion) {
+      if (!disposed && version === loadVersion && refresh === tagRefreshVersion && scopeCurrent(scope)) {
         doc = { ...doc, tags: latest.tags || [] }
       }
     } catch (ex) {
-      if (!disposed && version === loadVersion && refresh === tagRefreshVersion) {
+      if (!disposed && version === loadVersion && refresh === tagRefreshVersion && scopeCurrent(scope)) {
         notify?.(translate("documentDetail.savedButTagsCouldNotBeRefreshedReload"))
       }
     }
   }
 
+  // Metadata saves and their Undo target the document they started on. Local
+  // state follows only while detail still shows that document in that scope,
+  // whichever load generation shows it (A -> B -> A, or a same-document reload).
+  function showsDocument(documentID, scope) {
+    return !disposed && scopeCurrent(scope) && doc?.id === documentID
+  }
+
   // `undoable` offers Undo that restores the patched fields' previous values.
   async function save(patch, label, { undoable = false } = {}) {
-    const version = loadVersion
+    const documentID = Number(id)
+    const scope = captureScope()
     const previous = undoable ? Object.fromEntries(Object.keys(patch).map(key => [key, doc[key]])) : null
     try {
-      await patchDocument(id, patch)
-      if (disposed || version !== loadVersion) return
-      doc = { ...doc, ...patch }
-      if ('title' in patch && !('title_owner' in patch)) doc.title_owner = 'human'
-      if ('languages' in patch) doc.languages_locked = patch.languages !== ''
-      if ('jd_category_id' in patch) await refreshFiling(version)
-      await refreshReviewTags(version, id)
-      if (disposed || version !== loadVersion) return
-      notify?.(label || translate("documentDetail.saved"), previous ? { undo: async () => {
-        await patchDocument(id, previous)
-        if (disposed || version !== loadVersion) return
-        doc = { ...doc, ...previous }
-        if ('jd_category_id' in previous) await refreshFiling(version)
-      } } : undefined)
+      await patchDocument(documentID, patch)
     } catch (ex) {
-      if (!disposed && version === loadVersion) notify?.(ex.message || translate("documentDetail.couldNotSave"))
+      if (showsDocument(documentID, scope)) notify?.(ex.message || translate("documentDetail.couldNotSave"))
+      return
     }
+    if (!showsDocument(documentID, scope)) return
+    doc = { ...doc, ...patch }
+    if ('title' in patch && !('title_owner' in patch)) doc.title_owner = 'human'
+    if ('languages' in patch) doc.languages_locked = patch.languages !== ''
+    if ('jd_category_id' in patch) await refreshFiling(documentID, scope)
+    await refreshReviewTags(loadVersion, documentID, scope)
+    if (!showsDocument(documentID, scope)) return
+    notify?.(label || translate("documentDetail.saved"), previous ? { undo: async () => {
+      await patchDocument(documentID, previous)
+      if (!showsDocument(documentID, scope)) return
+      doc = { ...doc, ...previous }
+      if ('jd_category_id' in previous) await refreshFiling(documentID, scope)
+    } } : undefined)
   }
 
   // The filing chip and labels are server projections of jd_category_id.
-  async function refreshFiling(version) {
-    const fresh = await getDocument(id)
-    if (disposed || version !== loadVersion) return
+  // A failed refresh is non-fatal: the write already succeeded, and the
+  // selector already shows the saved category; labels catch up on next load.
+  async function refreshFiling(documentID, scope) {
+    let fresh
+    try {
+      fresh = await getDocument(documentID)
+    } catch {
+      return
+    }
+    if (!showsDocument(documentID, scope)) return
     for (const key of ['jd_category_id', 'jd_category_code', 'jd_category_name', 'jd_area_name', 'jd_address']) doc[key] = fresh[key]
   }
 
@@ -994,7 +1019,7 @@
       doc = { ...doc, tags: method === 'add_tag'
         ? [...new Set([...(doc.tags || []), tag.slug])].sort()
         : (doc.tags || []).filter(slug => slug !== tag.slug) }
-      await refreshReviewTags(version, documentID)
+      await refreshReviewTags(version, documentID, scope)
       if (disposed || version !== loadVersion || !scopeCurrent(scope)) return false
       notify?.(method === 'add_tag' ? translate("documentDetail.tagAdded") : translate("documentDetail.tagRemoved"))
       return true

@@ -3860,6 +3860,115 @@ test('keeps a new document behind Reveal when an earlier sensitivity save finish
   await expect(page.locator('.preview iframe')).toHaveCount(0)
 })
 
+test('undoes a detail refile on its original document after same-system navigation', async ({ page }) => {
+  await mockAPI(page, {
+    filingTreeChosen: true,
+    systems: {
+      introduced: true,
+      default_system_code: 'S01',
+      results: [{ code: 'S01', name: 'Records', is_default: true }],
+    },
+    jdCategories: [
+      { id: 101, code: 11, name: 'Receipts', area_code: 10, area_name: 'Money' },
+      { id: 202, code: 12, name: 'Statements', area_code: 10, area_name: 'Money' },
+    ],
+    documentDetails: {
+      42: { document: { title: 'Original receipt', jd_category_id: 101 } },
+      43: { document: { title: 'Current statement', jd_category_id: 202 } },
+    },
+  })
+  const writes = []
+  await page.route('**/api/documents/*', route => {
+    if (route.request().method() !== 'PATCH') return route.fallback()
+    const url = new URL(route.request().url())
+    writes.push({
+      documentID: Number(url.pathname.split('/').at(-1)),
+      system: url.searchParams.get('system'),
+      body: route.request().postDataJSON(),
+    })
+    return route.fulfill({ status: 204 })
+  })
+
+  await page.goto('/#/doc/42?system=S01')
+  await page.locator('select:has(option[value="202"])').selectOption('202')
+  await expect(page.locator('.notice')).toContainText('Refiled')
+  await page.evaluate(() => { location.hash = '#/doc/43?system=S01' })
+  await expect(page.getByRole('heading', { name: 'Current statement', exact: true })).toBeVisible()
+
+  await page.locator('.notice').getByRole('button', { name: /Undo/ }).click()
+  await expect.poll(() => writes).toEqual([
+    { documentID: 42, system: 'S01', body: { jd_category_id: 202 } },
+    { documentID: 42, system: 'S01', body: { jd_category_id: 101 } },
+  ])
+  await expect(page.getByRole('heading', { name: 'Current statement', exact: true })).toBeVisible()
+})
+
+test('shows the original category after undoing a refile on a revisited document', async ({ page }) => {
+  const documentDetails = {
+    42: { document: { title: 'Original receipt', jd_category_id: 101 } },
+    43: { document: { title: 'Current statement', jd_category_id: 202 } },
+  }
+  await mockAPI(page, {
+    filingTreeChosen: true,
+    jdCategories: [
+      { id: 101, code: 11, name: 'Receipts', area_code: 10, area_name: 'Money' },
+      { id: 202, code: 12, name: 'Statements', area_code: 10, area_name: 'Money' },
+    ],
+    documentDetails,
+  })
+  await page.route('**/api/documents/42*', route => {
+    if (route.request().method() !== 'PATCH') return route.fallback()
+    Object.assign(documentDetails[42].document, route.request().postDataJSON())
+    return route.fulfill({ status: 204 })
+  })
+
+  await page.goto('/#/doc/42')
+  const filing = page.locator('select:has(option[value="202"])')
+  await filing.selectOption('202')
+  await expect(page.locator('.notice')).toContainText('Refiled')
+  await page.evaluate(() => { location.hash = '#/doc/43' })
+  await expect(page.getByRole('heading', { name: 'Current statement', exact: true })).toBeVisible()
+  await page.evaluate(() => { location.hash = '#/doc/42' })
+  await expect(page.getByRole('heading', { name: 'Original receipt', exact: true })).toBeVisible()
+  await expect(filing).toHaveValue('202')
+
+  await page.locator('.notice').getByRole('button', { name: /Undo/ }).click()
+  await expect(page.locator('.notice')).toContainText('Undone')
+  await expect(filing).toHaveValue('101')
+})
+
+test('reports a refile as saved and undoable when the filing refresh fails', async ({ page }) => {
+  await mockAPI(page, {
+    filingTreeChosen: true,
+    jdCategories: [
+      { id: 101, code: 11, name: 'Receipts', area_code: 10, area_name: 'Money' },
+      { id: 202, code: 12, name: 'Statements', area_code: 10, area_name: 'Money' },
+    ],
+    documentDetails: { 42: { document: { title: 'Original receipt', jd_category_id: 101 } } },
+  })
+  const writes = []
+  await page.route('**/api/documents/42*', async route => {
+    const method = route.request().method()
+    if (method === 'GET' && writes.length) {
+      return route.fulfill({ status: 500, json: { error: 'refresh unavailable' } })
+    }
+    if (method !== 'PATCH') return route.fallback()
+    writes.push(route.request().postDataJSON())
+    return route.fulfill({ status: 204 })
+  })
+
+  await page.goto('/#/doc/42')
+  const filing = page.locator('select:has(option[value="202"])')
+  await filing.selectOption('202')
+  await expect(page.locator('.notice')).toContainText('Refiled')
+  await expect(filing).toHaveValue('202')
+
+  await page.locator('.notice').getByRole('button', { name: /Undo/ }).click()
+  await expect(page.locator('.notice')).toContainText('Undone')
+  expect(writes).toEqual([{ jd_category_id: 202 }, { jd_category_id: 101 }])
+  await expect(filing).toHaveValue('101')
+})
+
 for (const action of [
   { name: 'trash', method: 'DELETE', path: '/api/documents/42', button: 'Trash', confirm: 'Move to trash' },
   { name: 'restore', method: 'POST', path: '/api/documents/42/restore', button: 'Restore', trashed: true },

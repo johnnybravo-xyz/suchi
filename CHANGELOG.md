@@ -32,6 +32,12 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Undoing a refile from Document Detail now restores the document that was
+  originally changed, even after navigating away during the Undo window, and
+  shows the restored category when that document is open again. A failed label
+  refresh no longer reports a successful refile as failed, and late
+  access-dialog results no longer land on the next document.
+
 - The Dashboard's **Recently added** list sorts and dates documents by when
   Suchi added them. An emailed attachment or imported file with an older
   upstream date no longer sinks below newer uploads. Document lists accept
