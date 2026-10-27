@@ -178,15 +178,20 @@ func runMatching(ctx context.Context, d *db.DB, actions *Registry, log *slog.Log
 			}
 			for _, a := range atm.Actions {
 				if a.Kind == "assign_title" {
-					var humanOwned bool
+					var titleOwner string
 					if err := tx.QueryRowContext(ctx,
-						`SELECT title_owner='human' FROM documents WHERE id=?`,
+						`SELECT title_owner FROM documents WHERE id=?`,
 						evCtx.DocID,
-					).Scan(&humanOwned); err != nil {
+					).Scan(&titleOwner); err != nil {
 						return err
 					}
-					if humanOwned {
+					if titleOwner == "human" {
 						alog.Info("automations.assign_title.skipped_human")
+						continue
+					}
+					template, _ := a.Params["template"].(string)
+					if titleOwner == "rule" && strings.Contains(template, "{{title}}") {
+						alog.Info("automations.assign_title.skipped_self_reference")
 						continue
 					}
 				}
@@ -347,9 +352,9 @@ func upsertCustomField(ctx context.Context, tx *sql.Tx, docID, fieldID int64, va
 	return handler.Write(ctx, tx, docID, fieldID, typed)
 }
 
-// expandTitle is a tiny template resolver for common automation cases:
-// {{title}}, {{correspondent}}, {{tags}}, and {{date}}. Missing values render
-// empty. Unknown placeholders remain visible so configuration mistakes surface.
+// expandTitle resolves {{title}}, {{correspondent}}, {{tags}}, and {{date}} in
+// one pass. Substituted values are never rescanned, and unknown placeholders
+// remain visible so configuration mistakes surface.
 func expandTitle(ctx context.Context, tx *sql.Tx, docID int64, tpl string) (string, error) {
 	var (
 		title, corrName, tags sql.NullString
@@ -373,18 +378,12 @@ func expandTitle(ctx context.Context, tx *sql.Tx, docID int64, tpl string) (stri
 		WHERE d.id = ?`, docID).Scan(&title, &corrName, &tags, &createdAt); err != nil {
 		return "", fmt.Errorf("assign_title: load document: %w", err)
 	}
-
-	repl := map[string]string{
-		"{{title}}":         nullStr(title),
-		"{{correspondent}}": nullStr(corrName),
-		"{{tags}}":          nullStr(tags),
-		"{{date}}":          time.Unix(createdAt, 0).UTC().Format("2006-01-02"),
-	}
-	out := tpl
-	for k, v := range repl {
-		out = strings.ReplaceAll(out, k, v)
-	}
-	return out, nil
+	return strings.NewReplacer(
+		"{{title}}", nullStr(title),
+		"{{correspondent}}", nullStr(corrName),
+		"{{tags}}", nullStr(tags),
+		"{{date}}", time.Unix(createdAt, 0).UTC().Format("2006-01-02"),
+	).Replace(tpl), nil
 }
 
 func nullStr(s sql.NullString) string {

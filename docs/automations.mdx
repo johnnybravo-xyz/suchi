@@ -59,16 +59,27 @@ an already-converged action does not queue another rendered-folder move.
 Trash timestamp. Other metadata actions still require a live document; discarding
 does not grant a rule permission to edit Trash or cross a filing-system boundary.
 
-`assign_title` claims rule ownership. It may replace an automatic title and
-refresh a title previously assigned by a rule, including during Refile, but it
-skips a title renamed or approved by a person. On the document screen, **Let
-Suchi rename this** releases that protection without immediately changing the
-text.
+`assign_title` claims rule ownership. It may replace an automatic title, and a
+template without `{{title}}` may refresh a title previously assigned by a rule,
+including during Refile. Every rule skips a title renamed or approved by a
+person.
+
+A template containing `{{title}}` applies only while the title is automatic.
+After the first application, rule ownership prevents retries, Refile, or later
+updates from feeding the generated title back into itself. Rules still run in
+order: a fixed rule can replace a title set by an earlier self-referential rule,
+while a fixed rule that runs first prevents a later self-referential rule from
+consuming its result.
+
+On the document screen, **Unpin** returns the title to automatic naming without
+changing its text. That makes the retained text eligible for model naming or
+one application of a self-referential rule.
 
 Title templates support `{{title}}`, `{{correspondent}}`, `{{tags}}`, and
-`{{date}}`. Unknown placeholders remain visible so a typo does not silently
-erase text. The visual builder resolves names to IDs; direct JSON action
-parameters continue to use IDs.
+`{{date}}`. Placeholders are replaced in a single pass, so placeholder-like text
+inside a substituted value stays literal. Unknown placeholders remain visible
+so a typo does not silently erase text. The visual builder resolves names to
+IDs; direct JSON action parameters continue to use IDs.
 
 ## Examples
 

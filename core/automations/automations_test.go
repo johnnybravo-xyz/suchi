@@ -130,6 +130,210 @@ func TestAssignTitlePreservesHumanTitlesAndRefreshesRuleTitles(t *testing.T) {
 	}
 }
 
+func TestSelfReferentialTitleRulesConvergeAcrossReplay(t *testing.T) {
+	ctx := t.Context()
+	d, _ := setup(t, ctx)
+	seedUser(t, ctx, d)
+	docID := seedDoc(t, ctx, d, "Receipt", "content")
+	registry := testActions(t)
+	store := automations.New(d, registry)
+	first, err := store.Create(ctx, 1, automations.Automation{
+		Name: "prefix title", Enabled: true,
+		Triggers: []automations.Trigger{{Type: automations.TriggerDocumentAdded}},
+		Actions: []automations.Action{{
+			Kind: "assign_title", Params: map[string]any{"template": "Acme — {{title}}"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create(ctx, 1, automations.Automation{
+		Name: "second prefix", Enabled: true,
+		Triggers: []automations.Trigger{{Type: automations.TriggerDocumentAdded}},
+		Actions: []automations.Action{{
+			Kind: "assign_title", Params: map[string]any{"template": "Filed — {{title}}"},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	for range 3 {
+		if err := automations.ApplyOnDocumentAdded(ctx, d, registry, log, docID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var title, owner string
+	if err := d.Read.QueryRow(`SELECT title,title_owner FROM documents WHERE id=?`, docID).Scan(&title, &owner); err != nil {
+		t.Fatal(err)
+	}
+	if title != "Acme — Receipt" || owner != "rule" {
+		t.Fatalf("replayed title=%q owner=%q, want one prefix/rule", title, owner)
+	}
+	var renderJobs int
+	if err := d.Read.QueryRow(`SELECT count(*) FROM jobs WHERE kind='render' AND doc_id=?`, docID).Scan(&renderJobs); err != nil {
+		t.Fatal(err)
+	}
+	if renderJobs != 1 {
+		t.Fatalf("render jobs after replay=%d, want one effective title change", renderJobs)
+	}
+	if !strings.Contains(logs.String(), "automations.assign_title.skipped_self_reference") {
+		t.Fatalf("missing self-reference skip log: %s", logs.String())
+	}
+
+	actions := []automations.Action{{
+		Kind: "assign_title", Params: map[string]any{"template": "Refreshed title"},
+	}}
+	if _, err := store.Update(ctx, 1, first.ID, automations.AutomationPatch{Actions: &actions}); err != nil {
+		t.Fatal(err)
+	}
+	if err := automations.ApplyOnDocumentAdded(ctx, d, registry, log, docID); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Read.QueryRow(`SELECT title FROM documents WHERE id=?`, docID).Scan(&title); err != nil {
+		t.Fatal(err)
+	}
+	if title != "Refreshed title" {
+		t.Fatalf("non-self-referential refresh title=%q", title)
+	}
+}
+
+func createTitleRule(t *testing.T, ctx context.Context, store *automations.Store, trigger automations.TriggerType, template string) {
+	t.Helper()
+	if _, err := store.Create(ctx, 1, automations.Automation{
+		Name: template, Enabled: true,
+		Triggers: []automations.Trigger{{Type: trigger}},
+		Actions: []automations.Action{{
+			Kind: "assign_title", Params: map[string]any{"template": template},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertTitle(t *testing.T, d *db.DB, docID int64, wantTitle, wantOwner string, wantRenderJobs int) {
+	t.Helper()
+	var title, owner string
+	var renderJobs int
+	if err := d.Read.QueryRow(`
+		SELECT title, title_owner, (SELECT count(*) FROM jobs WHERE kind='render' AND doc_id=documents.id)
+		FROM documents WHERE id=?`, docID).Scan(&title, &owner, &renderJobs); err != nil {
+		t.Fatal(err)
+	}
+	if title != wantTitle || owner != wantOwner || renderJobs != wantRenderJobs {
+		t.Fatalf("title=%q owner=%q render jobs=%d, want %q/%s/%d",
+			title, owner, renderJobs, wantTitle, wantOwner, wantRenderJobs)
+	}
+}
+
+func TestTitleTemplateNeverRescansSubstitutedValues(t *testing.T) {
+	ctx := t.Context()
+	d, log := setup(t, ctx)
+	seedUser(t, ctx, d)
+	corrID := seedCorrespondent(t, ctx, d, "Evil {{title}} {{correspondent}} {{date}}")
+	docID := seedDocWithCorr(t, ctx, d, "Receipt", "content", corrID)
+	registry := testActions(t)
+	createTitleRule(t, ctx, automations.New(d, registry), automations.TriggerDocumentAdded, "{{correspondent}} — {{title}}")
+	for i := range 50 {
+		if _, err := d.Write.Exec(`UPDATE documents SET title='Receipt', title_owner='auto' WHERE id=?`, docID); err != nil {
+			t.Fatal(err)
+		}
+		if err := automations.ApplyOnDocumentAdded(ctx, d, registry, log, docID); err != nil {
+			t.Fatal(err)
+		}
+		var title string
+		if err := d.Read.QueryRow(`SELECT title FROM documents WHERE id=?`, docID).Scan(&title); err != nil {
+			t.Fatal(err)
+		}
+		if want := "Evil {{title}} {{correspondent}} {{date}} — Receipt"; title != want {
+			t.Fatalf("run %d title=%q, want %q", i, title, want)
+		}
+	}
+}
+
+func TestSelfReferentialTitleRuleSkipsHumanTitle(t *testing.T) {
+	ctx := t.Context()
+	d, log := setup(t, ctx)
+	seedUser(t, ctx, d)
+	docID := seedDoc(t, ctx, d, "Receipt", "content")
+	registry := testActions(t)
+	createTitleRule(t, ctx, automations.New(d, registry), automations.TriggerDocumentUpdated, "Acme — {{title}}")
+	if _, err := d.Write.Exec(`UPDATE documents SET title='My receipt', title_owner='human' WHERE id=?`, docID); err != nil {
+		t.Fatal(err)
+	}
+	if err := automations.ApplyOnDocumentUpdated(ctx, d, registry, log, docID); err != nil {
+		t.Fatal(err)
+	}
+	assertTitle(t, d, docID, "My receipt", "human", 0)
+}
+
+func TestSelfReferentialTitleConvergesAcrossDocumentUpdatedReplay(t *testing.T) {
+	ctx := t.Context()
+	d, log := setup(t, ctx)
+	seedUser(t, ctx, d)
+	docID := seedDoc(t, ctx, d, "Receipt", "content")
+	registry := testActions(t)
+	createTitleRule(t, ctx, automations.New(d, registry), automations.TriggerDocumentUpdated, "Acme — {{title}}")
+	for range 3 {
+		if err := automations.ApplyOnDocumentUpdated(ctx, d, registry, log, docID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertTitle(t, d, docID, "Acme — Receipt", "rule", 1)
+}
+
+func TestSelfReferentialTitleRulesUseOwnershipForConvergence(t *testing.T) {
+	for _, test := range []struct {
+		name, title, template, want string
+	}{
+		{
+			name:     "unpinned title",
+			title:    "Acme — Receipt 2026",
+			template: "Acme — {{title}}",
+			want:     "Acme — Acme — Receipt 2026",
+		},
+		{
+			name:     "repeated placeholder",
+			title:    "Receipt",
+			template: "{{title}} / {{title}}",
+			want:     "Receipt / Receipt",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := t.Context()
+			d, log := setup(t, ctx)
+			seedUser(t, ctx, d)
+			docID := seedDoc(t, ctx, d, test.title, "content")
+			registry := testActions(t)
+			createTitleRule(t, ctx, automations.New(d, registry), automations.TriggerDocumentUpdated, test.template)
+
+			for range 2 {
+				if err := automations.ApplyOnDocumentUpdated(ctx, d, registry, log, docID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			assertTitle(t, d, docID, test.want, "rule", 1)
+		})
+	}
+}
+
+func TestFixedTitleRuleOrderedFirstBlocksLaterSelfReferentialRule(t *testing.T) {
+	ctx := t.Context()
+	d, log := setup(t, ctx)
+	seedUser(t, ctx, d)
+	docID := seedDoc(t, ctx, d, "Receipt", "content")
+	registry := testActions(t)
+	store := automations.New(d, registry)
+	createTitleRule(t, ctx, store, automations.TriggerDocumentAdded, "Statement")
+	createTitleRule(t, ctx, store, automations.TriggerDocumentAdded, "Acme — {{title}}")
+	for range 3 {
+		if err := automations.ApplyOnDocumentAdded(ctx, d, registry, log, docID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertTitle(t, d, docID, "Statement", "rule", 1)
+}
+
 func TestAssignTagsTakesOwnershipOfClassifierReview(t *testing.T) {
 	ctx := context.Background()
 	d, log := setup(t, ctx)

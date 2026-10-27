@@ -66,6 +66,13 @@ Notable user-visible changes to Suchi are recorded here.
   count as the same path, a trashed document keeps its path until it is
   purged, and purging never removes another document's link.
 
+- Title rules containing `{{title}}` apply once to an automatic title, then use
+  title ownership to prevent retry, Refile, rescan, or later edits from stacking
+  the generated text. **Unpin** makes the retained title eligible again.
+  Placeholders expand in one pass, so placeholder-like text in a substituted
+  value stays literal. Fixed and metadata-only rules can still refresh
+  rule-owned titles.
+
 - The Dashboard's **Recently added** list sorts and dates documents by when
   Suchi added them. An emailed attachment or imported file with an older
   upstream date no longer sinks below newer uploads. Document lists accept

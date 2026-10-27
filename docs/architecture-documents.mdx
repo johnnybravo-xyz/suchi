@@ -108,14 +108,18 @@ data; `label` stays the uploader, and the row renders as **Suchi Companion ·
 name**. Other API tokens leave `client` empty and render as API uploads.
 
 `documents.title_owner` is the narrow precedence state for naming: `auto`
-allows model or rule naming, `rule` allows a later rule refresh, and `human`
-blocks both. API renames and approved title suggestions claim human ownership;
-the explicit release operation returns to `auto` without changing text.
-Filesystem sidecars preserve an explicit owner and otherwise treat supplied
-titles as human; Paperless import is human, new uploads and split children are
-automatic, and replacement versions inherit both title and owner. Email subject
-parsing cannot replace a non-automatic title. Title and owner changes share
-`title_revision`, so in-flight suggestions lose to a later decision.
+allows model or rule naming, `rule` allows a later non-self-referential rule
+refresh, and `human` blocks both. A rule template containing `{{title}}` may
+consume an automatic title once; rule ownership then prevents replay from
+feeding the result back into itself. Title placeholders expand in one pass, so
+substituted values remain literal. API renames and approved title suggestions
+pin the title; **Unpin** returns it to `auto` without changing the text and
+makes it eligible for naming again. Filesystem sidecars
+preserve an explicit owner and otherwise treat supplied titles as human;
+Paperless import is human, new uploads and split children are automatic, and
+replacement versions inherit both title and owner. Email subject parsing cannot
+replace a non-automatic title. Title and owner changes share `title_revision`,
+so in-flight suggestions lose to a later decision.
 
 ## Versions, references, and discovery currentness
 
