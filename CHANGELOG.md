@@ -60,6 +60,12 @@ Notable user-visible changes to Suchi are recorded here.
   month and day swapped.
   Ambiguous locale dates such as `02/01/2006` remain accepted either way.
 
+- Rendered folder paths now belong to the document that holds them, not to
+  whoever shares the same bytes. A colliding custom layout is refused without
+  blocking the owner. Paths that differ only by letter case or accent encoding
+  count as the same path, a trashed document keeps its path until it is
+  purged, and purging never removes another document's link.
+
 - The Dashboard's **Recently added** list sorts and dates documents by when
   Suchi added them. An emailed attachment or imported file with an older
   upstream date no longer sinks below newer uploads. Document lists accept

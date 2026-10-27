@@ -252,6 +252,176 @@ func TestLegacyUnknownArchiveOwnershipIsNotGuessed(t *testing.T) {
 	}
 }
 
+// seedSharedPathRival gives document 147 the explicit "Shared" layout and adds
+// document 148 with the same original bytes and the given layout.
+func seedSharedPathRival(t *testing.T, r *Renderer, rivalPath string) string {
+	t.Helper()
+	var original string
+	if err := r.db.Read.QueryRow(`SELECT original_blob FROM documents WHERE id=147`).Scan(&original); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.db.ExecWrite(t.Context(), `
+		INSERT INTO users(id,email,display_name,role,created_at,updated_at)
+		VALUES(2,'second-owner@test','Second owner','member',0,0);
+		INSERT INTO storage_paths(system_id,id,name,slug,path,created_at,updated_at)
+		VALUES(1,1,'Shared path','shared-path','Shared',0,0),
+		      (1,2,'Moved path','moved-path','Moved/{{ doc_pk }}',0,0),
+		      (1,3,'Rival path','rival-path',?1,0,0);
+		UPDATE documents SET storage_path_id=1 WHERE id=147;
+		INSERT INTO documents(system_id,id,owner_id,original_blob,original_size,title,mime_type,jd_category_id,storage_path_id,created_at,updated_at)
+		VALUES(1,148,2,?2,18,'Other receipt','application/pdf',1,3,0,0);
+	`, rivalPath, original); err != nil {
+		t.Fatal(err)
+	}
+	return original
+}
+
+func assertRefusedWithoutClaim(t *testing.T, r *Renderer, docID int64) {
+	t.Helper()
+	if _, err := r.Render(t.Context(), docID); err == nil || !strings.Contains(err.Error(), "claimed by another document") {
+		t.Fatalf("document %d silently shared rendered ownership: %v", docID, err)
+	}
+	var pending int
+	if err := r.db.Read.QueryRow(`SELECT count(*) FROM render_moves WHERE document_id=? AND state='pending'`, docID).Scan(&pending); err != nil {
+		t.Fatal(err)
+	}
+	if pending != 0 {
+		t.Fatalf("refused document %d left %d pending claims", docID, pending)
+	}
+}
+
+func TestSharedBlobDocumentsCannotClaimTheSameRenderedPath(t *testing.T) {
+	r, d, _ := recoveryRenderer(t)
+	original := seedSharedPathRival(t, r, "Shared")
+	shared, err := r.Render(t.Context(), 147)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRefusedWithoutClaim(t, r, 148)
+	assertProjection(t, r, shared)
+
+	// The refused rival must not lock the owner out of its own path.
+	if _, err := r.Render(t.Context(), 147); err != nil {
+		t.Fatalf("owner same-path refresh refused after rival collision: %v", err)
+	}
+	if _, err := d.ExecWrite(t.Context(), `UPDATE documents SET title='Renamed receipt' WHERE id=147`); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Move(t.Context(), 147); err != nil {
+		t.Fatalf("owner refresh refused after rival collision: %v", err)
+	}
+	if err := r.Reconcile(t.Context()); err != nil {
+		t.Fatalf("recovery failed after a refused collision: %v", err)
+	}
+	assertProjection(t, r, shared)
+
+	if _, err := d.ExecWrite(t.Context(), `UPDATE documents SET storage_path_id=2 WHERE id=147`); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Move(t.Context(), 147); err != nil {
+		t.Fatal(err)
+	}
+	firstMoved, _, err := r.resolveTarget(t.Context(), 147)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertProjection(t, r, firstMoved)
+	if _, err := os.Lstat(filepath.Join(r.renderDir, shared)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("released path kept the previous owner's link: %v", err)
+	}
+
+	// Once released, the rival's next render claims the path.
+	if _, err := r.Render(t.Context(), 148); err != nil {
+		t.Fatal(err)
+	}
+	assertProjection(t, r, shared)
+	if _, err := r.cas.Stat(original); err != nil {
+		t.Fatalf("rendered ownership changed immutable CAS bytes: %v", err)
+	}
+}
+
+func TestCaseVariantPathIsClaimedByItsOwner(t *testing.T) {
+	for _, variant := range []string{"shared", "SHARED"} {
+		t.Run(variant, func(t *testing.T) {
+			r, _, _ := recoveryRenderer(t)
+			seedSharedPathRival(t, r, variant)
+			shared, err := r.Render(t.Context(), 147)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertRefusedWithoutClaim(t, r, 148)
+			assertProjection(t, r, shared)
+		})
+	}
+}
+
+func TestNormalizationVariantPathIsClaimedByItsOwner(t *testing.T) {
+	r, d, _ := recoveryRenderer(t)
+	seedSharedPathRival(t, r, "Cafe\u0301")
+	if _, err := d.ExecWrite(t.Context(), `UPDATE storage_paths SET path=? WHERE id=1`, "Caf\u00e9"); err != nil {
+		t.Fatal(err)
+	}
+	shared, err := r.Render(t.Context(), 147)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRefusedWithoutClaim(t, r, 148)
+	assertProjection(t, r, shared)
+}
+
+func TestCaseOnlyRenameKeepsTheRenamedLink(t *testing.T) {
+	r, d, _ := recoveryRenderer(t)
+	seedSharedPathRival(t, r, "Rival")
+	if _, err := r.Render(t.Context(), 147); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.ExecWrite(t.Context(), `UPDATE storage_paths SET path='SHARED' WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Move(t.Context(), 147); err != nil {
+		t.Fatal(err)
+	}
+	current, _, err := r.resolveTarget(t.Context(), 147)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertProjection(t, r, current)
+}
+
+func TestTrashedOwnerKeepsItsPathThroughRestore(t *testing.T) {
+	r, d, _ := recoveryRenderer(t)
+	seedSharedPathRival(t, r, "Shared")
+	shared, err := r.Render(t.Context(), 147)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.ExecWrite(t.Context(), `UPDATE documents SET trashed_at=1 WHERE id=147`); err != nil {
+		t.Fatal(err)
+	}
+	assertRefusedWithoutClaim(t, r, 148)
+	assertProjection(t, r, shared)
+	if _, err := d.ExecWrite(t.Context(), `UPDATE documents SET trashed_at=NULL WHERE id=147`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Render(t.Context(), 147); err != nil {
+		t.Fatalf("restored owner lost its path: %v", err)
+	}
+	assertRefusedWithoutClaim(t, r, 148)
+	if err := r.Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var claimants int
+	if err := d.Read.QueryRow(`
+		SELECT count(DISTINCT move.document_id) FROM render_moves AS move
+		WHERE move.new_path=? AND move.state IN ('pending','applied')`, shared).Scan(&claimants); err != nil {
+		t.Fatal(err)
+	}
+	if claimants != 1 {
+		t.Fatalf("restored path has %d claimants, want 1", claimants)
+	}
+	assertProjection(t, r, shared)
+}
+
 func assertRenderedBytes(t *testing.T, r *Renderer, relative, want string) {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(r.renderDir, relative))

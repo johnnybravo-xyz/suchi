@@ -20,6 +20,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/render/paths"
+	"github.com/johnnybravo-xyz/suchi/core/render/view/pathclaim"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
@@ -348,16 +349,16 @@ func (s *Service) purge(ctx context.Context, filter purgeFilter, actor *pluginap
 			After: map[string]any{"owner_id": c.ownerID}, RequestID: requestID,
 		})
 	}
-	s.cleanupRendered(rendered, &report)
+	s.cleanupRendered(ctx, rendered, &report)
 	// CAS publishers store bytes before committing their references. Online
 	// purge cannot distinguish those in-flight writes from unused blobs.
 	// Physical blob reclamation belongs to offline GC, never this service.
 	return report, nil
 }
 
-func (s *Service) cleanupRendered(rendered map[string]map[string]struct{}, report *Report) {
+func (s *Service) cleanupRendered(ctx context.Context, rendered map[string]map[string]struct{}, report *Report) {
 	for relative, hashes := range rendered {
-		removed, err := s.removeRenderedLink(relative, hashes)
+		removed, err := s.removeRenderedLink(ctx, relative, hashes)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
@@ -372,12 +373,29 @@ func (s *Service) cleanupRendered(rendered map[string]map[string]struct{}, repor
 	}
 }
 
-func (s *Service) removeRenderedLink(relative string, hashes map[string]struct{}) (bool, error) {
+// removeRenderedLink unlinks a purged document's projection unless a remaining
+// document claims an equivalent path. The claim check and unlink share one
+// writer transaction, the same serialization the renderer publishes under, so a
+// link republished after the purge commit is never removed.
+func (s *Service) removeRenderedLink(ctx context.Context, relative string, hashes map[string]struct{}) (bool, error) {
 	dir, target, err := s.renderedParent(relative)
 	if err != nil {
 		return false, err
 	}
 	defer dir.Close()
+	removed := false
+	err = s.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		claimed, err := pathclaim.ClaimedByOther(ctx, tx, 0, relative)
+		if err != nil || claimed {
+			return err
+		}
+		removed, err = removeMatchingLink(dir, target, hashes)
+		return err
+	})
+	return removed, err
+}
+
+func removeMatchingLink(dir *os.Root, target string, hashes map[string]struct{}) (bool, error) {
 	info, err := dir.Lstat(target)
 	if err != nil {
 		return false, err

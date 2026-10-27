@@ -118,8 +118,10 @@ Blob age cannot establish concurrency safety.
 Preserve `original_blob` and original MIME; decryption, normalization and OCR
 produce derived objects. Rendered paths are rebuildable. Trash/retention purge
 snapshots candidate paths plus document/journal hashes in the writer before
-removing rows. Post-commit cleanup pins real parent directories and removes only
-matching CAS symlinks; foreign artifacts remain and count as cleanup failures.
+removing rows. Post-commit cleanup pins real parent directories and, per path in
+its own writer transaction, skips paths another document still claims and
+removes only matching CAS symlinks; foreign artifacts remain and count as
+cleanup failures.
 
 Rendering prepares directories outside the writer, then shares a short liveness/
 ownership check and atomic link replacement with purge's snapshot transaction.
@@ -131,9 +133,17 @@ whole document projection; repair occurs on render/refile.
 `core/render/view` derives category address and path at render time. Default JD
 and flat templates always retain `__{{ doc_pk }}` for uniqueness; introduction
 adds the immutable `<SYS>/` root but never substitutes `jd.address` for document
-identity. Explicit `jd.address` templates receive `SYS.AC` (empty before
-introduction), a non-unique category value, and rely on the existing refusal to overwrite another
-document or foreign artifact. The address cutover does not rewrite stored
+identity. Explicit templates may omit document identity and collide.
+`core/render/view/pathclaim` derives path ownership from each unpurged
+document's pending and latest-applied `render_moves`, comparing a Unicode
+case-folded NFC key (`*_path_key`, indexed) so case/normalization variants
+collide on every platform. Trashed documents keep their claim until purge, so
+restore never meets a second owner. View checks claims in the writer before
+journaling, publishing or deleting a link, and Trash before unlinking; a
+matching CAS hash never lets one document claim or remove another's projection.
+A refused document journals nothing, keeps any earlier applied link, and its
+render job fails until a later render finds the path free. Foreign files and symlinks remain
+untouched. The address cutover does not rewrite stored
 templates, historical links, or the whole archive.
 
 `core/render/index` refreshes a current tree-only `core/taxonomy` snapshot at

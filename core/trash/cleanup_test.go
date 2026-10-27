@@ -175,3 +175,40 @@ func TestPurgeCleansEverySupersededPendingProjection(t *testing.T) {
 		}
 	}
 }
+
+func TestPurgeKeepsLinkClaimedByAnotherDocument(t *testing.T) {
+	for _, claimedPath := range []string{"shared.pdf", "SHARED.pdf"} {
+		t.Run(claimedPath, func(t *testing.T) {
+			service, database, cas, renderRoot := newTestService(t)
+			ctx := context.Background()
+			trashedAt := int64(1)
+			shared := putBlob(t, cas, "shared bytes")
+			seedDocument(t, database, 1, 1, shared, &trashedAt)
+			seedDocument(t, database, 2, 1, shared, nil)
+			// Document 1 journaled the path but never owned it; document 2 does.
+			if _, err := database.Write.ExecContext(ctx, `INSERT INTO render_moves(document_id,prev_path,prev_blob,new_path,new_blob,state,created_at,applied_at)
+				VALUES(1,'','','shared.pdf',?1,'pending',1,NULL),
+				      (2,'','',?2,?1,'applied',1,1)`, shared, claimedPath); err != nil {
+				t.Fatal(err)
+			}
+			link, err := cas.Path(shared)
+			if err != nil {
+				t.Fatal(err)
+			}
+			target := filepath.Join(renderRoot, "shared.pdf")
+			if err := os.Symlink(link, target); err != nil {
+				t.Fatal(err)
+			}
+			report, err := service.PurgeOne(ctx, 1, 1, &pluginapi.Principal{Kind: "user", UserID: 1}, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if report.Purged != 1 || report.RenderedFilesRemoved != 0 || report.CleanupFailures != 0 {
+				t.Fatalf("claimed link cleanup: %+v", report)
+			}
+			if actual, err := os.Readlink(target); err != nil || actual != link {
+				t.Fatalf("another document's link was removed: %q %v", actual, err)
+			}
+		})
+	}
+}

@@ -107,6 +107,8 @@ var coreAfterExtensionObjects = []string{
 	"local_auth_totp",
 	"idx_automation_actions_aid",
 	"object_acls",
+	"render_moves_new_path_key",
+	"render_moves_prev_path_key",
 	"share_links_visibility_immutable",
 	"share_links_visibility_replace",
 	"tags",

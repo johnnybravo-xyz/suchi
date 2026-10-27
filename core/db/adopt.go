@@ -32,7 +32,7 @@ const (
 	stableV3Fingerprint             = "cfbdda9e3e80f35be33f763ad14c1c0d83a22ead62e91d04f6dc900331742a82"
 	stableV4Fingerprint             = "360611dcca51a4ce23d0114e58c82b5208ce72e7575afa25e0c350be7d3100b4"
 	stableV5Fingerprint             = "8f13f6a89fc56a04e027b0cdb19156a405445b8ee6bf6a80629f32e54c1e3d04"
-	stableFingerprint               = "74801897fe891f378c233a66f66a715400c59f484f884386c269ee4e40f77e25"
+	stableFingerprint               = "98cdff191c675a6b9a84b5da31333bcfc67d0c030a2f781599596a5ca6dc8d99"
 	preIdentityStableFingerprint    = "5d6ac98308eb644b030092178792a46f36e6f8f5041411f020ed2dcf216f46c2"
 	betaOneFingerprint              = "68089660de648a4fcc136bcefc105edc5d29dc4de59dad482124914ea626fb2b"
 	betaTwoFingerprint              = "a341b731c93a7270e3440a18f58911df80b2289bf44cd3baeecff4a2b2b0071c"

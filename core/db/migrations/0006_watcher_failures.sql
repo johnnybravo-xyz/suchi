@@ -22,3 +22,11 @@ INSERT INTO fs_watch_observations_new
 SELECT * FROM fs_watch_observations;
 DROP TABLE fs_watch_observations;
 ALTER TABLE fs_watch_observations_new RENAME TO fs_watch_observations;
+
+-- Rendered-path claims compare a filesystem-equivalent key (Unicode case fold
+-- plus NFC) computed by core/render/view/pathclaim. Earlier journal rows keep
+-- NULL keys until pathclaim fills them inside the writer.
+ALTER TABLE render_moves ADD COLUMN prev_path_key TEXT;
+ALTER TABLE render_moves ADD COLUMN new_path_key TEXT;
+CREATE INDEX render_moves_new_path_key ON render_moves(new_path_key);
+CREATE INDEX render_moves_prev_path_key ON render_moves(prev_path_key);

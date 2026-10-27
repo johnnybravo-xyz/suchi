@@ -40,6 +40,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/mimeutil"
 	"github.com/johnnybravo-xyz/suchi/core/render/paths"
+	"github.com/johnnybravo-xyz/suchi/core/render/view/pathclaim"
 )
 
 // DefaultTemplateJD is what suchi renders against when the doc's
@@ -209,7 +210,7 @@ func (r *Renderer) finishPending(ctx context.Context, docID int64, moves []pendi
 	removed := make(map[string]bool)
 	for _, move := range moves {
 		for _, old := range []projection{move.previous, move.next} {
-			if old.path == "" || old.path == current.path || removed[old.path] {
+			if old.path == "" || old.path == current.path || removed[old.path] || r.sameEntry(old.path, current.path) {
 				continue
 			}
 			if err := r.removeDocumentLink(ctx, docID, old.path); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -221,13 +222,25 @@ func (r *Renderer) finishPending(ctx context.Context, docID int64, moves []pendi
 	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		for _, move := range moves {
 			if _, err := tx.ExecContext(ctx, `
-				UPDATE render_moves SET new_path=?, new_blob=?, state='applied', applied_at=?
-				WHERE id=?`, current.path, current.blob, time.Now().Unix(), move.id); err != nil {
+				UPDATE render_moves SET new_path=?, new_path_key=?, new_blob=?, state='applied', applied_at=?
+				WHERE id=?`, current.path, pathclaim.Key(current.path), current.blob, time.Now().Unix(), move.id); err != nil {
 				return err
 			}
 		}
 		return nil
 	})
+}
+
+// sameEntry reports whether two differently spelled paths name one directory
+// entry, as a case-only rename does on a case-insensitive filesystem. Removing
+// the old spelling there would delete the link just published.
+func (r *Renderer) sameEntry(a, b string) bool {
+	if a == "" || b == "" || pathclaim.Key(a) != pathclaim.Key(b) {
+		return false
+	}
+	infoA, errA := os.Lstat(filepath.Join(r.renderDir, a))
+	infoB, errB := os.Lstat(filepath.Join(r.renderDir, b))
+	return errA == nil && errB == nil && os.SameFile(infoA, infoB)
 }
 
 // resolveTarget builds the render context and returns (relPath, absSymlinkSrc).
@@ -285,13 +298,24 @@ func (r *Renderer) lastAppliedProjection(ctx context.Context, docID int64) (proj
 	return p, err
 }
 
+// recordPending journals an intended publication. The claim check shares the
+// insert's transaction, so only a document allowed to publish next.path can
+// hold a pending claim on it.
 func (r *Renderer) recordPending(ctx context.Context, docID int64, previous, next projection) (pendingMove, error) {
 	move := pendingMove{previous: previous, next: next}
 	err := r.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		claimed, err := pathclaim.ClaimedByOther(ctx, tx, docID, next.path)
+		if err != nil {
+			return err
+		}
+		if claimed {
+			return fmt.Errorf("view: rendered path %q is claimed by another document", next.path)
+		}
 		res, err := tx.ExecContext(ctx, `
-			INSERT INTO render_moves(document_id, prev_path, prev_blob, new_path, new_blob, state, created_at)
-			VALUES (?, ?, ?, ?, ?, 'pending', ?)
-		`, docID, previous.path, previous.blob, next.path, next.blob, time.Now().Unix())
+			INSERT INTO render_moves(document_id, prev_path, prev_path_key, prev_blob, new_path, new_path_key, new_blob, state, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+		`, docID, previous.path, pathclaim.Key(previous.path), previous.blob,
+			next.path, pathclaim.Key(next.path), next.blob, time.Now().Unix())
 		if err != nil {
 			return err
 		}
@@ -545,6 +569,13 @@ func (r *Renderer) publishDocumentLink(ctx context.Context, docID int64, relativ
 		if !live {
 			return sql.ErrNoRows
 		}
+		claimed, err := pathclaim.ClaimedByOther(ctx, tx, docID, relative)
+		if err != nil {
+			return err
+		}
+		if claimed {
+			return fmt.Errorf("view: rendered path %q is claimed by another document", relative)
+		}
 		if err := r.proveDocumentLink(ctx, tx, docID, relative, dir, target); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
@@ -558,10 +589,19 @@ func (r *Renderer) removeDocumentLink(ctx context.Context, docID int64, relative
 		return err
 	}
 	defer dir.Close()
-	if err := r.proveDocumentLink(ctx, r.db.Read, docID, relative, dir, target); err != nil {
-		return err
-	}
-	return dir.Remove(target)
+	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		claimed, err := pathclaim.ClaimedByOther(ctx, tx, docID, relative)
+		if err != nil {
+			return err
+		}
+		if claimed {
+			return nil
+		}
+		if err := r.proveDocumentLink(ctx, tx, docID, relative, dir, target); err != nil {
+			return err
+		}
+		return dir.Remove(target)
+	})
 }
 
 func (r *Renderer) proveDocumentLink(ctx context.Context, q interface {
