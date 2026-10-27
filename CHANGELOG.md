@@ -53,6 +53,13 @@ Notable user-visible changes to Suchi are recorded here.
   transaction as the change. Unchanged replays and edits in
   Trash add no job, and restoring a document re-renders it.
 
+- Numeric date evidence now preserves unambiguous component order. A quote
+  that starts with a four-digit year (such as `2026-03-04`, `2026–03–04`, or
+  `2026 03 04`), or a year-first date with Chinese, Japanese, or Korean markers
+  (such as `2026年3月4日`), can no longer ground a normalized date with its
+  month and day swapped.
+  Ambiguous locale dates such as `02/01/2006` remain accepted either way.
+
 - The Dashboard's **Recently added** list sorts and dates documents by when
   Suchi added them. An emailed attachment or imported file with an older
   upstream date no longer sinks below newer uploads. Document lists accept

@@ -179,15 +179,16 @@ func EvidenceStart(content string, candidate Candidate) (int64, bool) {
 }
 
 // A quote's presence alone does not ground a contradictory normalized date.
-// dateTextMatches reads the numbers and month words in the quote, in any
-// order and script, and requires exactly the parts the precision names.
+// Unambiguous year-first and explicitly labelled numeric forms retain their
+// positions; locale-ambiguous numeric forms may assign month and day either way.
 // Extra numbers or a contradicting month word fail closed.
 func dateTextMatches(raw string, value DateValue) bool {
 	parsed, err := time.Parse("2006-01-02", value.Date)
 	if err != nil {
 		return false
 	}
-	numbers, months := dateTokens(raw)
+	normalized := normalizeDateText(raw)
+	numbers, months := dateTokens(normalized)
 	if len(months) > 1 || len(months) == 1 && months[0] != int(parsed.Month()) {
 		return false
 	}
@@ -204,6 +205,11 @@ func dateTextMatches(raw string, value DateValue) bool {
 		v, _ := strconv.Atoi(n)
 		return len(n) <= 2 && v == parsed.Day()
 	}
+	if len(months) == 0 {
+		if matched, valid := positionalDateMatch(normalized, numbers, value.Precision, isYear, isMonth, isDay); matched {
+			return valid
+		}
+	}
 	switch value.Precision {
 	case "year":
 		return len(months) == 0 && len(numbers) == 1 && isYear(numbers[0])
@@ -218,6 +224,31 @@ func dateTextMatches(raw string, value DateValue) bool {
 		}
 		return assignable(numbers, isYear, isMonth, isDay)
 	}
+}
+
+func positionalDateMatch(normalized string, numbers []string, precision string, isYear, isMonth, isDay func(string) bool) (bool, bool) {
+	var patterns []*regexp.Regexp
+	requiredNumbers := 0
+	switch precision {
+	case "day":
+		patterns = []*regexp.Regexp{yearFirstNumericDay, labelledNumericDay}
+		requiredNumbers = 3
+	case "month":
+		patterns = []*regexp.Regexp{yearFirstNumericMonth, labelledNumericMonth}
+		requiredNumbers = 2
+	default:
+		return false, false
+	}
+	for _, pattern := range patterns {
+		if parts := pattern.FindStringSubmatch(normalized); parts != nil {
+			valid := len(numbers) == requiredNumbers && isYear(parts[1]) && isMonth(parts[2])
+			if precision == "day" {
+				valid = valid && isDay(parts[3])
+			}
+			return true, valid
+		}
+	}
+	return false, false
 }
 
 // assignable reports whether each number fills exactly one distinct role.
@@ -245,16 +276,22 @@ func assignable(numbers []string, roles ...func(string) bool) bool {
 	return fill(0)
 }
 
-var japaneseEra = regexp.MustCompile(`(令和|平成|昭和)([0-9]+|元)年`)
+var (
+	japaneseEra = regexp.MustCompile(`(令和|平成|昭和)([0-9]+|元)年`)
+	// A separator is any run of dashes, spaces, underscores, commas, dots or
+	// slashes, so "2024–03–05" and "2024 03 05" are positional too.
+	yearFirstNumericDay   = regexp.MustCompile(`(?:^|[^0-9])([0-9]{4})[\p{Pd}\p{Z}\s_,./]+([0-9]{1,2})[\p{Pd}\p{Z}\s_,./]+([0-9]{1,2})(?:[^0-9]|$)`)
+	yearFirstNumericMonth = regexp.MustCompile(`(?:^|[^0-9])([0-9]{4})[\p{Pd}\p{Z}\s_,./]+([0-9]{1,2})(?:[^0-9]|$)`)
+	labelledNumericDay    = regexp.MustCompile(`(?:^|[^0-9])([0-9]{2,4})[[:space:]]*(?:年|년)[[:space:]]*([0-9]{1,2})[[:space:]]*(?:月|월)[[:space:]]*([0-9]{1,2})[[:space:]]*(?:日|일)?(?:[^0-9]|$)`)
+	labelledNumericMonth  = regexp.MustCompile(`(?:^|[^0-9])([0-9]{2,4})[[:space:]]*(?:年|년)[[:space:]]*([0-9]{1,2})[[:space:]]*(?:月|월)(?:[^0-9]|$)`)
+)
 
 var japaneseEraStart = map[string]int{"令和": 2018, "平成": 1988, "昭和": 1925}
 
 // Zero code points of decimal digit blocks that NFKC leaves as they are.
 var digitZeros = []rune{0x0660, 0x06F0, 0x0966, 0x09E6, 0x0E50}
 
-// dateTokens returns the quote's ASCII number runs and the months named by
-// its letter runs. Letter runs that are not month spellings are separators.
-func dateTokens(raw string) (numbers []string, months []int) {
+func normalizeDateText(raw string) string {
 	text := []rune(norm.NFKC.String(raw))
 	for i, r := range text {
 		for _, zero := range digitZeros {
@@ -263,7 +300,7 @@ func dateTokens(raw string) (numbers []string, months []int) {
 			}
 		}
 	}
-	normalized := japaneseEra.ReplaceAllStringFunc(string(text), func(era string) string {
+	return japaneseEra.ReplaceAllStringFunc(string(text), func(era string) string {
 		parts := japaneseEra.FindStringSubmatch(era)
 		year := 1
 		if parts[2] != "元" {
@@ -271,6 +308,11 @@ func dateTokens(raw string) (numbers []string, months []int) {
 		}
 		return strconv.Itoa(japaneseEraStart[parts[1]]+year) + "年"
 	})
+}
+
+// dateTokens returns normalized text's ASCII number runs and the months named
+// by its letter runs. Letter runs that are not month spellings are separators.
+func dateTokens(normalized string) (numbers []string, months []int) {
 	var number, word strings.Builder
 	flush := func() {
 		if number.Len() > 0 {

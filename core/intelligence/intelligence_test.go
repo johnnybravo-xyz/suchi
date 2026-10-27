@@ -64,6 +64,34 @@ func TestEvidenceRejectsMissingAlteredAndContradictoryQuotes(t *testing.T) {
 	}
 }
 
+func TestEvidenceStartPreservesWrappedUnambiguousNumericDateOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name, raw, date string
+		valid           bool
+	}{
+		{"bare ISO swapped", "2026-03-04", "2026-04-03", false},
+		{"bare slash swapped", "2026/03/04", "2026-04-03", false},
+		{"bare Japanese swapped", "2026年3月4日", "2026-04-03", false},
+		{"bare Korean swapped", "2026년 3월 4일", "2026-04-03", false},
+		{"wrapped ISO correct", "Expiry: 2026-03-04", "2026-03-04", true},
+		{"wrapped ISO swapped", "Expiry: 2026-03-04", "2026-04-03", false},
+		{"wrapped Japanese correct", "2026年3月4日まで", "2026-03-04", true},
+		{"wrapped Japanese swapped", "2026年3月4日まで", "2026-04-03", false},
+		{"longer leading number", "Expiry: 12026-03-04", "2026-03-04", false},
+		{"extra trailing number", "Expiry: 2026-03-04 account 7", "2026-03-04", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate, err := NewDateCandidate("due", tc.date, "day", tc.raw, tc.raw, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, valid := EvidenceStart(tc.raw, candidate); valid != tc.valid {
+				t.Fatalf("evidence valid=%v want=%v", valid, tc.valid)
+			}
+		})
+	}
+}
+
 func TestEvidenceDoesNotInventDatePrecision(t *testing.T) {
 	for _, tc := range []struct {
 		raw, date, precision string
@@ -109,6 +137,41 @@ func TestDateQuotesInManyLanguagesAndScripts(t *testing.T) {
 		{"13.10.26", "2026-10-13", "day", true},
 		{"October 13th, 2026", "2026-10-13", "day", true},
 		{"2026-10-13", "2026-10-13", "day", true},
+		{"2026-10-12", "2026-12-10", "day", false},
+		{"2024–03–05", "2024-03-05", "day", true},
+		{"2024–03–05", "2024-05-03", "day", false},
+		{"2024—03—05", "2024-03-05", "day", true},
+		{"2024—03—05", "2024-05-03", "day", false},
+		{"2024 03 05", "2024-03-05", "day", true},
+		{"2024 03 05", "2024-05-03", "day", false},
+		{"2024_03_05", "2024-03-05", "day", true},
+		{"2024_03_05", "2024-05-03", "day", false},
+		{"2024,03,05", "2024-03-05", "day", true},
+		{"2024,03,05", "2024-05-03", "day", false},
+		{"2024. 03. 05.", "2024-03-05", "day", true},
+		{"2024. 03. 05.", "2024-05-03", "day", false},
+		{"2567-03-05", "2024-03-05", "day", true},
+		{"2567-03-05", "2024-05-03", "day", false},
+		{"2024-03", "2024-03-01", "month", true},
+		{"2024-03", "2024-01-01", "month", false},
+		{"2024 – 03", "2024-03-01", "month", true},
+		{"2024 – 03", "2024-01-01", "month", false},
+		{"24年3月5日", "2024-03-05", "day", true},
+		{"24年3月5日", "2024-05-03", "day", false},
+		{"令和6年3月5日", "2024-03-05", "day", true},
+		{"令和6年3月5日", "2024-05-03", "day", false},
+		{"2024년 3월", "2024-03-01", "month", true},
+		{"2024년 3월", "2024-01-01", "month", false},
+		{"2024年", "2024-01-01", "year", true},
+		{"05.03.2024", "2024-03-05", "day", true},
+		{"05.03.2024", "2024-05-03", "day", true},
+		{"12/05/2024", "2024-12-05", "day", true},
+		{"12/05/2024", "2024-05-12", "day", true},
+		{"2026-03-04", "2026-04-03", "day", false},
+		{"2026/03/04", "2026-04-03", "day", false},
+		{"2026年3月4日", "2026-03-04", "day", true},
+		{"2026年3月4日", "2026-04-03", "day", false},
+		{"2026년 3월 4일", "2026-04-03", "day", false},
 		{"02/01/2006", "2006-01-02", "day", true},
 		{"02/01/2006", "2006-02-01", "day", true},
 		{"Oktober 2026", "2026-10-01", "month", true},

@@ -50,18 +50,23 @@ allowed roles and their intended meanings, not hard-coded classification rules:
 | `other`   | Another relevant date that does not fit those roles |
 
 Suchi checks the date format, allowed role, exact quote, and matching date
-spelling in the original extracted text. The quoted date must contain exactly
-the day, month and year the precision names, in any order: numbers, or a month
-name or common abbreviation in English, German, French, Spanish, Italian,
-Portuguese, Dutch, Swedish, Danish, Norwegian, Finnish, Polish, Czech, Turkish,
-Russian, Ukrainian or Thai. `2026年10月13日`, `2026년 10월 13일`, Japanese era
-years (`令和8年`), Buddhist-era years, two-digit years and full-width, Arabic,
-Persian, Devanagari, Bengali or Thai digits are read as numbers. An extra number
-(such as a time), a second month name, or a month that disagrees rejects the
-date rather than guessing. These checks do not independently
-verify the model's interpretation of a role. Read the quote and open the
-document before relying on a date; even a model-confidence score of 100% is not
-a guarantee.
+spelling in the original extracted text. In a numeric date that starts with a
+four-digit year, such as `2026-03-04`, `2026–03–04` or `2026 03 04`, and in a
+date written year-first with Chinese, Japanese or Korean markers, such as
+`2026年3月4日` or `2026년 3월 4일`, the numbers must be year, month and day in
+that order. Numeric locale forms whose month/day order is genuinely ambiguous,
+such as `02/01/2006`, remain valid for either interpretation. Other quoted
+dates must contain exactly the day, month and year the precision names:
+numbers, or a month name or common abbreviation in English, German, French,
+Spanish, Italian, Portuguese, Dutch, Swedish, Danish, Norwegian, Finnish,
+Polish, Czech, Turkish, Russian, Ukrainian or Thai. Japanese era years
+(`令和8年`), Buddhist-era years, two-digit years and full-width, Arabic,
+Persian, Devanagari, Bengali or Thai digits are read as numbers. An extra
+number (such as a time), a second month name, or a component that disagrees
+rejects the date rather than guessing.
+These checks do not independently verify the model's interpretation of a role.
+Read the quote and open the document before relying on a date; even a
+model-confidence score of 100% is not a guarantee.
 
 ## Date precision and model confidence
 
