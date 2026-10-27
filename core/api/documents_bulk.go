@@ -237,8 +237,17 @@ func (s *Server) applyBulkEdit(r *http.Request, tx *sql.Tx, systemID int64, meth
 			}
 		}
 		for _, id := range ids {
+			before, err := taxonomy.PrimaryCorrespondentID(r.Context(), tx, id)
+			if err != nil {
+				return err
+			}
 			if err := taxonomy.SetPrimaryCorrespondent(r.Context(), tx, id, value); err != nil {
 				return err
+			}
+			if before.Valid != (value != 0) || before.Int64 != value {
+				if err := view.EnqueueMove(r.Context(), tx, id); err != nil {
+					return err
+				}
 			}
 		}
 		for _, id := range ids {
@@ -295,21 +304,43 @@ func (s *Server) applyBulkEdit(r *http.Request, tx *sql.Tx, systemID int64, meth
 		} else if method == "set_jd_category" {
 			return fmt.Errorf("%w: a filing category is required", errBadParams)
 		}
+		changedArgs := make([]any, 0, len(ids)+1)
+		for _, id := range ids {
+			changedArgs = append(changedArgs, id)
+		}
+		changedArgs = append(changedArgs, target)
+		rows, err := tx.QueryContext(r.Context(),
+			"SELECT id FROM documents WHERE id IN ("+placeholders+") AND "+column+" IS NOT ?",
+			changedArgs...)
+		if err != nil {
+			return err
+		}
+		var changedIDs []int64
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			changedIDs = append(changedIDs, id)
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		for _, id := range changedIDs {
+			if err := view.EnqueueMove(r.Context(), tx, id); err != nil {
+				return err
+			}
+		}
 		args = append(args, target, now)
 		for _, id := range ids {
 			args = append(args, id)
 		}
-		if _, err = tx.ExecContext(r.Context(), "UPDATE documents SET "+column+"=?, updated_at=? WHERE id IN ("+placeholders+")", args...); err != nil {
-			return err
-		}
-		if method == "set_rendered_layout" {
-			for _, id := range ids {
-				if err := view.EnqueueMove(r.Context(), tx, id); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
+		_, err = tx.ExecContext(r.Context(), "UPDATE documents SET "+column+"=?, updated_at=? WHERE id IN ("+placeholders+")", args...)
+		return err
 	case "set_sensitivity":
 		value, ok := params["sensitivity"].(string)
 		if !ok || !SensitivityLevels[value] {
@@ -339,9 +370,21 @@ func (s *Server) applyBulkEdit(r *http.Request, tx *sql.Tx, systemID int64, meth
 		}
 		if method == "add_tag" {
 			for _, id := range ids {
+				var present bool
+				if err := tx.QueryRowContext(r.Context(),
+					`SELECT EXISTS (SELECT 1 FROM document_tags WHERE document_id=? AND tag_id=?)`,
+					id, value,
+				).Scan(&present); err != nil {
+					return err
+				}
 				if _, err := tx.ExecContext(r.Context(), `INSERT INTO document_tags(document_id,tag_id) VALUES (?,?)
 					ON CONFLICT(document_id,tag_id) DO UPDATE SET classifier_owned=0`, id, value); err != nil {
 					return err
+				}
+				if !present {
+					if err := view.EnqueueMove(r.Context(), tx, id); err != nil {
+						return err
+					}
 				}
 			}
 			return nil
@@ -355,8 +398,33 @@ func (s *Server) applyBulkEdit(r *http.Request, tx *sql.Tx, systemID int64, meth
 		if _, err = tx.ExecContext(r.Context(), "UPDATE documents SET tags_revision=tags_revision+1 WHERE id IN ("+placeholders+")", args[1:]...); err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(r.Context(), "DELETE FROM document_tags WHERE tag_id=? AND document_id IN ("+placeholders+")", args...)
-		return err
+		rows, err := tx.QueryContext(r.Context(),
+			"DELETE FROM document_tags WHERE tag_id=? AND document_id IN ("+placeholders+") RETURNING document_id",
+			args...)
+		if err != nil {
+			return err
+		}
+		var changedIDs []int64
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			changedIDs = append(changedIDs, id)
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		for _, id := range changedIDs {
+			if err := view.EnqueueMove(r.Context(), tx, id); err != nil {
+				return err
+			}
+		}
+		return nil
 	case "trash", "delete":
 		args = append(args, now, now)
 		for _, id := range ids {
@@ -381,8 +449,16 @@ func (s *Server) applyBulkEdit(r *http.Request, tx *sql.Tx, systemID int64, meth
 		for _, id := range ids {
 			args = append(args, id)
 		}
-		_, err := tx.ExecContext(r.Context(), "UPDATE documents SET trashed_at=NULL, updated_at=? WHERE id IN ("+placeholders+") AND trashed_at IS NOT NULL", args...)
-		return err
+		if _, err := tx.ExecContext(r.Context(), "UPDATE documents SET trashed_at=NULL, updated_at=? WHERE id IN ("+placeholders+") AND trashed_at IS NOT NULL", args...); err != nil {
+			return err
+		}
+		// Edits made in Trash queue no render work, so restore re-renders.
+		for _, id := range ids {
+			if err := view.EnqueueMove(r.Context(), tx, id); err != nil {
+				return err
+			}
+		}
+		return nil
 	case "rescan_enqueue":
 		_, err := rescan.EnqueueInTx(r.Context(), tx, rescan.Options{SystemID: systemID, IDs: ids})
 		return err
@@ -400,12 +476,35 @@ func reconcileClassifierReview(ctx context.Context, tx *sql.Tx, systemID int64, 
 	for i, id := range ids {
 		args[i] = id
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM document_tags
+	rows, err := tx.QueryContext(ctx, `DELETE FROM document_tags
 		WHERE classifier_owned=1 AND document_id IN (`+strings.Repeat("?,", len(ids)-1)+`?)
-		  AND tag_id IN (SELECT id FROM tags WHERE slug='needs-review')`, args...); err != nil {
+		  AND tag_id IN (SELECT id FROM tags WHERE slug='needs-review')
+		RETURNING document_id`, args...)
+	if err != nil {
 		return err
 	}
-	_, err := approvals.ReconcileDocumentChangesInTx(ctx, tx, systemID, ids)
+	var untagged []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		untagged = append(untagged, id)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	// The removed review tag was part of the rendered `tag_list`.
+	for _, id := range untagged {
+		if err := view.EnqueueMove(ctx, tx, id); err != nil {
+			return err
+		}
+	}
+	_, err = approvals.ReconcileDocumentChangesInTx(ctx, tx, systemID, ids)
 	return err
 }
 

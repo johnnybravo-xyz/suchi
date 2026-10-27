@@ -183,10 +183,11 @@ func TestUploadDocumentIdempotentDedupeAndRestore(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		trashFirst bool
+		jobs       int // restore adds one render job; the replay adds none
 		flag       func(UploadResponse) bool
 	}{
-		{name: "dedupe", flag: func(response UploadResponse) bool { return response.Deduplicated }},
-		{name: "restore", trashFirst: true, flag: func(response UploadResponse) bool { return response.Restored }},
+		{name: "dedupe", jobs: 1, flag: func(response UploadResponse) bool { return response.Deduplicated }},
+		{name: "restore", trashFirst: true, jobs: 2, flag: func(response UploadResponse) bool { return response.Restored }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, d, principal := newUploadMetadataServer(t)
@@ -218,7 +219,7 @@ func TestUploadDocumentIdempotentDedupeAndRestore(t *testing.T) {
 				t.Fatalf("existing title changed in response: first=%q replay=%q",
 					firstResponse.Title, replayResponse.Title)
 			}
-			assertUploadSideEffectCounts(t, d, 1, 2, 1, 1)
+			assertUploadSideEffectCounts(t, d, 1, 2, tc.jobs, 1)
 		})
 	}
 }

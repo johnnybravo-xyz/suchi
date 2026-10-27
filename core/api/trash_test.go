@@ -316,6 +316,9 @@ func TestRestoreDocumentStopsAtRetentionBoundary(t *testing.T) {
 	if !rowExistsInAPI(t, server, expiredID) {
 		t.Fatal("expired row disappeared outside the purge service")
 	}
+	if jobs := renderJobCounts(t, server); jobs[recoverableID] != 1 || jobs[expiredID] != 0 {
+		t.Fatalf("render jobs after restore=%v, want one for the restored document only", jobs)
+	}
 }
 
 func TestUploadDoesNotRestoreExpiredDuplicate(t *testing.T) {

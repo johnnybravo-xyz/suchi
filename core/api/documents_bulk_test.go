@@ -17,11 +17,15 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,7 +34,10 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/approvals"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
+	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/documentstate"
+	"github.com/johnnybravo-xyz/suchi/core/jobs"
+	"github.com/johnnybravo-xyz/suchi/core/render/view"
 	"github.com/johnnybravo-xyz/suchi/core/trash"
 )
 
@@ -178,6 +185,9 @@ func TestBulkRestoreRejectsExpiredDocumentsAtomically(t *testing.T) {
 	}, adminPrincipal(1))
 	if code != http.StatusOK || response.Applied != 1 {
 		t.Fatalf("recoverable restore status=%d response=%+v", code, response)
+	}
+	if jobs := renderJobCounts(t, s); jobs[recoverable] != 1 || jobs[expired] != 0 {
+		t.Fatalf("render jobs after restore=%v, want one for the restored document only", jobs)
 	}
 }
 
@@ -406,6 +416,140 @@ func TestBulkEdit_SetJDCategory(t *testing.T) {
 	_ = d.Read.QueryRow(`SELECT jd_category_id FROM documents WHERE id = ?`, a).Scan(&got)
 	if got != 2 {
 		t.Errorf("jd_category_id = %d, want 2", got)
+	}
+}
+
+func TestBulkPathMetadataEnqueuesRenderOnlyOnChange(t *testing.T) {
+	s := newBulkServer(t)
+	docID := seedStatsDoc(t, s.DB, 1, "render-sha", "Receipt", seedStatsJDInbox(t, s.DB), false, 0)
+	if _, err := s.DB.ExecWrite(t.Context(), `
+		INSERT INTO jd_categories(system_id,id,area_start,code,name,system)
+		SELECT 1,902,area_start,CASE WHEN code=area_start THEN area_start+1 ELSE area_start END,'Filed',0 FROM jd_categories WHERE system_id=1 ORDER BY id LIMIT 1;
+		INSERT INTO correspondents(system_id,id,name,slug,created_at,updated_at)
+		VALUES(1,903,'Acme','acme',0,0);
+		INSERT INTO tags(system_id,id,name,slug,created_at,updated_at)
+		VALUES(1,904,'Paid','paid',0,0);
+		INSERT INTO storage_paths(system_id,id,name,slug,path,created_at,updated_at)
+		VALUES(1,905,'By title','by-title','{{ title }}',0,0);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	edits := []struct {
+		method   string
+		params   map[string]any
+		wantJobs int
+	}{
+		{"set_correspondent", map[string]any{"correspondent_id": 903}, 1},
+		{"set_correspondent", map[string]any{"correspondent_id": 903}, 1},
+		{"set_jd_category", map[string]any{"jd_category_id": 902}, 2},
+		{"set_jd_category", map[string]any{"jd_category_id": 902}, 2},
+		{"add_tag", map[string]any{"tag_id": 904}, 3},
+		{"add_tag", map[string]any{"tag_id": 904}, 3},
+		{"remove_tag", map[string]any{"tag_id": 904}, 4},
+		{"remove_tag", map[string]any{"tag_id": 904}, 4},
+		{"set_rendered_layout", map[string]any{"rendered_layout_id": 905}, 5},
+		{"set_rendered_layout", map[string]any{"rendered_layout_id": 905}, 5},
+	}
+	for _, edit := range edits {
+		code, result := doBulkEdit(t, s, map[string]any{
+			"documents": []int64{docID}, "method": edit.method, "parameters": edit.params,
+		}, adminPrincipal(1))
+		if code != http.StatusOK || result.Applied != 1 {
+			t.Fatalf("%s: status=%d result=%+v", edit.method, code, result)
+		}
+		var jobs int
+		if err := s.DB.Read.QueryRow(
+			`SELECT count(*) FROM jobs WHERE kind='render' AND doc_id=?`, docID,
+		).Scan(&jobs); err != nil {
+			t.Fatal(err)
+		}
+		if jobs != edit.wantJobs {
+			t.Fatalf("%s render jobs=%d, want %d", edit.method, jobs, edit.wantJobs)
+		}
+	}
+}
+
+func TestBulkCategoryDispatcherConvergesRenderedPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("rendered views require Unix symlinks")
+	}
+	s := newBulkServer(t)
+	docID := seedStatsDoc(t, s.DB, 1, "placeholder", "Receipt", seedStatsJDInbox(t, s.DB), false, 0)
+	root := t.TempDir()
+	cas, err := blob.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := cas.Put(strings.NewReader("receipt bytes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.ExecWrite(t.Context(), `
+		UPDATE documents SET original_blob=?,original_size=?,mime_type='application/pdf' WHERE id=?;
+		INSERT INTO jd_categories(system_id,id,area_start,code,name,system)
+		SELECT 1,906,area_start,CASE WHEN code=area_start THEN area_start+1 ELSE area_start END,'Filed',0 FROM jd_categories WHERE system_id=1 ORDER BY id LIMIT 1;
+	`, ref.SHA256, ref.Size, docID); err != nil {
+		t.Fatal(err)
+	}
+	renderDir := filepath.Join(root, "rendered")
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	renderer, err := view.New(s.DB, cas, renderDir, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldPath, err := renderer.Render(t.Context(), docID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := jobs.New(s.DB, log)
+	dispatcher.Register(view.NewHandler(renderer))
+	ctx, cancel := context.WithCancel(t.Context())
+	go dispatcher.Run(ctx)
+	t.Cleanup(func() {
+		cancel()
+		dispatcher.Stop()
+	})
+
+	code, result := doBulkEdit(t, s, map[string]any{
+		"documents": []int64{docID}, "method": "set_jd_category",
+		"parameters": map[string]any{"jd_category_id": 906},
+	}, adminPrincipal(1))
+	if code != http.StatusOK || result.Applied != 1 {
+		t.Fatalf("bulk category: status=%d result=%+v", code, result)
+	}
+	dispatcher.Nudge()
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	for {
+		var state string
+		if err := s.DB.Read.QueryRow(
+			`SELECT state FROM jobs WHERE kind='render' AND doc_id=? ORDER BY id DESC LIMIT 1`, docID,
+		).Scan(&state); err != nil {
+			t.Fatal(err)
+		}
+		if state == "done" {
+			break
+		}
+		select {
+		case <-deadline.C:
+			t.Fatalf("render job state=%q, want done", state)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	var newPath string
+	if err := s.DB.Read.QueryRow(
+		`SELECT new_path FROM render_moves WHERE document_id=? ORDER BY id DESC LIMIT 1`, docID,
+	).Scan(&newPath); err != nil {
+		t.Fatal(err)
+	}
+	if newPath == oldPath {
+		t.Fatalf("category mutation retained old rendered path %q", oldPath)
+	}
+	if got, err := os.ReadFile(filepath.Join(renderDir, newPath)); err != nil || string(got) != "receipt bytes" {
+		t.Fatalf("new rendered path %q = %q, %v", newPath, got, err)
+	}
+	if _, err := os.Lstat(filepath.Join(renderDir, oldPath)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old rendered path %q remains: %v", oldPath, err)
 	}
 }
 

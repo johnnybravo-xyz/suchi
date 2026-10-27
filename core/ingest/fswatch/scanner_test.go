@@ -297,3 +297,41 @@ func newScannerTestWatcherMissing(t *testing.T, source string) (*Watcher, error)
 	}
 	return New(ctx, Config{Dir: source, OwnerID: 1}, database, cas, nil, log)
 }
+
+func TestTrashedDuplicateRestoreQueuesRender(t *testing.T) {
+	source := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "receipt.txt"), []byte("same bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	watcher, database := newScannerTestWatcher(t, source, true)
+	scanTestSource(t, watcher)
+	if _, err := database.ExecWrite(t.Context(), `UPDATE documents SET trashed_at = 1`); err != nil {
+		t.Fatal(err)
+	}
+	renderJobs := func() int {
+		t.Helper()
+		var count int
+		if err := database.Read.QueryRow(`SELECT count(*) FROM jobs WHERE kind = 'render'`).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		return count
+	}
+	before := renderJobs()
+
+	if err := os.WriteFile(filepath.Join(source, "copy.txt"), []byte("same bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	scanTestSource(t, watcher)
+	var documents, trashed int
+	if err := database.Read.QueryRow(`
+		SELECT count(*), count(trashed_at) FROM documents
+	`).Scan(&documents, &trashed); err != nil {
+		t.Fatal(err)
+	}
+	if documents != 1 || trashed != 0 {
+		t.Fatalf("documents/trashed = %d/%d, want 1/0", documents, trashed)
+	}
+	if after := renderJobs(); after != before+1 {
+		t.Fatalf("render jobs = %d after restore, want %d", after, before+1)
+	}
+}

@@ -49,9 +49,12 @@ failure rolls back that automation and is recorded in structured logs. Trigger
 types and glob or regular-expression filters are validated when a rule is
 saved, so malformed rules do not silently sit idle.
 Automations do not re-trigger themselves from their own writes, so dependent
-actions should stay in one automation.
+actions should stay in one automation. Title, tag, correspondent, category,
+folder-layout and owner actions queue the matching rendered-folder move in that
+same transaction when their effective path input changes.
 
-Assignment and removal actions are designed to converge when retried.
+Assignment and removal actions are designed to converge when retried. Replaying
+an already-converged action does not queue another rendered-folder move.
 `discard` is idempotent for an already-trashed document and retains its original
 Trash timestamp. Other metadata actions still require a live document; discarding
 does not grant a rule permission to edit Trash or cross a filing-system boundary.

@@ -207,8 +207,10 @@ Existing archives retain the internal `storage_paths` table,
 `documents.storage_path_id`, and persisted automation action names. The public
 bulk method and ACL kind are `set_rendered_layout` and `rendered_layout`. A
 document with no selection uses the default filing-tree projection. Document
-PATCH, bulk actions, automations, template edits, and layout deletion enqueue
-rendered moves in the same transaction as their state change.
+PATCH, path-affecting bulk edits, built-in automation metadata actions, template
+edits, and layout deletion enqueue rendered moves in the same transaction as an
+effective state change. Replaying an already-converged bulk or automation
+assignment does not add another render job.
 `core/jd/systems.Address` owns the derived filing-category projection: `SYS.AC`
 after introduction, and empty while the original archive is unnamed.
 `core/api` applies that value consistently to detail, list, search, receipt,
@@ -216,6 +218,16 @@ version, reference, and backlink rows. The value is intentionally non-unique;
 numeric document IDs and URLs own exact identity. `/api/jd/resolve` authorizes an
 existing category and returns its runtime ID for Documents filtering, without
 performing or granting document ACL access.
+
+Renaming or deleting a correspondent or tag, and renaming a filing system, also
+enqueue rendered moves in the mutation's transaction for live documents whose
+effective template reads the changed value (`correspondent`, `tag_list`, or
+`jd.system.name`). Every filing-tree import moves the system's live documents.
+Closing the classifier's `needs-review` marker during a human edit queues each
+document that actually lost the tag. `view.EnqueueMove` skips trashed documents,
+since the renderer projects only live ones, and every restore (single, bulk,
+duplicate upload, or watched-folder duplicate) queues a move so edits made in
+Trash reach the rendered path.
 
 `archive_serial_number` is system-scoped physical-filing metadata. A document
 PATCH accepts a positive JSON-safe integer or `null`; assignment is limited to

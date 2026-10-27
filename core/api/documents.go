@@ -236,6 +236,10 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 			); err != nil {
 				return err
 			}
+			// Edits made in Trash queue no render work, so restore re-renders.
+			if err := view.EnqueueMove(r.Context(), tx, trashedID); err != nil {
+				return err
+			}
 			outID = trashedID
 			restored = true
 			if err := ingest.RecordClientSource(r.Context(), tx, outID, upload.SourceKind,
@@ -469,8 +473,11 @@ func (s *Server) RestoreDocument(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		affected, err = res.RowsAffected()
-		return err
+		if affected, err = res.RowsAffected(); err != nil || affected == 0 {
+			return err
+		}
+		// Edits made in Trash queue no render work, so restore re-renders.
+		return view.EnqueueMove(r.Context(), tx, id)
 	})
 	if err != nil {
 		s.serverErr(w, "restore.db", err)

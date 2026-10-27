@@ -212,32 +212,34 @@ func TestRegistryBuiltinActionParity(t *testing.T) {
 	corrID := seedCorrespondent(t, ctx, d, "Sender")
 	fieldID := seedCustomField(t, ctx, d, "Note", "text")
 	_, err := d.ExecWrite(ctx, `INSERT INTO users(id,email,display_name,role,created_at,updated_at) VALUES(2,'second@test','Second','admin',0,0);
- INSERT INTO storage_paths(id,system_id,name,slug,path,created_at,updated_at) VALUES(800,1,'Path','path','{{title}}',0,0);`)
+ INSERT INTO storage_paths(id,system_id,name,slug,path,created_at,updated_at) VALUES(800,1,'Path','path','{{title}}',0,0);
+ INSERT INTO jd_categories(system_id,id,area_start,code,name,system)
+ SELECT 1,802,area_start,CASE WHEN code=area_start THEN area_start+1 ELSE area_start END,'Filed',0 FROM jd_categories WHERE system_id=1 ORDER BY id LIMIT 1;`)
 	must(t, err)
-	var categoryID int64
-	must(t, d.Read.QueryRowContext(ctx, `SELECT id FROM jd_categories WHERE system_id=1 ORDER BY id LIMIT 1`).Scan(&categoryID))
+	const categoryID int64 = 802
 	registry := testActions(t)
 	store := automations.New(d, registry)
 	saved, err := store.Create(ctx, 1, automations.Automation{Name: "Parity", Enabled: true, Triggers: []automations.Trigger{{Type: automations.TriggerDocumentAdded}}})
 	must(t, err)
 	tests := []struct {
-		kind   string
-		params map[string]any
-		query  string
-		want   any
+		kind       string
+		params     map[string]any
+		query      string
+		want       any
+		wantRender bool
 	}{
-		{"assign_title", map[string]any{"template": "Filed"}, `SELECT title FROM documents WHERE id=?`, "Filed"},
-		{"assign_tags", map[string]any{"tag_ids": []any{tagID}}, `SELECT count(*) FROM document_tags WHERE document_id=?`, int64(1)},
-		{"assign_correspondent", map[string]any{"correspondent_id": corrID}, `SELECT correspondent_id FROM document_correspondents WHERE document_id=? AND role='sender' ORDER BY position,correspondent_id LIMIT 1`, corrID},
-		{"assign_jd_category", map[string]any{"jd_category_id": categoryID}, `SELECT jd_category_id FROM documents WHERE id=?`, categoryID},
-		{"assign_storage_path", map[string]any{"storage_path_id": 800}, `SELECT storage_path_id FROM documents WHERE id=?`, int64(800)},
-		{"assign_owner", map[string]any{"owner_id": 2}, `SELECT owner_id FROM documents WHERE id=?`, int64(2)},
-		{"assign_custom_field", map[string]any{"field_id": fieldID, "value": "note"}, `SELECT value_text FROM document_custom_field_values WHERE document_id=?`, "note"},
-		{"remove_tags", map[string]any{"tag_ids": []any{tagID}}, `SELECT count(*) FROM document_tags WHERE document_id=?`, int64(0)},
-		{"remove_correspondents", nil, `SELECT count(*)=0 FROM document_correspondents WHERE document_id=?`, int64(1)},
-		{"remove_storage_path", nil, `SELECT storage_path_id IS NULL FROM documents WHERE id=?`, int64(1)},
-		{"remove_custom_field", map[string]any{"field_id": fieldID}, `SELECT count(*) FROM document_custom_field_values WHERE document_id=?`, int64(0)},
-		{"discard", nil, `SELECT trashed_at IS NOT NULL FROM documents WHERE id=?`, int64(1)},
+		{"assign_title", map[string]any{"template": "Filed"}, `SELECT title FROM documents WHERE id=?`, "Filed", true},
+		{"assign_tags", map[string]any{"tag_ids": []any{tagID}}, `SELECT count(*) FROM document_tags WHERE document_id=?`, int64(1), true},
+		{"assign_correspondent", map[string]any{"correspondent_id": corrID}, `SELECT correspondent_id FROM document_correspondents WHERE document_id=? AND role='sender' ORDER BY position,correspondent_id LIMIT 1`, corrID, true},
+		{"assign_jd_category", map[string]any{"jd_category_id": categoryID}, `SELECT jd_category_id FROM documents WHERE id=?`, categoryID, true},
+		{"assign_storage_path", map[string]any{"storage_path_id": 800}, `SELECT storage_path_id FROM documents WHERE id=?`, int64(800), true},
+		{"assign_owner", map[string]any{"owner_id": 2}, `SELECT owner_id FROM documents WHERE id=?`, int64(2), true},
+		{"assign_custom_field", map[string]any{"field_id": fieldID, "value": "note"}, `SELECT value_text FROM document_custom_field_values WHERE document_id=?`, "note", false},
+		{"remove_tags", map[string]any{"tag_ids": []any{tagID}}, `SELECT count(*) FROM document_tags WHERE document_id=?`, int64(0), true},
+		{"remove_correspondents", nil, `SELECT count(*)=0 FROM document_correspondents WHERE document_id=?`, int64(1), true},
+		{"remove_storage_path", nil, `SELECT storage_path_id IS NULL FROM documents WHERE id=?`, int64(1), true},
+		{"remove_custom_field", map[string]any{"field_id": fieldID}, `SELECT count(*) FROM document_custom_field_values WHERE document_id=?`, int64(0), false},
+		{"discard", nil, `SELECT trashed_at IS NOT NULL FROM documents WHERE id=?`, int64(1), false},
 	}
 	if len(tests) != len(automations.BuiltinActions()) {
 		t.Fatal("parity cases must cover every built-in")
@@ -247,8 +249,24 @@ func TestRegistryBuiltinActionParity(t *testing.T) {
 			actions := []automations.Action{{Kind: tc.kind, Params: tc.params}}
 			_, err := store.Update(ctx, 1, saved.ID, automations.AutomationPatch{Actions: &actions})
 			must(t, err)
-			for range 2 {
-				must(t, automations.ApplyOnDocumentAdded(ctx, d, registry, log, docID))
+			var jobsBefore int
+			must(t, d.Read.QueryRowContext(ctx,
+				`SELECT count(*) FROM jobs WHERE kind='render' AND doc_id=?`, docID).Scan(&jobsBefore))
+			must(t, automations.ApplyOnDocumentAdded(ctx, d, registry, log, docID))
+			var jobsAfterChange int
+			must(t, d.Read.QueryRowContext(ctx,
+				`SELECT count(*) FROM jobs WHERE kind='render' AND doc_id=?`, docID).Scan(&jobsAfterChange))
+			must(t, automations.ApplyOnDocumentAdded(ctx, d, registry, log, docID))
+			var jobsAfterReplay int
+			must(t, d.Read.QueryRowContext(ctx,
+				`SELECT count(*) FROM jobs WHERE kind='render' AND doc_id=?`, docID).Scan(&jobsAfterReplay))
+			wantJobs := jobsBefore
+			if tc.wantRender {
+				wantJobs++
+			}
+			if jobsAfterChange != wantJobs || jobsAfterReplay != wantJobs {
+				t.Fatalf("render jobs before/change/replay = %d/%d/%d, want %d/%d/%d",
+					jobsBefore, jobsAfterChange, jobsAfterReplay, jobsBefore, wantJobs, wantJobs)
 			}
 			var got any
 			must(t, d.Read.QueryRowContext(ctx, tc.query, docID).Scan(&got))

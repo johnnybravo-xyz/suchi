@@ -20,11 +20,19 @@ import (
 // EnqueueMove is the helper mutator sites call inside their own tx.
 // One-liner replacement for "hard-wire a Renderer everywhere" — the
 // mutator just says "this doc's metadata changed" and the dispatcher
-// picks it up post-commit. Each call appends a durable job.
+// picks it up post-commit. Each call appends a durable job. The renderer
+// projects only live documents, so a trashed document gets no job; restore
+// enqueues one.
 func EnqueueMove(ctx context.Context, tx *sql.Tx, docID int64) error {
-	var systemID int64
-	if err := tx.QueryRowContext(ctx, "SELECT system_id FROM documents WHERE id = ?", docID).Scan(&systemID); err != nil {
+	var (
+		systemID int64
+		trashed  bool
+	)
+	if err := tx.QueryRowContext(ctx, "SELECT system_id, trashed_at IS NOT NULL FROM documents WHERE id = ?", docID).Scan(&systemID, &trashed); err != nil {
 		return err
+	}
+	if trashed {
+		return nil
 	}
 	return jobs.Enqueue(ctx, tx, Kind, docID, systemID, "{}")
 }
@@ -33,13 +41,20 @@ func EnqueueMove(ctx context.Context, tx *sql.Tx, docID int64) error {
 // template reads the owner's email. It runs inside the identity mutation so a
 // committed email and its rendered projection can never diverge permanently.
 func EnqueueOwnerTemplateMoves(ctx context.Context, tx *sql.Tx, ownerID int64) error {
+	return EnqueueTemplateMoves(ctx, tx, "owner", "d.owner_id = ?", ownerID)
+}
+
+// EnqueueTemplateMoves queues every live document matched by filter (a fixed
+// SQL predicate over alias d) whose effective template reads variable. Callers
+// run it inside the transaction that changes that variable's value.
+func EnqueueTemplateMoves(ctx context.Context, tx *sql.Tx, variable, filter string, args ...any) error {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT d.id, d.system_id, COALESCE(sp.path, ''), js.taxonomy
 		FROM documents AS d
 		JOIN jd_systems AS js ON js.id = d.system_id
 		LEFT JOIN storage_paths AS sp ON sp.id = d.storage_path_id
-		WHERE d.owner_id = ? AND d.trashed_at IS NULL
-		ORDER BY d.id`, ownerID)
+		WHERE d.trashed_at IS NULL AND (`+filter+`)
+		ORDER BY d.id`, args...)
 	if err != nil {
 		return err
 	}
@@ -65,7 +80,7 @@ func EnqueueOwnerTemplateMoves(ctx context.Context, tx *sql.Tx, ownerID int64) e
 				template = DefaultTemplateJD
 			}
 		}
-		if paths.UsesVariable(template, "owner") {
+		if paths.UsesVariable(template, variable) {
 			targets = append(targets, target)
 		}
 	}
@@ -85,8 +100,8 @@ func EnqueueOwnerTemplateMoves(ctx context.Context, tx *sql.Tx, ownerID int64) e
 }
 
 // Kind is the job kind mutators enqueue when they change any metadata
-// field the storage-path template reads (title, correspondent,
-// JD category, tags, storage_path, archive_serial).
+// field the storage-path template reads (title, correspondent, JD category,
+// tags, storage_path, owner, or archive serial).
 const Kind = "render"
 
 // Handler is the Subscriber wrapper. `nil` Renderer → nil handler; the

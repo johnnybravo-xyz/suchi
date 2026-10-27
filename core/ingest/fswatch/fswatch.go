@@ -33,6 +33,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/mimeutil"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/eml"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
+	"github.com/johnnybravo-xyz/suchi/core/render/view"
 	"github.com/johnnybravo-xyz/suchi/core/taxonomy"
 )
 
@@ -329,6 +330,10 @@ func (w *Watcher) ingestOpen(ctx context.Context, path, relativePath string, f *
 				`UPDATE documents SET trashed_at = NULL, updated_at = ? WHERE id = ?`,
 				time.Now().Unix(), trashedID,
 			); err != nil {
+				return err
+			}
+			// Edits made in Trash queue no render work, so restore re-renders.
+			if err := view.EnqueueMove(ctx, tx, trashedID); err != nil {
 				return err
 			}
 			docID, deduped = trashedID, true

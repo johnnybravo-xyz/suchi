@@ -14,6 +14,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
+	"github.com/johnnybravo-xyz/suchi/core/render/view"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
@@ -465,8 +466,17 @@ func (s *Server) PatchSystem(w http.ResponseWriter, r *http.Request) {
 		if current.Role != "admin" {
 			return errSystemUnavailable
 		}
-		_, err = tx.ExecContext(r.Context(), "UPDATE jd_systems SET name = ?, updated_at = ? WHERE id = ?", body.Name, time.Now().Unix(), system.ID)
-		return err
+		var beforeName string
+		if err := tx.QueryRowContext(r.Context(), "SELECT name FROM jd_systems WHERE id = ?", system.ID).Scan(&beforeName); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(r.Context(), "UPDATE jd_systems SET name = ?, updated_at = ? WHERE id = ?", body.Name, time.Now().Unix(), system.ID); err != nil {
+			return err
+		}
+		if body.Name == beforeName {
+			return nil
+		}
+		return view.EnqueueTemplateMoves(r.Context(), tx, "jd.system.name", "d.system_id = ?", system.ID)
 	})
 	if errors.Is(err, errSystemUnavailable) {
 		s.writeError(w, http.StatusForbidden, "forbidden", "admin role required")

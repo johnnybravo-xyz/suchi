@@ -45,6 +45,14 @@ Notable user-visible changes to Suchi are recorded here.
   write keeps failing, the queue moves on and the job runs again after the next
   restart.
 
+- Rendered folder paths now follow every metadata change they display. Bulk
+  correspondent, category, tag, and folder-layout edits; built-in automation
+  title, tag, correspondent, category, layout, and owner actions; correspondent
+  and tag renames or deletions; filing-system renames; filing-tree imports; and
+  clearing the classifier's review tag queue the folder move in the same
+  transaction as the change. Unchanged replays and edits in
+  Trash add no job, and restoring a document re-renders it.
+
 - The Dashboard's **Recently added** list sorts and dates documents by when
   Suchi added them. An emailed attachment or imported file with an older
   upstream date no longer sinks below newer uploads. Document lists accept

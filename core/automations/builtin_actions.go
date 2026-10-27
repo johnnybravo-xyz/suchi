@@ -38,13 +38,20 @@ func BuiltinActions() []ActionDefinition {
 				if err != nil {
 					return err
 				}
-				_, err = tx.ExecContext(ctx, `
+				result, err := tx.ExecContext(ctx, `
 					UPDATE documents
 					SET title = ?, title_owner = 'rule'
 					WHERE id = ? AND title_owner <> 'human'
 					  AND (title <> ? OR title_owner <> 'rule')
 				`, title, target.DocID, title)
-				return err
+				if err != nil {
+					return err
+				}
+				changed, err := result.RowsAffected()
+				if err != nil || changed == 0 {
+					return err
+				}
+				return view.EnqueueMove(ctx, tx, target.DocID)
 			},
 		},
 		{Kind: "assign_tags",
@@ -57,15 +64,27 @@ func BuiltinActions() []ActionDefinition {
 			},
 			Execute: func(ctx context.Context, tx *sql.Tx, target ActionTarget, params map[string]any) error {
 				ids := intList(params["tag_ids"])
+				changed := false
 				for _, id := range ids {
+					var present bool
+					if err := tx.QueryRowContext(ctx,
+						`SELECT EXISTS (SELECT 1 FROM document_tags WHERE document_id=? AND tag_id=?)`,
+						target.DocID, id,
+					).Scan(&present); err != nil {
+						return err
+					}
 					if _, err := tx.ExecContext(ctx,
 						`INSERT INTO document_tags(document_id, tag_id) VALUES (?, ?)
 				 ON CONFLICT(document_id, tag_id) DO UPDATE SET classifier_owned = 0`,
 						target.DocID, id); err != nil {
 						return err
 					}
+					changed = changed || !present
 				}
-				return nil
+				if !changed {
+					return nil
+				}
+				return view.EnqueueMove(ctx, tx, target.DocID)
 			},
 		},
 		{Kind: "assign_correspondent",
@@ -77,7 +96,17 @@ func BuiltinActions() []ActionDefinition {
 				if id == 0 {
 					return errors.New("assign_correspondent: correspondent_id required")
 				}
-				return taxonomy.SetPrimaryCorrespondent(ctx, tx, target.DocID, id)
+				before, err := taxonomy.PrimaryCorrespondentID(ctx, tx, target.DocID)
+				if err != nil {
+					return err
+				}
+				if err := taxonomy.SetPrimaryCorrespondent(ctx, tx, target.DocID, id); err != nil {
+					return err
+				}
+				if before.Valid && before.Int64 == id {
+					return nil
+				}
+				return view.EnqueueMove(ctx, tx, target.DocID)
 			},
 		},
 		{Kind: "assign_jd_category",
@@ -96,9 +125,18 @@ func BuiltinActions() []ActionDefinition {
 					`SELECT 1 FROM jd_categories WHERE system_id = ? AND id = ?`, target.SystemID, id).Scan(&exists); err != nil {
 					return fmt.Errorf("assign_jd_category: unknown category id %d", id)
 				}
-				_, err := tx.ExecContext(ctx,
-					`UPDATE documents SET jd_category_id = ? WHERE id = ?`, id, target.DocID)
-				return err
+				var before int64
+				if err := tx.QueryRowContext(ctx, `SELECT jd_category_id FROM documents WHERE id=?`, target.DocID).Scan(&before); err != nil {
+					return err
+				}
+				if _, err := tx.ExecContext(ctx,
+					`UPDATE documents SET jd_category_id = ? WHERE id = ?`, id, target.DocID); err != nil {
+					return err
+				}
+				if before == id {
+					return nil
+				}
+				return view.EnqueueMove(ctx, tx, target.DocID)
 			},
 		},
 		{Kind: "assign_storage_path",
@@ -113,13 +151,14 @@ func BuiltinActions() []ActionDefinition {
 				var (
 					template string
 					asn      sql.NullInt64
+					before   sql.NullInt64
 				)
 				if err := tx.QueryRowContext(ctx, `
-					SELECT sp.path, d.archive_serial_number
+					SELECT sp.path, d.archive_serial_number, d.storage_path_id
 					FROM storage_paths sp
 					JOIN documents d ON d.system_id = sp.system_id
 					WHERE sp.id = ? AND d.id = ?
-				`, id, target.DocID).Scan(&template, &asn); err != nil {
+				`, id, target.DocID).Scan(&template, &asn, &before); err != nil {
 					return fmt.Errorf("assign_storage_path: unavailable folder layout: %w", err)
 				}
 				if renderpaths.UsesVariable(template, "asn") && !asn.Valid {
@@ -128,6 +167,9 @@ func BuiltinActions() []ActionDefinition {
 				if _, err := tx.ExecContext(ctx,
 					`UPDATE documents SET storage_path_id = ? WHERE id = ?`, id, target.DocID); err != nil {
 					return err
+				}
+				if before.Valid && before.Int64 == id {
+					return nil
 				}
 				return view.EnqueueMove(ctx, tx, target.DocID)
 			},
@@ -141,9 +183,17 @@ func BuiltinActions() []ActionDefinition {
 				if id == 0 {
 					return errors.New("assign_owner: owner_id required")
 				}
-				_, err := tx.ExecContext(ctx,
-					`UPDATE documents SET owner_id = ? WHERE id = ?`, id, target.DocID)
-				return err
+				result, err := tx.ExecContext(ctx,
+					`UPDATE documents SET owner_id = ? WHERE id = ? AND owner_id IS NOT ?`,
+					id, target.DocID, id)
+				if err != nil {
+					return err
+				}
+				changed, err := result.RowsAffected()
+				if err != nil || changed == 0 {
+					return err
+				}
+				return view.EnqueueMove(ctx, tx, target.DocID)
 			},
 		},
 		{Kind: "remove_tags",
@@ -156,19 +206,31 @@ func BuiltinActions() []ActionDefinition {
 			},
 			Execute: func(ctx context.Context, tx *sql.Tx, target ActionTarget, params map[string]any) error {
 				ids := intList(params["tag_ids"])
+				changed := false
 				for _, id := range ids {
-					if _, err := tx.ExecContext(ctx,
+					result, err := tx.ExecContext(ctx,
 						`DELETE FROM document_tags WHERE document_id = ? AND tag_id = ?`,
-						target.DocID, id); err != nil {
+						target.DocID, id)
+					if err != nil {
 						return err
 					}
+					removed, err := result.RowsAffected()
+					if err != nil {
+						return err
+					}
+					changed = changed || removed != 0
 				}
 				// A validated rule records removal intent even when no row existed or
 				// only a classifier-owned marker was deleted (neither fires the human
 				// tag trigger). In-flight and queued suggestions must become stale.
-				_, err := tx.ExecContext(ctx,
-					`UPDATE documents SET tags_revision = tags_revision + 1 WHERE id = ?`, target.DocID)
-				return err
+				if _, err := tx.ExecContext(ctx,
+					`UPDATE documents SET tags_revision = tags_revision + 1 WHERE id = ?`, target.DocID); err != nil {
+					return err
+				}
+				if !changed {
+					return nil
+				}
+				return view.EnqueueMove(ctx, tx, target.DocID)
 			},
 		},
 		{Kind: "remove_storage_path",
@@ -176,8 +238,14 @@ func BuiltinActions() []ActionDefinition {
 				return nil
 			},
 			Execute: func(ctx context.Context, tx *sql.Tx, target ActionTarget, params map[string]any) error {
-				if _, err := tx.ExecContext(ctx,
-					`UPDATE documents SET storage_path_id = NULL WHERE id = ?`, target.DocID); err != nil {
+				result, err := tx.ExecContext(ctx,
+					`UPDATE documents SET storage_path_id = NULL
+					 WHERE id = ? AND storage_path_id IS NOT NULL`, target.DocID)
+				if err != nil {
+					return err
+				}
+				changed, err := result.RowsAffected()
+				if err != nil || changed == 0 {
 					return err
 				}
 				return view.EnqueueMove(ctx, tx, target.DocID)
@@ -197,16 +265,28 @@ func BuiltinActions() []ActionDefinition {
 			},
 			Execute: func(ctx context.Context, tx *sql.Tx, target ActionTarget, params map[string]any) error {
 				ids := intList(params["correspondent_ids"])
+				before, err := taxonomy.PrimaryCorrespondentID(ctx, tx, target.DocID)
+				if err != nil {
+					return err
+				}
 				if err := taxonomy.RemoveCorrespondents(ctx, tx, target.DocID, ids); err != nil {
 					return err
 				}
-				if len(ids) == 0 {
+				if len(ids) != 0 {
+					// A targeted removal is explicit intent even if both links were absent.
+					if _, err := tx.ExecContext(ctx,
+						`UPDATE documents SET correspondent_revision = correspondent_revision + 1 WHERE id = ?`, target.DocID); err != nil {
+						return err
+					}
+				}
+				after, err := taxonomy.PrimaryCorrespondentID(ctx, tx, target.DocID)
+				if err != nil {
+					return err
+				}
+				if before == after {
 					return nil
 				}
-				// A targeted removal is explicit intent even if both links were absent.
-				_, err := tx.ExecContext(ctx,
-					`UPDATE documents SET correspondent_revision = correspondent_revision + 1 WHERE id = ?`, target.DocID)
-				return err
+				return view.EnqueueMove(ctx, tx, target.DocID)
 			},
 		},
 		{Kind: "assign_custom_field",

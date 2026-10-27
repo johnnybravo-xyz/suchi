@@ -13,6 +13,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
+	"github.com/johnnybravo-xyz/suchi/core/render/view"
 	"github.com/johnnybravo-xyz/suchi/core/slug"
 )
 
@@ -259,6 +260,16 @@ func (s *Server) UpdateTag(w http.ResponseWriter, r *http.Request) {
 		if current.Role != "admin" {
 			return errNotFound
 		}
+		var beforeName string
+		if in.Name != nil {
+			if err := tx.QueryRowContext(r.Context(),
+				`SELECT name FROM tags WHERE id = ?`, id).Scan(&beforeName); err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return errNotFound
+				}
+				return err
+			}
+		}
 		res, err := tx.ExecContext(r.Context(),
 			"UPDATE tags SET "+strings.Join(sets, ", ")+" WHERE id = ?",
 			args...)
@@ -277,6 +288,9 @@ func (s *Server) UpdateTag(w http.ResponseWriter, r *http.Request) {
 				`UPDATE document_tags SET classifier_owned = 0 WHERE tag_id = ?`, id); err != nil {
 				return err
 			}
+		}
+		if in.Name != nil && strings.TrimSpace(*in.Name) != beforeName {
+			return view.EnqueueTemplateMoves(r.Context(), tx, "tag_list", taggedDocumentFilter, id)
 		}
 		return nil
 	})
@@ -325,6 +339,10 @@ func (s *Server) DeleteTag(w http.ResponseWriter, r *http.Request) {
 		}
 		if current.Role != "admin" {
 			return errNotFound
+		}
+		// Queue before the cascade removes the links that select them.
+		if err := view.EnqueueTemplateMoves(r.Context(), tx, "tag_list", taggedDocumentFilter, id); err != nil {
+			return err
 		}
 		if _, err := tx.ExecContext(r.Context(),
 			`UPDATE tags SET parent_id = NULL WHERE parent_id = ?`, id); err != nil {
@@ -419,6 +437,11 @@ func (s *Server) DeleteTags(w http.ResponseWriter, r *http.Request) {
 		if count != len(in.IDs) {
 			return errNotFound
 		}
+		// Queue before the cascade removes the links that select them.
+		if err := view.EnqueueTemplateMoves(r.Context(), tx, "tag_list",
+			`d.id IN (SELECT document_id FROM document_tags WHERE tag_id IN (`+placeholders+`))`, args[1:]...); err != nil {
+			return err
+		}
 		// Detach descendants before DELETE even on already-migrated databases
 		// whose parent FK still cascades. Selected children are removed below.
 		if _, err := tx.ExecContext(r.Context(),
@@ -444,6 +467,10 @@ func (s *Server) DeleteTags(w http.ResponseWriter, r *http.Request) {
 	})
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// taggedDocumentFilter selects documents carrying the bound tag, whose name
+// the rendered `tag_list` variable reads.
+const taggedDocumentFilter = `d.id IN (SELECT document_id FROM document_tags WHERE tag_id = ?)`
 
 // SetTagParent — PATCH /api/tags/{id}/parent. Body:
 // {"parent_id": <int-or-null>}. Admin bypasses; a grantee with change

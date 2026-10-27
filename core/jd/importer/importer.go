@@ -108,31 +108,30 @@ func Apply(ctx context.Context, d *db.DB, log *slog.Logger, pf *presetfile.Prese
 				return err
 			}
 		}
-		if plan.diff.Mode == "replace" || plan.destination.Introduce {
-			// First introduction also relocates every live original-archive
-			// projection, without extraction, classification or automation.
-			rows, err := tx.QueryContext(ctx, `SELECT id FROM documents WHERE trashed_at IS NULL AND (system_id=? OR (? AND system_id=?)) ORDER BY id`, systemID, plan.destination.Introduce, systems.DefaultID)
-			if err != nil {
-				return err
-			}
-			var ids []int64
-			for rows.Next() {
-				var id int64
-				if err := rows.Scan(&id); err != nil {
-					rows.Close()
-					return err
-				}
-				ids = append(ids, id)
-			}
-			if err := rows.Err(); err != nil {
+		// Any apply can rename areas or categories, and first introduction adds
+		// the system root, so every live projection is moved without extraction,
+		// classification or automation; unchanged paths are no-ops.
+		rows, err := tx.QueryContext(ctx, `SELECT id FROM documents WHERE trashed_at IS NULL AND (system_id=? OR (? AND system_id=?)) ORDER BY id`, systemID, plan.destination.Introduce, systems.DefaultID)
+		if err != nil {
+			return err
+		}
+		var ids []int64
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
 				rows.Close()
 				return err
 			}
+			ids = append(ids, id)
+		}
+		if err := rows.Err(); err != nil {
 			rows.Close()
-			for _, id := range ids {
-				if err := view.EnqueueMove(ctx, tx, id); err != nil {
-					return err
-				}
+			return err
+		}
+		rows.Close()
+		for _, id := range ids {
+			if err := view.EnqueueMove(ctx, tx, id); err != nil {
+				return err
 			}
 		}
 		plan.diff.Applied = true

@@ -159,3 +159,19 @@ func TestLegacyReservedTreeFailsWithoutMutation(t *testing.T) {
 		t.Fatal("partial import into legacy tree")
 	}
 }
+
+func TestMergeQueuesRenderedMovesForLiveDocuments(t *testing.T) {
+	d := openTestDB(t)
+	apply(t, d, smallPreset(t), importer.Options{})
+	filed := document(t, d, "Electricity bill", "content")
+	if _, err := d.Write.ExecContext(t.Context(), `UPDATE documents SET jd_category_id=(SELECT id FROM jd_categories WHERE system_id=1 AND code=11) WHERE id=?`, filed); err != nil {
+		t.Fatal(err)
+	}
+	pf := smallPreset(t)
+	pf.ID = "incoming"
+	pf.Areas[0].Categories[0].Name = "Utilities"
+	apply(t, d, pf, importer.Options{Replacements: map[int]bool{11: true}})
+	if n := count(t, d, `SELECT COUNT(*) FROM jobs WHERE kind='render' AND doc_id=?`, filed); n != 1 {
+		t.Fatalf("renamed category render jobs=%d, want 1", n)
+	}
+}

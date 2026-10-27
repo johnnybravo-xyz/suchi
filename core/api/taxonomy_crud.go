@@ -438,6 +438,16 @@ func (s *Server) taxonomyUpdate(w http.ResponseWriter, r *http.Request, table st
 		if !allowed {
 			return errNotFound
 		}
+		var beforeName string
+		if table == "correspondents" && in.Name != nil {
+			if err := tx.QueryRowContext(r.Context(),
+				"SELECT name FROM correspondents WHERE id = ?", id).Scan(&beforeName); err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return errNotFound
+				}
+				return err
+			}
+		}
 		res, err := tx.ExecContext(r.Context(),
 			"UPDATE "+table+" SET "+strings.Join(sets, ", ")+" WHERE id = ?",
 			args...)
@@ -450,6 +460,9 @@ func (s *Server) taxonomyUpdate(w http.ResponseWriter, r *http.Request, table st
 		}
 		if n == 0 {
 			return errNotFound
+		}
+		if table == "correspondents" && in.Name != nil && strings.TrimSpace(*in.Name) != beforeName {
+			return view.EnqueueTemplateMoves(r.Context(), tx, "correspondent", senderFilter, id)
 		}
 		if withPath {
 			enqueue := in.Path != nil
@@ -539,6 +552,12 @@ func (s *Server) taxonomyDelete(w http.ResponseWriter, r *http.Request, table st
 				return err
 			}
 		}
+		if table == "correspondents" {
+			// Queue before the cascade removes the sender links that select them.
+			if err := view.EnqueueTemplateMoves(r.Context(), tx, "correspondent", senderFilter, id); err != nil {
+				return err
+			}
+		}
 		res, err := tx.ExecContext(r.Context(),
 			"DELETE FROM "+table+" WHERE id = ?", id)
 		if err != nil {
@@ -610,5 +629,8 @@ func enqueueRenderedLayoutDocuments(ctx context.Context, tx *sql.Tx, layoutID in
 	}
 	return nil
 }
+
+// senderFilter selects documents listing the bound correspondent as a sender.
+const senderFilter = `d.id IN (SELECT document_id FROM document_correspondents WHERE correspondent_id = ? AND role = 'sender')`
 
 // isUniqueViolation is defined in core/api/setup.go; reused here.
