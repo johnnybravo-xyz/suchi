@@ -40,10 +40,14 @@ the line below combines format, size, trash date, and the retained category
 name. The deletion deadline is a day countdown with the date as its tooltip,
 shown as an amber pill only during the final week. The empty state remains
 inside the card. Trash links use `#/doc/{id}` and the same detail owner. Server
-`trashed_at`, `deletes_at` and `owner_id` select read-only recovery; skip
-versions, similarity and access-management reads. Restore reloads that document;
-confirmed deletion returns to Trash. Actions move below the document details on
-mobile. Server authorization still governs blobs.
+`trashed_at`, `deletes_at` and `owner_id` select read-only recovery. Detail clears
+route-local date results and the access dialog's unsent person and level before
+loading the next document, so its early Trash return cannot expose a live
+document's accepted dates or calendar export, and one document's access choice
+is never preselected on another. Trash also skips versions, similarity and
+access-management reads. Restore reloads
+that document; confirmed deletion returns to Trash. Actions move below the
+document details on mobile. Server authorization still governs blobs.
 
 Detail reloads only when its document ID changes or an explicit action requests
 refresh. Arrival of sidebar categories must not restart reads or discard edits.

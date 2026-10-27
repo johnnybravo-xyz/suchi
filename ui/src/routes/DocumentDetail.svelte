@@ -304,6 +304,7 @@
     replacementBusy = false
     replacementError = ''
     customFieldDefinitions = []
+    documentDates = []
     customFieldsLoading = false
     customFieldsError = ''
     backlinks = { count: 0, results: [], next: null, previous: null }
@@ -322,6 +323,7 @@
     relatedTab = selectedRelatedTab
     access = null
     canManageAccess = false
+    accessDraft = { principal: '', perm_bits: '1' }
     editingTitle = false
     titleOwnerBusy = false
     editingLanguages = false

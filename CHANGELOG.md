@@ -73,6 +73,11 @@ Notable user-visible changes to Suchi are recorded here.
   value stays literal. Fixed and metadata-only rules can still refresh
   rule-owned titles.
 
+- Opening a trashed document after a live document now clears the prior
+  document's accepted dates before the read-only Trash view renders, including
+  its calendar export action. Moving to another document also clears a person
+  or access level picked but not added in the access dialog.
+
 - The Dashboard's **Recently added** list sorts and dates documents by when
   Suchi added them. An emailed attachment or imported file with an older
   upstream date no longer sinks below newer uploads. Document lists accept

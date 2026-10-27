@@ -7184,6 +7184,78 @@ test('shows scoped calendar loading and retry before its empty state', async ({ 
   await expect(page.locator('.month-grid')).toHaveCount(0)
 })
 
+test('clears live document dates before showing a trashed document', async ({ page }) => {
+  const now = Math.floor(Date.now() / 1000)
+  const intelligenceQueries = []
+  await mockAPI(page, {
+    filingTreeChosen: true,
+    capabilities: ['archive_intelligence'],
+    intelligenceQueries,
+    documentDetails: {
+      42: { document: { title: 'Live renewal notice' } },
+    },
+    trashDocuments: [{
+      id: 31,
+      title: 'Trashed renewal notice',
+      mime_type: 'application/pdf',
+      trashed_at: now - 86400,
+      deletes_at: now + 29 * 86400,
+    }],
+    intelligence: query => ({
+      results: query.document_ids === '42'
+        ? [{
+            id: 9,
+            document_id: 42,
+            document_title: 'Live renewal notice',
+            type: 'date',
+            role: 'renewal',
+            status: 'accepted',
+            reviewed_at: now,
+            value: { date: '2026-11-20', precision: 'day' },
+            sort_value: '2026-11-20',
+          }]
+        : [],
+    }),
+  })
+  await page.goto('/#/doc/42')
+  const dates = page.locator('.document-dates')
+  await expect(dates).toContainText('Renewal')
+  await expect(dates.getByRole('button', { name: 'Add to calendar', exact: true })).toBeVisible()
+
+  await page.evaluate(() => { location.hash = '#/doc/31' })
+  await expect(page.getByRole('heading', { name: 'Trashed renewal notice', exact: true })).toBeVisible()
+  await expect(page.getByRole('region', { name: 'Trashed document', exact: true })).toBeVisible()
+  await expect(page.locator('.document-dates')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Add to calendar', exact: true })).toHaveCount(0)
+  expect(intelligenceQueries.filter(query => query.document_ids === '31')).toHaveLength(0)
+})
+
+test('does not carry an unsent access choice to the next document', async ({ page }) => {
+  await mockAPI(page, {
+    documentDetails: {
+      42: { document: { title: 'Lease agreement' } },
+      43: { document: { title: 'Insurance policy' } },
+    },
+  })
+  await page.route('**/api/acls/document/*', route => route.fulfill({ json: {
+    results: [],
+    principals: [{ kind: 'user', id: 7, name: 'Member A', email: 'member@example.test' }],
+  } }))
+  await page.goto('/#/doc/42')
+  await page.getByRole('button', { name: 'Access', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Document access' })
+  await dialog.getByLabel('Person or group').selectOption('user:7')
+  await dialog.getByLabel('Access level').selectOption('7')
+  await dialog.getByRole('button', { name: 'Close access' }).click()
+
+  await page.evaluate(() => { location.hash = '#/doc/43' })
+  await expect(page.getByRole('heading', { name: 'Insurance policy', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Access', exact: true }).click()
+  await expect(dialog.getByLabel('Person or group')).toHaveValue('')
+  await expect(dialog.getByLabel('Access level')).toHaveValue('1')
+  await expect(dialog.getByRole('button', { name: 'Add' })).toBeDisabled()
+})
+
 test('opens a readable Trash document without overlapping actions and restores its live controls', async ({ page }, testInfo) => {
   const now = Math.floor(Date.now() / 1000)
   const title = 'Household insurance renewal and equipment protection schedule for September 2026.pdf'
