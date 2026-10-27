@@ -32,12 +32,16 @@ import (
 // PATCH next_run_at/attempts inside their own transaction; the dispatcher
 // only owns the baseline.
 const (
-	MaxAttempts       = 5
-	BaseBackoff       = 5 * time.Second
-	MaxBackoff        = 30 * time.Minute
-	PollInterval      = 5 * time.Second
-	DoneRetention     = 7 * 24 * time.Hour
-	donePruneInterval = 24 * time.Hour
+	MaxAttempts             = 5
+	BaseBackoff             = 5 * time.Second
+	MaxBackoff              = 30 * time.Minute
+	PollInterval            = 5 * time.Second
+	DoneRetention           = 7 * 24 * time.Hour
+	donePruneInterval       = 24 * time.Hour
+	finalizationBaseBackoff = 50 * time.Millisecond
+	// Five backoffs total about 1.5s; a longer outage would stall the serial
+	// dispatcher, so the row is left for boot reclamation instead.
+	finalizationAttempts = 6
 )
 
 // ErrTerminal is the sentinel a Subscriber wraps around an error the
@@ -299,7 +303,7 @@ func (d *Dispatcher) runJob(ctx context.Context, r row) {
 	subs := d.subs[r.Kind]
 	if len(subs) == 0 {
 		// Unknown kind is a dead-letter — surface it, do not silently drop.
-		d.markDead(ctx, r.ID, "no subscriber registered for kind "+r.Kind)
+		d.markDead(ctx, r, "no subscriber registered for kind "+r.Kind)
 		d.log.Warn("jobs.no_subscriber", "job_id", r.ID, "kind", r.Kind)
 		return
 	}
@@ -323,67 +327,49 @@ func (d *Dispatcher) runJob(ctx context.Context, r row) {
 		}
 	}
 	if lastErr == nil {
-		d.markDone(ctx, r.ID)
+		d.markDone(ctx, r)
 		return
 	}
 	if errors.Is(lastErr, ErrTerminal) {
-		d.markDead(ctx, r.ID, lastErr.Error())
+		d.markDead(ctx, r, lastErr.Error())
 		return
 	}
 	if r.Attempts+1 >= MaxAttempts {
-		d.markDead(ctx, r.ID, lastErr.Error())
+		d.markDead(ctx, r, lastErr.Error())
 		return
 	}
-	d.markRetry(ctx, r.ID, r.Attempts+1, lastErr.Error())
+	d.markRetry(ctx, r, r.Attempts+1, lastErr.Error())
 }
 
-func (d *Dispatcher) markDone(ctx context.Context, id int64) {
-	if err := d.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `
+func (d *Dispatcher) markDone(ctx context.Context, r row) {
+	d.finalize(ctx, r, "done", "jobs.mark_done.failed", func(ctx context.Context) error {
+		_, err := d.db.ExecWrite(ctx, `
 			UPDATE jobs SET state='done', updated_at=unixepoch() WHERE id=?
-		`, id)
+		`, r.ID)
 		return err
-	}); err != nil {
-		d.log.Error("jobs.mark_done.failed", "job_id", id, "err", err.Error())
-	}
+	})
 }
 
-func (d *Dispatcher) markRetry(ctx context.Context, id int64, attempts int, msg string) {
+func (d *Dispatcher) markRetry(ctx context.Context, r row, attempts int, msg string) {
 	backoff := min(time.Duration(math.Pow(2, float64(attempts-1)))*BaseBackoff, MaxBackoff)
 	next := time.Now().Add(backoff).Unix()
-	if err := d.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `
+	d.finalize(ctx, r, "pending", "jobs.mark_retry.failed", func(ctx context.Context) error {
+		_, err := d.db.ExecWrite(ctx, `
 			UPDATE jobs
 			   SET state='pending', attempts=?, next_run_at=?, last_error=?, updated_at=unixepoch()
 			 WHERE id=?
-		`, attempts, next, msg, id)
+		`, attempts, next, msg, r.ID)
 		return err
-	}); err != nil {
-		d.log.Error("jobs.mark_retry.failed", "job_id", id, "err", err.Error())
-	}
+	})
 }
 
-func (d *Dispatcher) markDead(ctx context.Context, id int64, msg string) {
-	// Snapshot the row so we can carry kind + doc_id + attempts into
-	// the audit event. Read is cheap; the write follows in the same
-	// tx.
-	var (
-		kind     string
-		docID    sql.NullInt64
-		systemID sql.NullInt64
-		attempts int64
-	)
-	_ = d.db.Read.QueryRowContext(ctx,
-		`SELECT kind, doc_id, system_id, attempts FROM jobs WHERE id = ?`,
-		id).Scan(&kind, &docID, &systemID, &attempts)
-
-	if err := d.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `
+func (d *Dispatcher) markDead(ctx context.Context, r row, msg string) {
+	if !d.finalize(ctx, r, "dead", "jobs.mark_dead.failed", func(ctx context.Context) error {
+		_, err := d.db.ExecWrite(ctx, `
 			UPDATE jobs SET state='dead', last_error=?, updated_at=unixepoch() WHERE id=?
-		`, msg, id)
+		`, msg, r.ID)
 		return err
-	}); err != nil {
-		d.log.Error("jobs.mark_dead.failed", "job_id", id, "err", err.Error())
+	}) {
 		return
 	}
 
@@ -396,19 +382,64 @@ func (d *Dispatcher) markDead(ctx context.Context, id int64, msg string) {
 		truncated = truncated[:512] + "…(truncated)"
 	}
 	after := map[string]any{
-		"job_id":   id,
-		"kind":     kind,
-		"attempts": attempts,
+		"job_id":   r.ID,
+		"kind":     r.Kind,
+		"attempts": r.Attempts,
 		"error":    truncated,
 	}
-	if docID.Valid {
-		after["doc_id"] = docID.Int64
+	if r.DocID.Valid {
+		after["doc_id"] = r.DocID.Int64
 	}
-	audit.Log(ctx, d.db, d.log, audit.Event{
-		SystemID: systemID.Int64,
-		Action:   "job.dead", ObjectKind: "job", ObjectID: id,
+	// The dead state is already durable, so record it even during shutdown.
+	audit.Log(context.WithoutCancel(ctx), d.db, d.log, audit.Event{
+		SystemID: r.SystemID.Int64,
+		Action:   "job.dead", ObjectKind: "job", ObjectID: r.ID,
 		After: after,
 	})
+}
+
+// finalize keeps ownership of a completed handler invocation until its state
+// transition is durable, retrying at most finalizationAttempts times. The first
+// write ignores cancellation so a handler finishing during graceful shutdown
+// still persists its result. On shutdown or after the last attempt it gives up
+// and leaves the row running: boot ReclaimOrphaned returns it to pending and
+// the handler replays after restart. It never reruns the subscriber itself.
+func (d *Dispatcher) finalize(ctx context.Context, r row, state, failureMessage string, write func(context.Context) error) bool {
+	writeCtx := context.WithoutCancel(ctx)
+	backoff := finalizationBaseBackoff
+	for attempt := 1; ; attempt++ {
+		err := write(writeCtx)
+		if err == nil {
+			return true
+		}
+		d.log.Error(failureMessage,
+			"job_id", r.ID, "kind", r.Kind, "attempt", attempt, "err", err.Error())
+		if attempt >= finalizationAttempts {
+			d.abandonFinalization(r, state, "retries exhausted")
+			return false
+		}
+
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			d.abandonFinalization(r, state, "context")
+			return false
+		case <-d.stopCh:
+			timer.Stop()
+			d.abandonFinalization(r, state, "stop")
+			return false
+		case <-timer.C:
+		}
+		backoff *= 2
+		writeCtx = ctx
+	}
+}
+
+func (d *Dispatcher) abandonFinalization(r row, state, reason string) {
+	d.log.Warn("jobs.finalize.abandoned",
+		"job_id", r.ID, "kind", r.Kind, "intended_state", state, "reason", reason,
+		"recovery", "left running; boot reclamation replays the handler")
 }
 
 func nullInt64(v int64) any {

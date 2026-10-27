@@ -38,6 +38,13 @@ Notable user-visible changes to Suchi are recorded here.
   refresh no longer reports a successful refile as failed, and late
   access-dialog results no longer land on the next document.
 
+- Completed background handlers no longer leave jobs stuck in `running` when
+  SQLite briefly rejects the final done, retry, or dead-letter update. The
+  dispatcher retries that write for a short time without running the handler
+  again, and saves results from handlers that finish during shutdown. If the
+  write keeps failing, the queue moves on and the job runs again after the next
+  restart.
+
 - The Dashboard's **Recently added** list sorts and dates documents by when
   Suchi added them. An emailed attachment or imported file with an older
   upstream date no longer sinks below newer uploads. Document lists accept
