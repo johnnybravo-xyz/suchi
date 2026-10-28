@@ -37,12 +37,12 @@ var filingSetOrder = []string{
 
 var filingSetSpecs = map[string]filingSetSpec{
 	"life-admin": {
-		FilingSet:    FilingSet{ID: "life-admin", Name: "Life admin", Description: "Identity, insurance, vehicles, memberships, education, and employment.", Lane: 10},
-		SourcePreset: "solo", CategoryKeys: map[int]string{11: "admin.identity", 12: "admin.insurance", 13: "admin.vehicles", 14: "admin.memberships", 15: "admin.education", 16: "admin.employment"},
+		FilingSet:    FilingSet{ID: "life-admin", Name: "Life admin", Description: "Identity, insurance, vehicles, memberships, education, employment, and travel.", Lane: 10},
+		SourcePreset: "solo", CategoryKeys: map[int]string{11: "admin.identity", 12: "admin.insurance", 13: "admin.vehicles", 14: "admin.memberships", 15: "admin.education", 16: "admin.employment", 17: "admin.travel"},
 	},
 	"family-admin": {
-		FilingSet:    FilingSet{ID: "family-admin", Name: "Family admin", Description: "Shared identity, insurance, vehicle, membership, education, and employment records.", Lane: 10},
-		SourcePreset: "household", CategoryKeys: map[int]string{11: "admin.identity", 12: "admin.insurance", 13: "admin.vehicles", 14: "admin.memberships", 15: "admin.education", 16: "admin.employment"},
+		FilingSet:    FilingSet{ID: "family-admin", Name: "Family admin", Description: "Shared identity, insurance, vehicle, membership, education, employment, and travel records.", Lane: 10},
+		SourcePreset: "household", CategoryKeys: map[int]string{11: "admin.identity", 12: "admin.insurance", 13: "admin.vehicles", 14: "admin.memberships", 15: "admin.education", 16: "admin.employment", 17: "admin.travel"},
 	},
 	"clients": {
 		FilingSet:    FilingSet{ID: "clients", Name: "Clients", Description: "Quotes, contracts, invoices, payments, and correspondence.", Lane: 10},

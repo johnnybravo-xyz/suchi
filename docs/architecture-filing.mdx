@@ -94,8 +94,11 @@ later merge additively; reviewed built-in/composed changes may replace category
 meaning explicitly. Refile stays post-Apply and explicit.
 
 Archive setup has no completion mutation: `core/settings.LoadSetupState` projects
-the first-admin time plus the selected system's preset, selected set IDs and
-filing-tree choice. The browser reads it through `GET /api/admin/setup/state`.
+the first-admin time plus the selected system's preset provenance, selected set
+IDs and filing-tree choice. `core/api.SetupState` compares the stored ID, version
+and canonical content hash with the built-in catalog before identifying the
+choice as ready-made; an imported file can reuse a catalog ID without acquiring
+that identity. The browser reads this through `GET /api/admin/setup/state`.
 `POST /api/admin/setup/preset/preview` produces the bound review and
 `POST /api/admin/setup/preset/apply` consumes its `expected_state_hash`.
 

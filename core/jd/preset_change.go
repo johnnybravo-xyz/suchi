@@ -4,8 +4,6 @@ package jd
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -159,12 +157,8 @@ func presetChangeTarget(request PresetChangeRequest) (*presetfile.PresetFile, []
 	if err != nil {
 		return nil, nil, "", err
 	}
-	content, err := json.Marshal(pf)
-	if err != nil {
-		return nil, nil, "", err
-	}
-	hash := sha256.Sum256(content)
-	return pf, setIDs, hex.EncodeToString(hash[:]), nil
+	hash, err := presetFileHash(pf)
+	return pf, setIDs, hash, err
 }
 
 func currentPresetSetIDs(system systems.System) []string {

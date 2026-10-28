@@ -44,6 +44,11 @@ selects pasted content without duplicating server parsing. Schema validation
 stays server-side. Late FileReader/network responses cannot replace new input,
 and conflicting actions are disabled in flight.
 
+Ready-made selection requires `current_preset_builtin` from setup state; an
+imported/custom tree leaves every preset card unselected even when its file ID
+matches a built-in. The current-tree panel remains the source of visible live
+structure.
+
 Preset/composer Preview renders the complete target tree and document counts for
 each collision. The screen proposes replacement, free same-decade remap or skip,
 then re-previews changed choices before Apply sends `expected_state_hash`.

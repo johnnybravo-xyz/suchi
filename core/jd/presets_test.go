@@ -373,7 +373,7 @@ func TestPersonalPresetsUseFourFocusedLanes(t *testing.T) {
 				SELECT
 					(SELECT count(*) FROM jd_areas WHERE system_id=1 AND code_start<>40),
 					(SELECT count(*) FROM jd_categories WHERE system_id=1 AND name IN
-						('Banking','Rent & property','Appliances','Pets','Travel','School & activities','Bills & claims'))`).
+						('Banking','Rent & property','Appliances','Pets','School & activities','Bills & claims'))`).
 				Scan(&areas, &ambiguous); err != nil {
 				t.Fatal(err)
 			}

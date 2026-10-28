@@ -40,6 +40,7 @@
 
   const lanes = $derived([...new Set(sets.map((set) => set.lane))].sort((a, b) => a - b))
   const selectedPreset = $derived(presets.find((preset) => preset.id === selectedPresetID))
+  const targetMissing = $derived(mode === 'presets' && !selectedPreset)
   const blankTarget = $derived(mode === 'presets' ? selectedPreset?.blank : selectedSetIDs.length === 0)
 
   onMount(load)
@@ -67,13 +68,17 @@
       sets = catalog?.sets || []
       maxSets = catalog?.max_sets || 5
       currentPreset = state?.current_preset || ''
+      const currentPresetBuiltIn = !!state?.current_preset_builtin
       currentSetIDs = state?.current_set_ids?.length
         ? state.current_set_ids
-        : (catalog?.recipes?.[currentPreset] || [])
-      if (presets.some((preset) => preset.id === currentPreset)) {
+        : (currentPresetBuiltIn ? (catalog?.recipes?.[currentPreset] || []) : [])
+      if (currentPresetBuiltIn && presets.some((preset) => preset.id === currentPreset)) {
         selectedPresetID = currentPreset
       } else if (currentSetIDs.length) {
+        selectedPresetID = ''
         mode = 'build'
+      } else if (state?.filing_tree_chosen) {
+        selectedPresetID = ''
       }
       selectedSetIDs = [...currentSetIDs]
       currentAreas = groupCategories(categories?.results || categories || [])
@@ -137,6 +142,7 @@
   }
 
   async function review() {
+    if (targetMissing) return
     busy = true
     error = ''
     applied = null
@@ -165,7 +171,7 @@
   }
 
   async function applyChange() {
-    if (blankTarget && !confirmBlank) return
+    if (targetMissing || (blankTarget && !confirmBlank)) return
     busy = true
     error = ''
     try {
@@ -311,7 +317,7 @@
             <p>{translate("filingTreeSettings.refileRunsTheSelectedTreeSActive")}</p>
           </div>
           {#if error}<div class="err" role="alert">{error}</div>{/if}
-          <button class="btn primary review-button" disabled={busy || (blankTarget && !confirmBlank)} onclick={review}>{busy ? translate("filingTreeSettings.working") : translate("filingTreeSettings.reviewChange")}</button>
+          <button class="btn primary review-button" disabled={busy || targetMissing || (blankTarget && !confirmBlank)} onclick={review}>{busy ? translate("filingTreeSettings.working") : translate("filingTreeSettings.reviewChange")}</button>
         </div>
 
         <aside class="current-tree" aria-label={translate("filingTreeSettings.currentFilingTree")}>
@@ -358,7 +364,7 @@
           {#if applied}
             <div class="success" role="status">{translate("filingTreeSettings.filingTreeUpdated")}{#if applied.refile} {translate("filingTreeSettings.refileSummary", { documents: plural("filingTreeSettings.documentCount", applied.refile.documents_scanned), renders: plural("filingTreeSettings.renderCount", applied.refile.renders_queued) })}{/if}</div>
           {:else}
-            <button class="btn primary apply-button" disabled={busy || (blankTarget && !confirmBlank)} onclick={applyChange}>{busy ? translate("filingTreeSettings.applying") : translate("filingTreeSettings.applyReviewedChange")}</button>
+            <button class="btn primary apply-button" disabled={busy || targetMissing || (blankTarget && !confirmBlank)} onclick={applyChange}>{busy ? translate("filingTreeSettings.applying") : translate("filingTreeSettings.applyReviewedChange")}</button>
           {/if}
         </section>
       {/if}

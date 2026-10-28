@@ -20,7 +20,10 @@ package jd
 
 import (
 	"context"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 
@@ -43,11 +46,13 @@ var presetOrder = []string{
 // Preset is one entry in the filing-tree picker. Blank presets carry an
 // explicit opt-in flag so the configuration surface can guard them.
 type Preset struct {
-	ID          string
-	Label       string
-	Description string
-	Tree        Tree
-	Blank       bool
+	ID            string
+	Version       int
+	ContentSHA256 string
+	Label         string
+	Description   string
+	Tree          Tree
+	Blank         bool
 }
 
 // cachedPresets is filled once at first Presets() call. Parsing five
@@ -85,6 +90,13 @@ func PresetByID(id string) (Preset, bool) {
 	return Preset{}, false
 }
 
+// MatchesBuiltInPresetProvenance reports whether the stored import provenance
+// came from Suchi's ready-made picker rather than a custom file with the same ID.
+func MatchesBuiltInPresetProvenance(id string, version int, contentSHA256 string) bool {
+	preset, ok := PresetByID(id)
+	return ok && preset.Version == version && preset.ContentSHA256 == contentSHA256
+}
+
 // loadPreset reads presets/<slug>.toml, parses via presetfile, and
 // bridges into the internal jd.Preset shape.
 func loadPreset(slug string) (Preset, error) {
@@ -92,7 +104,11 @@ func loadPreset(slug string) (Preset, error) {
 	if err != nil {
 		return Preset{}, err
 	}
-	return bridge(pf), nil
+	contentSHA256, err := presetFileHash(pf)
+	if err != nil {
+		return Preset{}, err
+	}
+	return bridge(pf, contentSHA256), nil
 }
 
 // loadPresetFile returns the parsed PresetFile — the taxonomy-file
@@ -106,11 +122,20 @@ func loadPresetFile(slug string) (*presetfile.PresetFile, error) {
 	return presetfile.Parse(raw, presetfile.FormatTOML)
 }
 
+func presetFileHash(pf *presetfile.PresetFile) (string, error) {
+	content, err := json.Marshal(pf)
+	if err != nil {
+		return "", err
+	}
+	hash := sha256.Sum256(content)
+	return hex.EncodeToString(hash[:]), nil
+}
+
 // bridge maps a *presetfile.PresetFile onto the jd.Preset shape.
 // The presetfile schema uses a single Code per area; the internal
 // jd.Tree uses Start/End. Convert Code=10 → Start=10, End=19; mark
 // the inbox category (matching pf.Inbox) with System=true.
-func bridge(pf *presetfile.PresetFile) Preset {
+func bridge(pf *presetfile.PresetFile, contentSHA256 string) Preset {
 	areas := make([]Area, 0, len(pf.Areas))
 	for _, a := range pf.Areas {
 		cats := make([]Category, 0, len(a.Categories))
@@ -130,11 +155,13 @@ func bridge(pf *presetfile.PresetFile) Preset {
 		})
 	}
 	return Preset{
-		ID:          pf.ID,
-		Label:       pf.Name,
-		Description: pf.Story,
-		Tree:        Tree{Areas: areas},
-		Blank:       pf.ID == "blank",
+		ID:            pf.ID,
+		Version:       pf.Version,
+		ContentSHA256: contentSHA256,
+		Label:         pf.Name,
+		Description:   pf.Story,
+		Tree:          Tree{Areas: areas},
+		Blank:         pf.ID == "blank",
 	}
 }
 

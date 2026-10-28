@@ -2384,15 +2384,20 @@ Request:
 ### `GET /api/admin/setup/state`
 
 Admin-only. `started_at` is the first administrator's creation time.
-`current_preset` and `filing_tree_chosen` describe
-the selected `?system=Snn`, not the archive's default system. The preset identifies
-the last imported choice, not proof that the current merged tree equals that file.
-An empty preset string and absent start time are omitted.
+`current_preset`, `current_set_ids` and `filing_tree_chosen` describe the selected
+`?system=Snn`, not the archive's default system. The preset identifies the last
+imported choice, not proof that the current merged tree equals that file.
+`current_preset_builtin` is true only when the stored ID, version and content hash
+match the ready-made tree applied by this Suchi build; a custom import remains
+custom even when it reuses a built-in ID. Empty preset/set values, a false
+`current_preset_builtin` and an absent start time are omitted.
 
 ```json
 {
   "started_at": 1789257600,
   "current_preset": "household",
+  "current_preset_builtin": true,
+  "current_set_ids": ["family-admin", "finance", "health", "home"],
   "filing_tree_chosen": true
 }
 ```

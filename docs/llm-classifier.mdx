@@ -5,7 +5,7 @@ description: "Optional local or hosted model assistance, document questions, and
 
 Suchi ships deterministic automations and local archive matching. The optional
 LLM classifier adds one fixed post-extraction model call for title,
-correspondent, tags, Johnny.Decimal category, model confidence, and language. Up
+correspondent, tags, filing category, model confidence, and language. Up
 to five matching administrator-authored automation questions can join that same
 call; each answer maps only to fixed local metadata actions. The same configured
 model also powers read-only questions with links back to the documents used.
@@ -19,7 +19,7 @@ access. Ask your documents also checks the user's membership and document ACLs.
 The model sees each offered category as its code, area, name and description
 (descriptions are capped at 120 characters), and is asked for the most specific
 fit. Editing a category's description therefore changes where the model files
-borderline documents. See [Johnny.Decimal filing](/jd) for the built-in
+borderline documents. See [Filing trees](/jd) for the built-in
 boundaries.
 
 It uses the OpenAI-compatible chat-completions API and supports local servers

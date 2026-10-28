@@ -17,7 +17,7 @@ Follow `distro/app.Run` to diagnose runtime wiring:
 2. Apply supplied `MigrationSets` in declaration order, each with its own ledger.
 3. Construct one immutable automation registry from explicit `BuiltinActions()`
    plus supplied `Actions`; duplicate or incomplete definitions stop startup.
-4. Establish Johnny.Decimal Inbox invariants; construct auth, CAS, rendering,
+4. Establish filing-tree Inbox invariants; construct auth, CAS, rendering,
    retention, keys and configured integrations. Report unavailable optional parsers.
 5. Construct the durable dispatcher, core subscribers, intake supervisors,
    schedulers and API routes without starting their loops. Seed approval

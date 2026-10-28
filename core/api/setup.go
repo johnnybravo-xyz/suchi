@@ -71,6 +71,9 @@ func (s *Server) SetupState(w http.ResponseWriter, r *http.Request) {
 		s.serverErr(w, "setup.state", err)
 		return
 	}
+	st.CurrentPresetBuiltIn = jd.MatchesBuiltInPresetProvenance(
+		st.CurrentPreset, st.CurrentPresetVersion, st.CurrentPresetSHA256,
+	)
 	s.writeJSON(w, http.StatusOK, st)
 }
 

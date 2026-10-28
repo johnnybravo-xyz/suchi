@@ -26,6 +26,7 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	suchicrypto "github.com/johnnybravo-xyz/suchi/core/crypto"
+	"github.com/johnnybravo-xyz/suchi/core/jd"
 	"github.com/johnnybravo-xyz/suchi/core/settings"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
@@ -109,6 +110,49 @@ func TestSetupStateReturnsOnlyFilingTreeReminderState(t *testing.T) {
 	}
 	if !maps.Equal(state, want) {
 		t.Fatalf("state=%#v want=%#v", state, want)
+	}
+}
+
+func TestSetupStateDistinguishesBuiltInFromCustomImportWithSameID(t *testing.T) {
+	d := openTestDB(t)
+	seedUser(t, d, 1)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if err := jd.ApplyPreset(t.Context(), d, log, "solo", jd.ApplyPresetOpts{SystemID: 1, ActorID: 1}); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{Actions: testActions(t), DB: d, Log: log}
+	readState := func() struct {
+		CurrentPreset        string `json:"current_preset"`
+		CurrentPresetBuiltIn bool   `json:"current_preset_builtin"`
+	} {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/api/admin/setup/state", nil)
+		req = req.WithContext(auth.WithPrincipal(req.Context(), &pluginapi.Principal{
+			Kind: "user", UserID: 1, Role: "admin",
+		}))
+		rec := httptest.NewRecorder()
+		s.SetupState(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		var state struct {
+			CurrentPreset        string `json:"current_preset"`
+			CurrentPresetBuiltIn bool   `json:"current_preset_builtin"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &state); err != nil {
+			t.Fatal(err)
+		}
+		return state
+	}
+
+	if state := readState(); state.CurrentPreset != "solo" || !state.CurrentPresetBuiltIn {
+		t.Fatalf("ready-made state = %+v", state)
+	}
+	if _, err := d.Write.Exec(`UPDATE jd_systems SET preset_sha256='custom-file-hash' WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if state := readState(); state.CurrentPreset != "solo" || state.CurrentPresetBuiltIn {
+		t.Fatalf("custom import state = %+v", state)
 	}
 }
 

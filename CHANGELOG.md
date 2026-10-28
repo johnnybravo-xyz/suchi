@@ -12,6 +12,10 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Changed
 
+- The Solo and Household filing trees add **Travel** (17) under their
+  administration lane for tickets, boarding passes, itineraries, bookings and
+  trip receipts. Existing archives get it when an administrator applies the
+  tree again.
 - Manual release runs with `publish=false` now validate the signed tag and
   release gates without packaging or publishing release artifacts.
 - Document Detail keeps the first three dates of a longer schedule on the card
@@ -31,6 +35,10 @@ Notable user-visible changes to Suchi are recorded here.
   **Nothing in the next 30 days.** instead of disappearing when none are due.
 
 ### Fixed
+
+- Filing tree setup no longer marks **Solo** or another ready-made tree as
+  selected after a custom import, including imports that reuse a built-in ID.
+  The live custom tree remains visible in **Current tree**.
 
 - Enabling two-factor authentication now closes every password-only path to a
   new credential. Sign-in, the `/login` form, and token exchange recheck

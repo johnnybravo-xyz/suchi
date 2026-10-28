@@ -252,10 +252,13 @@ func Delete(ctx context.Context, database *db.DB, key string) error {
 // SetupState is the minimal state needed by archive setup reminders and the
 // filing-tree configuration surface.
 type SetupState struct {
-	StartedAt        *int64   `json:"started_at,omitempty"` // first admin creation
-	CurrentPreset    string   `json:"current_preset,omitempty"`
-	CurrentSetIDs    []string `json:"current_set_ids,omitempty"`
-	FilingTreeChosen bool     `json:"filing_tree_chosen"`
+	StartedAt            *int64   `json:"started_at,omitempty"` // first admin creation
+	CurrentPreset        string   `json:"current_preset,omitempty"`
+	CurrentPresetVersion int      `json:"-"`
+	CurrentPresetSHA256  string   `json:"-"`
+	CurrentPresetBuiltIn bool     `json:"current_preset_builtin,omitempty"`
+	CurrentSetIDs        []string `json:"current_set_ids,omitempty"`
+	FilingTreeChosen     bool     `json:"filing_tree_chosen"`
 }
 
 // LoadSetupState reads global onboarding progress and the selected system's tree.
@@ -271,8 +274,11 @@ func LoadSetupState(ctx context.Context, database *db.DB, systemID int64) (*Setu
 		s.StartedAt = &value
 	}
 	var authoringJSON string
-	if err := database.Read.QueryRowContext(ctx, `SELECT COALESCE(preset_id, ''),COALESCE(authoring_json, '') FROM jd_systems WHERE id = ?`, systemID).
-		Scan(&s.CurrentPreset, &authoringJSON); err != nil {
+	if err := database.Read.QueryRowContext(ctx, `
+		SELECT COALESCE(preset_id, ''),COALESCE(preset_version, 0),
+		       COALESCE(preset_sha256, ''),COALESCE(authoring_json, '')
+		FROM jd_systems WHERE id = ?`, systemID).
+		Scan(&s.CurrentPreset, &s.CurrentPresetVersion, &s.CurrentPresetSHA256, &authoringJSON); err != nil {
 		return nil, err
 	}
 	var authoring struct {

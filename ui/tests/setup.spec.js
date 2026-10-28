@@ -838,6 +838,8 @@ async function mockAPI(page, options = {}) {
     }
     else if (path === '/api/admin/setup/state') body = {
       current_preset: options.currentPreset || '',
+      current_preset_builtin: options.currentPresetBuiltIn ??
+        Object.hasOwn(filingSetCatalog.recipes, options.currentPreset),
       current_set_ids: options.currentSetIDs || filingSetCatalog.recipes[options.currentPreset] || [],
       filing_tree_chosen: taxonomyApplied || (options.filingTreeChosen ?? false),
       started_at: options.setupStartedAt ?? Math.floor(Date.now() / 1000),
@@ -2051,6 +2053,8 @@ test('offers ready-made trees, focused sets, and file tools without blocking oth
   await expect(page.getByRole('heading', { name: 'Filing tree', exact: true })).toBeVisible()
   const filingTrees = page.locator('.preset-grid')
   await expect(filingTrees.getByText('Household', { exact: true })).toBeVisible()
+  await expect(filingTrees.getByRole('radio', { name: /Solo/ })).toBeChecked()
+  await expect(page.getByRole('button', { name: 'Review change' })).toBeEnabled()
   await expect(filingTrees.getByText('Blank', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Build your own' }).click()
   await expect(page.getByRole('button', { name: /Life admin/ })).toBeVisible()
@@ -2063,6 +2067,30 @@ test('offers ready-made trees, focused sets, and file tools without blocking oth
   await expect(page.getByRole('heading', { name: 'Suggestions' })).toBeVisible()
   await page.getByRole('button', { name: /^(Set up model|Manage)$/ }).first().click()
   await expect(page.getByRole('button', { name: 'Local model', exact: true })).toBeVisible()
+})
+
+test('leaves ready-made choices unselected for an imported custom tree', async ({ page }) => {
+  await mockAPI(page, {
+    filingTreeChosen: true,
+    currentPreset: 'solo',
+    currentPresetBuiltIn: false,
+    currentSetIDs: [],
+    jdCategories: [
+      { id: 11, code: 11, name: 'Imported identity', area_code: 10, area_name: 'Custom records' },
+      { id: 49, code: 49, name: 'Inbox', area_code: 40, area_name: 'System', system: true },
+    ],
+  })
+  await page.goto('/#/settings?tab=archive&section=filing-tree')
+
+  await expect(page.locator('.current-tree')).toContainText('10–19 Custom records')
+  await expect(page.locator('.current-tree')).toContainText('11 Imported identity')
+  const readyMade = page.locator('.preset-grid')
+  await expect(readyMade.locator('input[type="radio"]:checked')).toHaveCount(0)
+  await expect(readyMade.locator('.preset-card.on')).toHaveCount(0)
+  const review = page.getByRole('button', { name: 'Review change' })
+  await expect(review).toBeDisabled()
+  await readyMade.getByText('Household', { exact: true }).click()
+  await expect(review).toBeEnabled()
 })
 
 test('creates, previews, and deletes Advanced folder layouts', async ({ page }) => {
@@ -2392,7 +2420,7 @@ test('uses the demo category database id in document links', async ({ page }) =>
   })
   await page.goto('/#/demo')
 
-  const link = page.getByRole('link', { name: /Browse the Johnny Decimal tree/ })
+  const link = page.getByRole('link', { name: /Browse the filing tree/ })
   await expect(link).toHaveAttribute('href', '#/documents?jd=6')
 })
 
