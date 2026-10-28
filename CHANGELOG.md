@@ -39,6 +39,11 @@ Notable user-visible changes to Suchi are recorded here.
   pending mobile pairing code, and token or pairing creation from a browser
   session that enablement revoked now fails with 401.
 
+- Watched files skipped for exceeding `BODY_LIMIT` are now reconsidered after
+  Suchi restarts with a raised or disabled limit. Unchanged files recover
+  without touching the source, while still-oversized and already ingested files
+  remain checkpointed.
+
 - Undoing a refile from Document Detail now restores the document that was
   originally changed, even after navigating away during the Undo window, and
   shows the restored category when that document is open again. A failed label

@@ -129,6 +129,83 @@ func TestRecursiveScanIsReadOnlyAndCheckpointed(t *testing.T) {
 	}
 }
 
+func TestOversizedObservationFollowsCurrentLimit(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		maxBytes int64
+	}{
+		{name: "raised", maxBytes: 1024},
+		{name: "disabled", maxBytes: 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source := t.TempDir()
+			if err := os.WriteFile(filepath.Join(source, "receipt.txt"), []byte("twenty-two byte source"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			watcher, database := newScannerTestWatcher(t, source, true)
+			watcher.cfg.MaxBytes = 1
+			scanTestSource(t, watcher)
+
+			var state string
+			var documents int
+			if err := database.Read.QueryRowContext(t.Context(), `
+				SELECT state, (SELECT count(*) FROM documents)
+				FROM fs_watch_observations WHERE relative_path = 'receipt.txt'
+			`).Scan(&state, &documents); err != nil {
+				t.Fatal(err)
+			}
+			if state != "ignored" || documents != 0 {
+				t.Fatalf("initial state/documents = %q/%d, want ignored/0", state, documents)
+			}
+
+			if _, err := database.ExecWrite(t.Context(), `
+				UPDATE fs_watch_observations SET updated_at = 1
+				WHERE relative_path = 'receipt.txt'
+			`); err != nil {
+				t.Fatal(err)
+			}
+			scanTestSource(t, watcher)
+			var updatedAt int64
+			if err := database.Read.QueryRowContext(t.Context(), `
+				SELECT state, updated_at, (SELECT count(*) FROM documents)
+				FROM fs_watch_observations WHERE relative_path = 'receipt.txt'
+			`).Scan(&state, &updatedAt, &documents); err != nil {
+				t.Fatal(err)
+			}
+			if state != "ignored" || updatedAt != 1 || documents != 0 {
+				t.Fatalf("unchanged oversized state/updated/documents = %q/%d/%d", state, updatedAt, documents)
+			}
+
+			restarted := *watcher
+			restarted.cfg.MaxBytes = test.maxBytes
+			scanTestSource(t, &restarted)
+			scanTestSource(t, &restarted)
+			if err := database.Read.QueryRowContext(t.Context(), `
+				SELECT state, (SELECT count(*) FROM documents)
+				FROM fs_watch_observations WHERE relative_path = 'receipt.txt'
+			`).Scan(&state, &documents); err != nil {
+				t.Fatal(err)
+			}
+			if state != "ingested" || documents != 1 {
+				t.Fatalf("restarted state/documents = %q/%d, want ingested/1", state, documents)
+			}
+
+			lowered := *watcher
+			lowered.cfg.MaxBytes = 1
+			scanTestSource(t, &lowered)
+			if err := database.Read.QueryRowContext(t.Context(), `
+				SELECT state, (SELECT count(*) FROM documents)
+				FROM fs_watch_observations WHERE relative_path = 'receipt.txt'
+			`).Scan(&state, &documents); err != nil {
+				t.Fatal(err)
+			}
+			if state != "ingested" || documents != 1 {
+				t.Fatalf("lowered state/documents = %q/%d, want ingested/1", state, documents)
+			}
+		})
+	}
+}
+
 func TestRecursionCanBeDisabledAndSymlinksAreIgnored(t *testing.T) {
 	source := t.TempDir()
 	if err := os.Mkdir(filepath.Join(source, "nested"), 0o700); err != nil {

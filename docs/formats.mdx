@@ -224,7 +224,9 @@ suchi doesn't care what put the `.eml` on the disk:
 
 - **`INGEST_FS_DIR`** — read an existing folder recursively without changing
   source files. The reconciler polls, so it also works when a NAS mount does not
-  forward local filesystem events. Pair it with
+  forward local filesystem events. Files over `BODY_LIMIT` remain untouched;
+  restarting Suchi with that limit raised or disabled retries the unchanged
+  file. Pair the folder with
   [mbsync/isync](https://isync.sourceforge.io/) or another producer when needed.
 - **Mailboxes UI** — direct IMAP polling. Suchi seals the account credential
   and pulls new messages on the configured interval.

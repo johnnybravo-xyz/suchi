@@ -49,6 +49,8 @@ func (w *Watcher) observationCurrent(ctx context.Context, relativePath string, f
 		// API field edits clear blocked rows at once; the slow retry recovers
 		// from any other definition change without a schema signal.
 		return age < int64(blockedRetryDelay/time.Second), nil
+	case "ignored":
+		return w.cfg.MaxBytes > 0 && fingerprint.Size > w.cfg.MaxBytes, nil
 	default:
 		return true, nil
 	}

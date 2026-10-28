@@ -75,12 +75,15 @@ cross-filesystem directories and excessive depth; source files and sidecars are
 never written, moved or deleted. Sidecar metadata, including a requested ASN,
 is validated and committed with the document and first job; retained ASN
 conflicts leave no partial row. Observation state commits with successful
-document/job creation. Deterministic sidecar/schema errors become blocked for
-the unchanged source fingerprint, while transient failures retry after a delay.
-A sidecar change retries that file, a custom-field definition change through
-the API clears blocked observations for that filing system, and any other
-blocked observation is retried after an hour. All failure state remains in Suchi-owned storage and audit. IMAP
-checkpoints ascending batches of at most 50 UIDs after
+document/job creation. An oversized observation remains current only while its
+unchanged fingerprint exceeds the watcher's present byte cap, so a restart with
+a raised or disabled cap retries it without clearing successful checkpoints.
+Deterministic sidecar/schema errors become blocked for the unchanged source
+fingerprint, while transient failures retry after a delay. A sidecar change
+retries that file, a custom-field definition change through the API clears
+blocked observations for that filing system, and any other blocked observation
+is retried after an hour. All failure state remains in Suchi-owned storage and
+audit. IMAP checkpoints ascending batches of at most 50 UIDs after
 import/bookkeeping; failure stops the cycle while preserving earlier progress,
 and connection tests do not clear polling failures. [Mail intake](/guides/mail-intake)
 owns history/rules/health.
