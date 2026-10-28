@@ -125,6 +125,15 @@ func (p *Plugin) VerifySecondFactor(ctx context.Context, userID int64, code stri
 
 func (use factorUse) consume(ctx context.Context, tx *sql.Tx, userID int64) error {
 	if !use.requiresUsage {
+		var enabled bool
+		if err := tx.QueryRowContext(ctx, `
+			SELECT EXISTS(SELECT 1 FROM local_auth_totp WHERE user_id = ?)
+		`, userID).Scan(&enabled); err != nil {
+			return err
+		}
+		if enabled {
+			return errTwoFactorRequired
+		}
 		return nil
 	}
 	var (

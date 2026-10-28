@@ -4,15 +4,20 @@ package localauth
 
 import (
 	"bytes"
+	cryptorand "crypto/rand"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
 func seedTestTwoFactor(t *testing.T, p *Plugin) ([]byte, int64, string) {
@@ -55,6 +60,156 @@ func responseCode(t *testing.T, rec *httptest.ResponseRecorder) string {
 		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
 	}
 	return response.Code
+}
+
+type oneShotRandomGate struct {
+	delegate io.Reader
+	entered  chan struct{}
+	release  chan struct{}
+	blocked  atomic.Bool
+}
+
+func (g *oneShotRandomGate) Read(p []byte) (int, error) {
+	if !g.blocked.Swap(true) {
+		close(g.entered)
+		<-g.release
+	}
+	return g.delegate.Read(p)
+}
+
+// startTestEnrollment begins authenticator setup for principal and returns the
+// enrollment token with an authenticator code valid for the current step.
+func startTestEnrollment(t *testing.T, p *Plugin, principal *pluginapi.Principal) (string, string) {
+	t.Helper()
+	request, response := factorRequest(t, http.MethodPost, "/api/account/two-factor/enrollment", map[string]string{
+		"current_password": DevAdminPassword,
+	}, principal)
+	p.StartTwoFactorEnrollment(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("enrollment response=%d %q", response.Code, response.Body.String())
+	}
+	var enrollment struct {
+		Secret          string `json:"secret"`
+		EnrollmentToken string `json:"enrollment_token"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &enrollment); err != nil {
+		t.Fatal(err)
+	}
+	secret, err := decodeTOTPSecret(enrollment.Secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := time.Now().Unix() / int64(totpPeriod/time.Second)
+	return enrollment.EnrollmentToken, hotpCode(secret, uint64(step), totpDigits)
+}
+
+func formLogin(p *Plugin) *httptest.ResponseRecorder {
+	form := url.Values{"email": {DevAdminEmail}, "password": {DevAdminPassword}}
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	p.LoginFormHandler(rec, req)
+	return rec
+}
+
+func TestEnrollmentPreventsPreparedPasswordOnlyCredential(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		login func(*testing.T, *Plugin) *httptest.ResponseRecorder
+		// JSON routes answer 401 with a code; the HTML form redirects instead.
+		wantStatus   int
+		wantCode     string
+		wantLocation string
+	}{
+		{name: "session", login: func(t *testing.T, p *Plugin) *httptest.ResponseRecorder {
+			return jsonLogin(t, p, p.LoginHandler, LoginRequest{Email: DevAdminEmail, Password: DevAdminPassword})
+		}, wantStatus: http.StatusUnauthorized, wantCode: "two_factor_required"},
+		{name: "token", login: func(t *testing.T, p *Plugin) *httptest.ResponseRecorder {
+			return jsonLogin(t, p, p.TokenHandler, LoginRequest{Email: DevAdminEmail, Password: DevAdminPassword})
+		}, wantStatus: http.StatusUnauthorized, wantCode: "two_factor_required"},
+		{name: "form", login: func(_ *testing.T, p *Plugin) *httptest.ResponseRecorder {
+			return formLogin(p)
+		}, wantStatus: http.StatusFound, wantLocation: "/login?error=two_factor_required"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			p := openTestPlugin(t)
+			if err := p.EnsureDevAdmin(t.Context(), DevAdminEmail, DevAdminPassword); err != nil {
+				t.Fatal(err)
+			}
+			principal, _ := loginPrincipal(t, p)
+			enrollmentToken, code := startTestEnrollment(t, p, principal)
+
+			// The racing login blocks on its first random read, which happens
+			// after the password check and before the issuance transaction.
+			gate := &oneShotRandomGate{
+				delegate: cryptorand.Reader,
+				entered:  make(chan struct{}),
+				release:  make(chan struct{}),
+			}
+			defer func() { cryptorand.Reader = gate.delegate }()
+			cryptorand.Reader = gate
+			response := make(chan *httptest.ResponseRecorder, 1)
+			go func() { response <- test.login(t, p) }()
+			<-gate.entered
+
+			request, enableResponse := factorRequest(t, http.MethodPost, "/api/account/two-factor", map[string]string{
+				"enrollment_token": enrollmentToken, "authenticator_code": code,
+			}, principal)
+			p.EnableTwoFactor(enableResponse, request)
+			close(gate.release)
+			racingResponse := <-response
+			cryptorand.Reader = gate.delegate
+
+			if enableResponse.Code != http.StatusOK {
+				t.Fatalf("enable response=%d %q", enableResponse.Code, enableResponse.Body.String())
+			}
+			if racingResponse.Code != test.wantStatus ||
+				(test.wantCode != "" && responseCode(t, racingResponse) != test.wantCode) ||
+				racingResponse.Header().Get("Location") != test.wantLocation ||
+				len(racingResponse.Result().Cookies()) != 0 {
+				t.Fatalf("racing response=%d location=%q body=%q",
+					racingResponse.Code, racingResponse.Header().Get("Location"), racingResponse.Body.String())
+			}
+			var sessions, tokens int
+			if err := p.db.Read.QueryRow(`SELECT count(*) FROM sessions`).Scan(&sessions); err != nil {
+				t.Fatal(err)
+			}
+			if err := p.db.Read.QueryRow(`SELECT count(*) FROM api_tokens`).Scan(&tokens); err != nil {
+				t.Fatal(err)
+			}
+			if sessions != 1 || tokens != 0 {
+				t.Fatalf("credentials after enrollment: sessions=%d tokens=%d", sessions, tokens)
+			}
+		})
+	}
+}
+
+func TestEnablingTwoFactorRevokesPendingMobilePairings(t *testing.T) {
+	p := openTestPlugin(t)
+	if err := p.EnsureDevAdmin(t.Context(), DevAdminEmail, DevAdminPassword); err != nil {
+		t.Fatal(err)
+	}
+	principal, _ := loginPrincipal(t, p)
+	if _, err := p.db.ExecWrite(t.Context(), `
+		INSERT INTO mobile_pairings(user_id, system_id, code_hash, name, expires_at)
+		VALUES (?, 1, ?, 'phone', ?)`, principal.UserID, strings.Repeat("a", 64), time.Now().Add(5*time.Minute).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	enrollmentToken, code := startTestEnrollment(t, p, principal)
+	request, response := factorRequest(t, http.MethodPost, "/api/account/two-factor", map[string]string{
+		"enrollment_token": enrollmentToken, "authenticator_code": code,
+	}, principal)
+	p.EnableTwoFactor(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("enable response=%d %q", response.Code, response.Body.String())
+	}
+	var pending int
+	if err := p.db.Read.QueryRow(`SELECT count(*) FROM mobile_pairings WHERE user_id = ?`, principal.UserID).Scan(&pending); err != nil {
+		t.Fatal(err)
+	}
+	if pending != 0 {
+		t.Fatalf("pending mobile pairings after enrollment: %d", pending)
+	}
 }
 
 func TestTwoFactorJSONLoginRequiresAndConsumesTOTP(t *testing.T) {

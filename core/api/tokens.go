@@ -14,13 +14,17 @@
 package api
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
+	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
 // APITokenView is the projection returned by GET /api/tokens/.
@@ -105,6 +109,9 @@ func (s *Server) CreateToken(w http.ResponseWriter, r *http.Request) {
 
 	var token string
 	err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		if err := requireLiveSession(r.Context(), tx, p); err != nil {
+			return err
+		}
 		if _, err := s.currentWriterPrincipal(r.Context(), tx, p, systemID); err != nil {
 			return err
 		}
@@ -112,6 +119,10 @@ func (s *Server) CreateToken(w http.ResponseWriter, r *http.Request) {
 		token, err = s.TokenIssuer(r.Context(), tx, p.UserID, systemID, name, scopes, "")
 		return err
 	})
+	if errors.Is(err, errSessionRevoked) {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+		return
+	}
 	if err != nil {
 		s.serverErr(w, "tokens.mint", err)
 		return
@@ -129,6 +140,26 @@ func (s *Server) CreateToken(w http.ResponseWriter, r *http.Request) {
 		"name":   name,
 		"scopes": scopes,
 	})
+}
+
+var errSessionRevoked = errors.New("api: session revoked")
+
+// requireLiveSession confirms, inside the caller's writer transaction, that the
+// session which authenticated p still exists. Middleware authenticates before
+// the writer is held, so a session deleted meanwhile (logout, password change,
+// two-factor enablement) must not mint a durable credential. Principals without
+// a stored session digest (API tokens, external identities) pass unchanged.
+func requireLiveSession(ctx context.Context, tx *sql.Tx, p *pluginapi.Principal) error {
+	if p.SessionID == "" {
+		return nil
+	}
+	var one int
+	err := tx.QueryRowContext(ctx, `SELECT 1 FROM sessions WHERE id = ? AND user_id = ? AND expires_at > ?`,
+		p.SessionID, p.UserID, time.Now().Unix()).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return errSessionRevoked
+	}
+	return err
 }
 
 // ListTokens — GET /api/tokens/. Returns the caller's own tokens.

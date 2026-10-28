@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
@@ -73,6 +74,52 @@ func TestReadOnlyTokenCannotUseMCPWrites(t *testing.T) {
 			tc.call(rec, req)
 			if rec.Code != http.StatusForbidden {
 				t.Fatalf("status = %d, want 403", rec.Code)
+			}
+		})
+	}
+}
+
+// Middleware authenticates before the writer is held. A session deleted in
+// between (as two-factor enablement does) must not mint a token or pairing.
+func TestRevokedSessionCannotMintCredentials(t *testing.T) {
+	for _, test := range []struct {
+		name, path, table string
+		wantCreated       int
+	}{
+		{name: "api token", path: "/api/tokens/", table: "api_tokens", wantCreated: http.StatusCreated},
+		{name: "mobile pairing", path: "/api/mobile/pairing", table: "mobile_pairings", wantCreated: http.StatusCreated},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			s, _ := newMobilePairingServer(t)
+			principal := memberPrincipal(1)
+			principal.SessionID = strings.Repeat("b", 64)
+			principal.AuthNBy = "local-auth"
+			now := time.Now().Unix()
+			if _, err := s.DB.ExecWrite(t.Context(), `INSERT INTO sessions(id, user_id, created_at, expires_at, last_seen_at)
+				VALUES (?, 1, ?, ?, ?)`, principal.SessionID, now, now+3600, now); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.DB.ExecWrite(t.Context(), `DELETE FROM sessions WHERE user_id = 1`); err != nil {
+				t.Fatal(err)
+			}
+			w := mobilePairingRequest(s, http.MethodPost, test.path, `{}`, principal)
+			if w.Code != http.StatusUnauthorized {
+				t.Fatalf("revoked session status=%d body=%s", w.Code, w.Body.String())
+			}
+			var rows int
+			if err := s.DB.Read.QueryRow(`SELECT count(*) FROM ` + test.table).Scan(&rows); err != nil {
+				t.Fatal(err)
+			}
+			if rows != 0 {
+				t.Fatalf("revoked session created %d %s rows", rows, test.table)
+			}
+
+			if _, err := s.DB.ExecWrite(t.Context(), `INSERT INTO sessions(id, user_id, created_at, expires_at, last_seen_at)
+				VALUES (?, 1, ?, ?, ?)`, principal.SessionID, now, now+3600, now); err != nil {
+				t.Fatal(err)
+			}
+			if w := mobilePairingRequest(s, http.MethodPost, test.path, `{}`, principal); w.Code != http.StatusCreated {
+				t.Fatalf("live session status=%d body=%s", w.Code, w.Body.String())
 			}
 		})
 	}

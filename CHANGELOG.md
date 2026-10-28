@@ -32,6 +32,13 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Enabling two-factor authentication now closes every password-only path to a
+  new credential. Sign-in, the `/login` form, and token exchange recheck
+  enrollment when they commit, so an exchange in flight during enablement
+  cannot create a session or API token. Enablement also invalidates the user's
+  pending mobile pairing code, and token or pairing creation from a browser
+  session that enablement revoked now fails with 401.
+
 - Undoing a refile from Document Detail now restores the document that was
   originally changed, even after navigating away during the Undo window, and
   shows the restored category when that document is open again. A failed label

@@ -53,7 +53,14 @@ passwords, wrong/replayed TOTP values, and wrong recovery codes share
 30-second period, and a ±1-step window. Accepting a TOTP advances its exact
 counter; accepting a recovery code deletes its digest. Factor consumption and
 session/token issuance share the writer transaction, so a failed issuance does
-not burn a credential.
+not burn a credential. Password-only issuance rechecks the absence of a factor
+in that transaction; enablement that commits during credential preparation
+therefore prevents the stale exchange from creating a session or token (JSON
+routes answer 401, the HTML form redirects with `two_factor_required`).
+Enablement deletes the user's pending mobile pairing in its own transaction,
+and `core/api` token and pairing creation recheck the caller's `sessions` row in
+the writer transaction, so a session revoked by enablement cannot mint a
+durable credential after the fact.
 
 Factor failures are counted on the account row, so restarts do not reset them.
 Only a request with the correct password reaches the factor check, so strangers

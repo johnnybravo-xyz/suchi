@@ -101,6 +101,9 @@ func (s *Server) CreateMobilePairing(w http.ResponseWriter, r *http.Request) {
 	expires := time.Now().Add(5 * time.Minute).Unix()
 	sum := sha256.Sum256([]byte(code))
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		if err := requireLiveSession(r.Context(), tx, p); err != nil {
+			return err
+		}
 		if _, err := s.currentWriterPrincipal(r.Context(), tx, p, systemID); err != nil {
 			return err
 		}
@@ -121,7 +124,7 @@ func (s *Server) CreateMobilePairing(w http.ResponseWriter, r *http.Request) {
 		}
 		return err
 	})
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, errSessionRevoked) {
 		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
 		return
 	}

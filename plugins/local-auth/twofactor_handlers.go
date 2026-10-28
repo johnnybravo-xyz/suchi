@@ -201,6 +201,11 @@ func (p *Plugin) EnableTwoFactor(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
+		// A pending pairing code was approved by a password-only session; it
+		// must not mint a token after the account requires a second factor.
+		if _, err := tx.ExecContext(r.Context(), `DELETE FROM mobile_pairings WHERE user_id = ?`, principal.UserID); err != nil {
+			return err
+		}
 		// Tokens survive enrollment; report them so the user can review any
 		// minted with the password alone.
 		if err := tx.QueryRowContext(r.Context(), `

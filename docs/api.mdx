@@ -261,8 +261,17 @@ session cookie. Failures redirect to `/login?error=CODE` with one of `missing`,
 for the two factor codes.
 
 Authenticator-step advancement or recovery-code consumption and session/token
-issuance use one transaction. An issuance failure does not consume the factor;
-a successful recovery-code exchange cannot be replayed.
+issuance use one transaction. That transaction also confirms a password-only
+exchange still has no enrolled factor, so two-factor enablement that commits
+while a credential is being prepared rejects the exchange without creating the
+credential: the JSON routes return **401** `two_factor_required` and the `/login`
+form redirects to `/login?error=two_factor_required`. Enablement also deletes
+the user's pending mobile pairing code, which can no longer be exchanged.
+`POST /api/tokens/` and `POST /api/mobile/pairing` recheck the calling browser
+session inside their writer transaction, so a request from a session that
+enablement (or logout) revoked returns **401** `unauthorized` without creating a
+token or pairing. An issuance failure does not consume the factor; a successful
+recovery-code exchange cannot be replayed.
 
 When the bounded Argon2 worker is already at capacity, local-password login and
 token exchange fail quickly with **503**, `Retry-After: 1`, and the same response
@@ -546,8 +555,9 @@ POST /api/account/two-factor
 Success returns `{"recovery_codes":["…"],"active_api_tokens":2}` with ten
 one-time codes and the number of the user's unrevoked API and mobile tokens,
 which keep working. This is the only response that reveals the codes. The seed, recovery-code digests, current
-session replacement, revocation of other browser sessions, and retained
-`user.two_factor_enabled` audit event commit together. API/mobile tokens remain
+session replacement, revocation of other browser sessions, deletion of any
+pending mobile pairing code, and retained `user.two_factor_enabled` audit event
+commit together. API/mobile tokens remain
 valid.
 
 An enabled account can replace every unused recovery code:
