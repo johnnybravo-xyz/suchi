@@ -19,17 +19,32 @@ documents; authenticated API links require separate source/target authorization.
 
 ## Triggers
 
-| Trigger            | Timing                                              |
-| ------------------ | --------------------------------------------------- |
-| `consumption`      | When source context is available, before extraction |
-| `document_added`   | After extraction and local archive matching         |
-| `document_updated` | After an explicit metadata update                   |
+| Trigger            | Timing                                                     |
+| ------------------ | ---------------------------------------------------------- |
+| `consumption`      | When source context is available, before extraction        |
+| `document_added`   | After extraction and local archive matching                |
+| `document_updated` | After a document PATCH or a bulk metadata/tag edit commits |
 
 Triggers can filter by source path, filename, mail rule, tag, correspondent,
 title or content regex, sender, subject, mailbox folder, and attachment
 presence. Multiple filters on one trigger use AND. Multiple triggers on an
 automation use OR. A filename filter matches an email attachment by its own
 attachment name.
+
+`document_updated` fires from exactly two places: `PATCH /api/documents/{id}`
+(title, title release, sensitivity, category, folder layout, archive serial
+number, or languages) and the bulk `set_correspondent`, `set_rendered_layout`,
+`set_jd_category`, `set_sensitivity`, `add_tag`, and `remove_tag` methods.
+Adding or removing a single document's correspondent link, setting or clearing
+a custom-field value, editing notes, uploading a version, and the lifecycle bulk
+methods (trash, delete, restore, rescan) do not emit it.
+
+These rules run synchronously before the successful API response, so their
+execution adds to request latency. A bulk edit runs them once per unique
+authorized document, in request order, after the shared metadata transaction
+commits. Rule failures are fail-soft: Suchi logs the failure, keeps the
+committed edit, and continues with later documents. Once the edit has
+committed, its rules run to completion even if the client disconnects.
 
 ## Actions
 

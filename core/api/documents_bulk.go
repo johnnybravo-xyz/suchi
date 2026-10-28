@@ -39,6 +39,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
+	"github.com/johnnybravo-xyz/suchi/core/automations"
 	renderpaths "github.com/johnnybravo-xyz/suchi/core/render/paths"
 	"github.com/johnnybravo-xyz/suchi/core/render/view"
 	"github.com/johnnybravo-xyz/suchi/core/rescan"
@@ -198,6 +199,22 @@ func (s *Server) BulkEdit(w http.ResponseWriter, r *http.Request) {
 			"applied": applied,
 		},
 	})
+	switch body.Method {
+	case "set_correspondent", "set_rendered_layout", "set_jd_category",
+		"set_sensitivity", "add_tag", "remove_tag":
+		// The edit has committed; a client disconnect must not skip the rules
+		// of the remaining documents.
+		ruleCtx := context.WithoutCancel(r.Context())
+		for _, result := range results {
+			if !result.OK || !authorizedSet[result.ID] {
+				continue
+			}
+			authorizedSet[result.ID] = false
+			if err := automations.ApplyOnDocumentUpdated(ruleCtx, s.DB, s.Actions, s.Log, result.ID); err != nil {
+				s.Log.Warn("api.bulk_edit.automations", "err", err.Error(), "doc_id", result.ID)
+			}
+		}
+	}
 
 	s.writeJSON(w, http.StatusOK, BulkEditResponse{
 		Method: body.Method, Total: len(body.Documents),

@@ -216,8 +216,13 @@ bulk method and ACL kind are `set_rendered_layout` and `rendered_layout`. A
 document with no selection uses the default filing-tree projection. Document
 PATCH, path-affecting bulk edits, built-in automation metadata actions, template
 edits, and layout deletion enqueue rendered moves in the same transaction as an
-effective state change. Replaying an already-converged bulk or automation
-assignment does not add another render job.
+effective state change. After a successful bulk metadata transaction,
+`core/api/documents_bulk.go` invokes `document_updated` rules once per unique
+authorized document in request order. Like single-document PATCH, rule execution
+is synchronous but fail-soft, cannot roll back the committed metadata, and uses
+a context detached from request cancellation so a disconnect cannot skip it;
+lifecycle bulk methods do not invoke it. Replaying an already-converged bulk or
+automation assignment does not add another render job.
 `core/jd/systems.Address` owns the derived filing-category projection: `SYS.AC`
 after introduction, and empty while the original archive is unnamed.
 `core/api` applies that value consistently to detail, list, search, receipt,

@@ -1257,6 +1257,13 @@ Scope: `documents:write`. Cap: 500 documents per call.
 - All authorized ids run inside a single `WriteTx`. A per-id error
   inside the tx aborts the whole batch by design — partial writes
   would leave the archive in a half-state.
+- Successful `set_correspondent`, `set_rendered_layout`, `set_jd_category`,
+  `set_sensitivity`, `add_tag`, and `remove_tag` calls synchronously run
+  `document_updated` automations once per unique authorized document, in input
+  order, after the bulk transaction commits. Rule failures are logged without
+  rolling back the edit or preventing rules for later documents. A client
+  disconnect after the commit does not skip them. Lifecycle methods do not
+  emit this trigger.
 - `restore` enforces the same 30-day window as individual restore. An expired
   authorized document rejects the batch with `400 bad_parameters`; already-live
   documents are unchanged.

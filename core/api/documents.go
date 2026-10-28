@@ -3,6 +3,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -862,8 +863,9 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 		RequestID: logx.RequestID(r.Context()),
 	})
 	// Fire document_updated automations. Fail-soft: never blocks the
-	// PATCH response.
-	if err := automations.ApplyOnDocumentUpdated(r.Context(), s.DB, s.Actions, s.Log, id); err != nil {
+	// PATCH response. The edit has committed, so a client disconnect must
+	// not skip its rules.
+	if err := automations.ApplyOnDocumentUpdated(context.WithoutCancel(r.Context()), s.DB, s.Actions, s.Log, id); err != nil {
 		s.Log.Warn("api.patch.automations", "err", err.Error(), "doc_id", id)
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"id": id})

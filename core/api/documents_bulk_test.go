@@ -34,6 +34,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/approvals"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
+	"github.com/johnnybravo-xyz/suchi/core/automations"
 	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/documentstate"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
@@ -67,6 +68,335 @@ func doBulkEdit(t *testing.T, s *Server, body any, p *pluginapi.Principal) (int,
 		_ = json.Unmarshal(rec.Body.Bytes(), &out)
 	}
 	return rec.Code, out
+}
+
+const bulkUpdateTestAction = "test_bulk_update_effect"
+
+type bulkUpdateRuleAction struct {
+	kind   string
+	params string
+}
+
+func installBulkUpdateTestAction(t *testing.T, s *Server,
+	execute func(context.Context, *sql.Tx, automations.ActionTarget, map[string]any) error,
+) {
+	t.Helper()
+	definitions := automations.BuiltinActions()
+	definitions = append(definitions, automations.ActionDefinition{
+		Kind: bulkUpdateTestAction,
+		Validate: func(context.Context, *sql.Tx, int64, map[string]any) error {
+			return nil
+		},
+		Execute: execute,
+	})
+	registry, err := automations.NewRegistry(definitions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Actions = registry
+}
+
+func seedBulkDocumentUpdatedRule(t *testing.T, s *Server, actions ...bulkUpdateRuleAction) {
+	t.Helper()
+	if _, err := s.DB.ExecWrite(t.Context(), `
+		INSERT INTO automations(id,system_id,name,order_index,enabled,created_at,updated_at)
+		VALUES(990,1,'Bulk update test',0,1,0,0);
+		INSERT INTO automation_triggers(automation_id,type,created_at)
+		VALUES(990,'document_updated',0)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	for order, action := range actions {
+		if _, err := s.DB.ExecWrite(t.Context(), `
+			INSERT INTO automation_actions(automation_id,order_index,kind,params_json,created_at)
+			VALUES(990,?,?,?,0)
+		`, order, action.kind, action.params); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func createBulkUpdateEffectTable(t *testing.T, s *Server) {
+	t.Helper()
+	if _, err := s.DB.ExecWrite(t.Context(), `
+		CREATE TABLE test_bulk_update_effects(
+			document_id INTEGER PRIMARY KEY,
+			runs INTEGER NOT NULL
+		)
+	`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func recordBulkUpdateEffect(ctx context.Context, tx *sql.Tx, target automations.ActionTarget, _ map[string]any) error {
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO test_bulk_update_effects(document_id,runs) VALUES(?,1)
+		ON CONFLICT(document_id) DO UPDATE SET runs=runs+1
+	`, target.DocID)
+	return err
+}
+
+func TestBulkMetadataMethodsRunDocumentUpdatedAutomationsOncePerAuthorizedDocument(t *testing.T) {
+	s := newBulkServer(t)
+	createBulkUpdateEffectTable(t, s)
+	installBulkUpdateTestAction(t, s, recordBulkUpdateEffect)
+	seedBulkDocumentUpdatedRule(t, s,
+		bulkUpdateRuleAction{kind: "assign_title", params: `{"template":"Updated by bulk rule"}`},
+		bulkUpdateRuleAction{kind: bulkUpdateTestAction, params: `{}`},
+	)
+	inbox := seedStatsJDInbox(t, s.DB)
+	updated := seedStatsDoc(t, s.DB, 1, "bulk-update-allowed", "Allowed", inbox, false, 0)
+	denied := seedStatsDoc(t, s.DB, 1, "bulk-update-denied", "Denied", inbox, false, 0)
+	seedUser(t, s.DB, 2)
+	if _, err := s.DB.ExecWrite(t.Context(), `
+		INSERT INTO object_acls(
+			object_kind,object_id,principal_kind,principal_id,perm_bits,created_at,created_by
+		) VALUES('document',?,'user',2,?,0,1);
+		INSERT INTO jd_categories(system_id,id,area_start,code,name,system)
+		SELECT 1,902,area_start,CASE WHEN code=area_start THEN area_start+1 ELSE area_start END,'Filed',0
+		FROM jd_categories WHERE system_id=1 ORDER BY id LIMIT 1;
+		INSERT INTO correspondents(system_id,id,name,slug,created_at,updated_at)
+		VALUES(1,903,'Acme','acme',0,0);
+		INSERT INTO tags(system_id,id,name,slug,created_at,updated_at)
+		VALUES(1,904,'Paid','paid',0,0);
+		INSERT INTO storage_paths(system_id,id,name,slug,path,created_at,updated_at)
+		VALUES(1,905,'By title','by-title','{{ title }}',0,0)
+	`, updated, int(authz.PermView|authz.PermChange)); err != nil {
+		t.Fatal(err)
+	}
+
+	code, result := doBulkEdit(t, s, map[string]any{
+		"documents": []int64{updated, updated, denied},
+		"method":    "set_sensitivity",
+		"parameters": map[string]any{
+			"sensitivity": "restricted",
+		},
+	}, memberPrincipal(2))
+	if code != http.StatusOK || result.Applied != 2 || result.Results[2].Code != "forbidden" {
+		t.Fatalf("sensitivity status=%d result=%+v", code, result)
+	}
+	for _, edit := range []struct {
+		method string
+		params map[string]any
+	}{
+		{method: "set_correspondent", params: map[string]any{"correspondent_id": 903}},
+		{method: "set_rendered_layout", params: map[string]any{"rendered_layout_id": 905}},
+		{method: "set_jd_category", params: map[string]any{"jd_category_id": 902}},
+		{method: "add_tag", params: map[string]any{"tag_id": 904}},
+		{method: "remove_tag", params: map[string]any{"tag_id": 904}},
+	} {
+		code, result = doBulkEdit(t, s, map[string]any{
+			"documents": []int64{updated}, "method": edit.method, "parameters": edit.params,
+		}, memberPrincipal(2))
+		if code != http.StatusOK || result.Applied != 1 {
+			t.Fatalf("%s status=%d result=%+v", edit.method, code, result)
+		}
+	}
+
+	var title, sensitivity string
+	if err := s.DB.Read.QueryRow(`
+		SELECT title,sensitivity FROM documents WHERE id=?
+	`, updated).Scan(&title, &sensitivity); err != nil {
+		t.Fatal(err)
+	}
+	var runs int
+	if err := s.DB.Read.QueryRow(`
+		SELECT runs FROM test_bulk_update_effects WHERE document_id=?
+	`, updated).Scan(&runs); err != nil {
+		t.Fatal(err)
+	}
+	if title != "Updated by bulk rule" || sensitivity != "restricted" || runs != 6 {
+		t.Fatalf("updated title/sensitivity/runs=%q/%q/%d", title, sensitivity, runs)
+	}
+	var deniedTitle string
+	var deniedSensitivity sql.NullString
+	var deniedRuns int
+	if err := s.DB.Read.QueryRow(`
+		SELECT title,sensitivity,
+		       (SELECT count(*) FROM test_bulk_update_effects WHERE document_id=documents.id)
+		FROM documents WHERE id=?
+	`, denied).Scan(&deniedTitle, &deniedSensitivity, &deniedRuns); err != nil {
+		t.Fatal(err)
+	}
+	if deniedTitle != "Denied" || deniedSensitivity.Valid || deniedRuns != 0 {
+		t.Fatalf("denied title/sensitivity/runs=%q/%v/%d", deniedTitle, deniedSensitivity, deniedRuns)
+	}
+}
+
+func TestBulkDocumentUpdatedAutomationFailureContinuesWithLaterDocuments(t *testing.T) {
+	s := newBulkServer(t)
+	createBulkUpdateEffectTable(t, s)
+	inbox := seedStatsJDInbox(t, s.DB)
+	first := seedStatsDoc(t, s.DB, 1, "bulk-update-first", "First", inbox, false, 0)
+	second := seedStatsDoc(t, s.DB, 1, "bulk-update-second", "Second", inbox, false, 0)
+	installBulkUpdateTestAction(t, s, func(ctx context.Context, tx *sql.Tx, target automations.ActionTarget, params map[string]any) error {
+		if target.DocID == first {
+			return errors.New("first document rule failed")
+		}
+		return recordBulkUpdateEffect(ctx, tx, target, params)
+	})
+	seedBulkDocumentUpdatedRule(t, s, bulkUpdateRuleAction{kind: bulkUpdateTestAction, params: `{}`})
+
+	code, result := doBulkEdit(t, s, map[string]any{
+		"documents": []int64{first, second},
+		"method":    "set_sensitivity",
+		"parameters": map[string]any{
+			"sensitivity": "internal",
+		},
+	}, adminPrincipal(1))
+	if code != http.StatusOK || result.Applied != 2 {
+		t.Fatalf("status=%d result=%+v", code, result)
+	}
+	var changed, runs int
+	if err := s.DB.Read.QueryRow(`
+		SELECT count(*), (SELECT count(*) FROM test_bulk_update_effects WHERE document_id=?)
+		FROM documents WHERE id IN (?,?) AND sensitivity='internal'
+	`, second, first, second).Scan(&changed, &runs); err != nil {
+		t.Fatal(err)
+	}
+	if changed != 2 || runs != 1 {
+		t.Fatalf("committed documents/later rule runs=%d/%d, want 2/1", changed, runs)
+	}
+}
+
+func TestBulkDocumentUpdatedAutomationsSurviveRequestCancellation(t *testing.T) {
+	s := newBulkServer(t)
+	createBulkUpdateEffectTable(t, s)
+	inbox := seedStatsJDInbox(t, s.DB)
+	first := seedStatsDoc(t, s.DB, 1, "bulk-cancel-first", "First", inbox, false, 0)
+	second := seedStatsDoc(t, s.DB, 1, "bulk-cancel-second", "Second", inbox, false, 0)
+	ctx, cancel := context.WithCancel(auth.WithPrincipal(context.Background(), adminPrincipal(1)))
+	defer cancel()
+	// The client disconnects while the first document's rules run.
+	installBulkUpdateTestAction(t, s, func(actionCtx context.Context, tx *sql.Tx, target automations.ActionTarget, params map[string]any) error {
+		if target.DocID == first {
+			cancel()
+		}
+		return recordBulkUpdateEffect(actionCtx, tx, target, params)
+	})
+	seedBulkDocumentUpdatedRule(t, s, bulkUpdateRuleAction{kind: bulkUpdateTestAction, params: `{}`})
+
+	raw, _ := json.Marshal(map[string]any{
+		"documents": []int64{first, second}, "method": "set_sensitivity",
+		"parameters": map[string]any{"sensitivity": "internal"},
+	})
+	r := httptest.NewRequest("POST", "/api/documents/bulk_edit", bytes.NewReader(raw)).WithContext(ctx)
+	r.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	s.BulkEdit(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var runs int
+	if err := s.DB.Read.QueryRow(`SELECT count(*) FROM test_bulk_update_effects WHERE runs=1`).Scan(&runs); err != nil {
+		t.Fatal(err)
+	}
+	if runs != 2 {
+		t.Fatalf("documents whose rules ran=%d, want 2 after cancellation", runs)
+	}
+}
+
+func TestBulkDocumentUpdatedTitleRuleQueuesRenderedMove(t *testing.T) {
+	s := newBulkServer(t)
+	seedBulkDocumentUpdatedRule(t, s,
+		bulkUpdateRuleAction{kind: "assign_title", params: `{"template":"Renamed by rule"}`},
+	)
+	docID := seedStatsDoc(t, s.DB, 1, "bulk-rule-render", "Receipt", seedStatsJDInbox(t, s.DB), false, 0)
+	if _, err := s.DB.ExecWrite(t.Context(), `
+		INSERT INTO storage_paths(system_id,id,name,slug,path,created_at,updated_at)
+		VALUES(1,905,'By title','by-title','{{ title }}',0,0);
+		UPDATE documents SET storage_path_id=905 WHERE id=?
+	`, docID); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		code, result := doBulkEdit(t, s, map[string]any{
+			"documents": []int64{docID}, "method": "set_sensitivity",
+			"parameters": map[string]any{"sensitivity": "internal"},
+		}, adminPrincipal(1))
+		if code != http.StatusOK || result.Applied != 1 {
+			t.Fatalf("status=%d result=%+v", code, result)
+		}
+	}
+	var title string
+	var renderJobs int
+	if err := s.DB.Read.QueryRow(`
+		SELECT title, (SELECT count(*) FROM jobs WHERE kind='render' AND doc_id=documents.id)
+		FROM documents WHERE id=?`, docID).Scan(&title, &renderJobs); err != nil {
+		t.Fatal(err)
+	}
+	if title != "Renamed by rule" || renderJobs != 1 {
+		t.Fatalf("title=%q render jobs=%d, want rule title and one move", title, renderJobs)
+	}
+}
+
+func TestBulkFailedAndLifecycleEditsDoNotRunDocumentUpdatedAutomations(t *testing.T) {
+	s := newBulkServer(t)
+	createBulkUpdateEffectTable(t, s)
+	installBulkUpdateTestAction(t, s, recordBulkUpdateEffect)
+	seedBulkDocumentUpdatedRule(t, s,
+		bulkUpdateRuleAction{kind: "assign_title", params: `{"template":"Should not run"}`},
+		bulkUpdateRuleAction{kind: bulkUpdateTestAction, params: `{}`},
+	)
+	inbox := seedStatsJDInbox(t, s.DB)
+	failed := seedStatsDoc(t, s.DB, 1, "bulk-update-failed", "Failed", inbox, false, 0)
+	if _, err := s.DB.ExecWrite(t.Context(), `
+		CREATE TRIGGER reject_bulk_sensitivity
+		BEFORE UPDATE OF sensitivity ON documents
+		WHEN NEW.id = `+strconv.FormatInt(failed, 10)+`
+		BEGIN SELECT RAISE(ABORT, 'reject bulk sensitivity'); END
+	`); err != nil {
+		t.Fatal(err)
+	}
+	code, _ := doBulkEdit(t, s, map[string]any{
+		"documents": []int64{failed},
+		"method":    "set_sensitivity",
+		"parameters": map[string]any{
+			"sensitivity": "restricted",
+		},
+	}, adminPrincipal(1))
+	if code != http.StatusInternalServerError {
+		t.Fatalf("failed transaction status=%d", code)
+	}
+
+	lifecycle := []struct {
+		method  string
+		trashed bool
+	}{
+		{method: "trash"},
+		{method: "delete"},
+		{method: "restore", trashed: true},
+		{method: "rescan_enqueue"},
+	}
+	lifecycleIDs := make([]int64, 0, len(lifecycle))
+	for i, edit := range lifecycle {
+		id := seedStatsDoc(t, s.DB, 1, "bulk-lifecycle-"+strconv.Itoa(i), "Lifecycle "+strconv.Itoa(i), inbox, false, 0)
+		lifecycleIDs = append(lifecycleIDs, id)
+		if edit.trashed {
+			if _, err := s.DB.ExecWrite(t.Context(), `UPDATE documents SET trashed_at=? WHERE id=?`, time.Now().Unix(), id); err != nil {
+				t.Fatal(err)
+			}
+		}
+		code, result := doBulkEdit(t, s, map[string]any{
+			"documents": []int64{id}, "method": edit.method,
+		}, adminPrincipal(1))
+		if code != http.StatusOK || result.Applied != 1 {
+			t.Fatalf("%s status=%d result=%+v", edit.method, code, result)
+		}
+	}
+
+	var effects, renamed int
+	if err := s.DB.Read.QueryRow(`
+		SELECT (SELECT count(*) FROM test_bulk_update_effects),
+		       count(*) FILTER (WHERE title='Should not run')
+		FROM documents
+		WHERE id=? OR id IN (?,?,?,?)
+	`, failed, lifecycleIDs[0], lifecycleIDs[1], lifecycleIDs[2], lifecycleIDs[3]).Scan(&effects, &renamed); err != nil {
+		t.Fatal(err)
+	}
+	if effects != 0 || renamed != 0 {
+		t.Fatalf("excluded edits produced effects/renames=%d/%d", effects, renamed)
+	}
 }
 
 func TestBulkEdit_Anonymous(t *testing.T) {

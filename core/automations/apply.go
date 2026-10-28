@@ -3,9 +3,9 @@
 // Apply — evaluate every automation whose trigger includes the given
 // event type, filter by conditions, and run actions in order.
 //
-// Called from postingest.postContentSteps for `document_added`, from
-// PATCH /api/documents/{id} for `document_updated`, and from
-// upload-time for `consumption` (batch 2).
+// Called from postingest.postContentSteps and Refile for `document_added`,
+// after PATCH /api/documents/{id} and metadata/tag bulk edits commit for
+// `document_updated`, and from upload-time for `consumption`.
 
 package automations
 
@@ -92,7 +92,8 @@ func ApplyOnDocumentAddedCount(ctx context.Context, d *db.DB, actions *Registry,
 }
 
 // ApplyOnDocumentUpdated mirrors the above for the update trigger.
-// Called from PATCH /api/documents/{id} handlers after the write lands.
+// Called once per document after PATCH /api/documents/{id} or a
+// metadata/tag bulk edit commits.
 func ApplyOnDocumentUpdated(ctx context.Context, d *db.DB, actions *Registry, log *slog.Logger, docID int64) error {
 	s := New(d, actions)
 	var systemID int64

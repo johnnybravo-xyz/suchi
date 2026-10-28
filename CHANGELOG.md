@@ -44,6 +44,15 @@ Notable user-visible changes to Suchi are recorded here.
   without touching the source, while still-oversized and already ingested files
   remain checkpointed.
 
+- Metadata edits now keep update automations and rendered folders aligned. Bulk
+  correspondent, folder-layout, filing-category, sensitivity, and tag edits run
+  `document_updated` rules once per authorized document after commit.
+  Path-affecting API, automation, taxonomy, and filing-tree changes queue the
+  rendered-folder move with the state change. Duplicate IDs do not rerun rules,
+  failures do not stop later documents, and disconnects do not skip committed
+  work. Unchanged replays and Trash edits add no render job; restoring a
+  document re-renders it.
+
 - Undoing a refile from Document Detail now restores the document that was
   originally changed, even after navigating away during the Undo window, and
   shows the restored category when that document is open again. A failed label
@@ -56,14 +65,6 @@ Notable user-visible changes to Suchi are recorded here.
   again, and saves results from handlers that finish during shutdown. If the
   write keeps failing, the queue moves on and the job runs again after the next
   restart.
-
-- Rendered folder paths now follow every metadata change they display. Bulk
-  correspondent, category, tag, and folder-layout edits; built-in automation
-  title, tag, correspondent, category, layout, and owner actions; correspondent
-  and tag renames or deletions; filing-system renames; filing-tree imports; and
-  clearing the classifier's review tag queue the folder move in the same
-  transaction as the change. Unchanged replays and edits in
-  Trash add no job, and restoring a document re-renders it.
 
 - Numeric date evidence now preserves unambiguous component order. A quote
   that starts with a four-digit year (such as `2026-03-04`, `2026–03–04`, or
