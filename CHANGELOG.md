@@ -36,6 +36,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- `PDF_MAX_CONTENT_BYTES` now also caps text from the `ocrmypdf` OCR engine,
+  which previously always used 8 MiB.
 - Filing tree setup no longer marks **Solo** or another ready-made tree as
   selected after a custom import, including imports that reuse a built-in ID.
   The live custom tree remains visible in **Current tree**.

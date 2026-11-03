@@ -1982,6 +1982,7 @@ func (h *Handler) runOCR(ctx context.Context, log *slog.Logger, pdfBytes []byte,
 	case OCREngineOCRmyPDF:
 		res, err := ocrmypdf.OCR(ctx, bytes.NewReader(pdfBytes), log, ocrmypdf.Options{
 			Languages: h.ocrLanguages(),
+			MaxText:   h.limits.PDF,
 		})
 		if err != nil {
 			return "", "", 0, fmt.Errorf("ocrmypdf: %w", err)

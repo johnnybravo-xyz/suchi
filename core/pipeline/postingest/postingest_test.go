@@ -308,6 +308,31 @@ func TestPDFContentAuthority(t *testing.T) {
 	}
 }
 
+func TestOCRmyPDFHonorsPDFContentLimit(t *testing.T) {
+	ctx := context.Background()
+	d, cas := openPostIngestHarness(t)
+	docID := seedPostIngestDocument(t, d, cas, "application/pdf", []byte("pdf bytes"))
+
+	binDir := t.TempDir()
+	writeExecutable(t, filepath.Join(binDir, "qpdf"), "#!/bin/sh\n/bin/cat in.pdf\n")
+	writeExecutable(t, filepath.Join(binDir, "pdftotext"), "#!/bin/sh\nexit 0\n")
+	writeExecutable(t, filepath.Join(binDir, "ocrmypdf"),
+		"#!/bin/sh\n/bin/cp in.pdf out.pdf\necho 'sidecar text well over sixteen bytes' > text.txt\n")
+	t.Setenv("PATH", binDir)
+
+	h := New(
+		d,
+		cas, testActions(t),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		WithOCREngine(OCREngineOCRmyPDF),
+		WithContentLimits(ContentLimits{PDF: 16}),
+	)
+	err := h.Handle(ctx, pluginapi.Event{DocID: docID})
+	if err == nil || !strings.Contains(err.Error(), "exceeded 16 bytes") {
+		t.Fatalf("Handle error = %v, want sidecar over the 16-byte PDF limit", err)
+	}
+}
+
 func TestEmptyServerOutputPreservesAcceptedDeviceText(t *testing.T) {
 	ctx := context.Background()
 	d, cas := openPostIngestHarness(t)
