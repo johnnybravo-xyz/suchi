@@ -8,9 +8,11 @@ the first 1024 bytes of the upload. A PDF header preceded by a short binary
 prefix or leading whitespace within those bytes, as some e-filing downloads
 and invoice generators produce, is still routed as a PDF; qpdf repairs the
 working copy and the original stays unchanged. Every branch **degrades gracefully**:
-if the binary a branch needs isn't installed, the doc is still stored
-and searchable, `documents.content` just lands empty until the tool
-shows up.
+if the binary a branch needs isn't installed, the doc is still stored,
+but `documents.content` lands empty, so search finds it only by title.
+`suchi doctor` lists missing tools. After installing them, stop the server and
+run `suchi rescan --only-no-ocr` to queue documents that have no text; the
+server extracts them when it starts again.
 
 `core/mimeutil` is the source of truth for document MIME aliases, filename
 refinement, output extensions, and the capabilities that select these branches.
@@ -448,6 +450,10 @@ The repository's Compose file selects this derived image when its `.env`
 contains `SUCHI_IMAGE=suchi-ocr:local`.
 
 #### Bare-metal installations
+
+The release binary bundles none of these tools. Install the PDF chain first
+(`qpdf poppler-utils tesseract-ocr` on Debian/Ubuntu, `qpdf poppler tesseract`
+with Homebrew); otherwise PDFs are stored without text.
 
 Language data is installed for the Tesseract installation used by the Suchi
 service, not on the browser or mobile device:

@@ -82,6 +82,20 @@ DATA_DIR="$HOME/.local/share/suchi" \
 suchi serve
 ```
 
+The binary does not bundle the PDF and OCR tools that the images include.
+Without them, uploads still succeed but their text is never extracted, so search
+finds PDFs only by title. Install them before adding documents:
+
+```sh
+sudo apt-get install qpdf poppler-utils tesseract-ocr   # Debian/Ubuntu
+brew install qpdf poppler tesseract                     # macOS
+```
+
+`suchi doctor` lists each tool as present or missing. If you added documents
+before installing them, stop Suchi, run `suchi rescan --only-no-ocr`, and start
+it again; the server extracts the queued documents when it starts.
+See [Supported formats](/formats) for the tools other formats need.
+
 Production templates for systemd, Caddy, nginx, Traefik, Kubernetes, and the
 optional mbsync helper live under
 [`deploy/`](https://github.com/johnnybravo-xyz/suchi/tree/main/deploy).
