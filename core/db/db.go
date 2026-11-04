@@ -116,8 +116,41 @@ func Open(ctx context.Context, path string) (*DB, error) {
 	return &DB{Write: write, Read: read, Path: abs, archiveLock: archiveLock}, nil
 }
 
+// OpenReadOnly opens an existing database without taking the archive lock,
+// for diagnostics that run beside the process that owns the archive. Write
+// and Read share one read-only pool, so any write fails with SQLITE_READONLY.
+func OpenReadOnly(ctx context.Context, path string) (*DB, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve db path: %w", err)
+	}
+	dsn := (&url.URL{Scheme: "file", Path: filepath.ToSlash(abs)}).String() + "?" + url.Values{
+		"mode": []string{"ro"},
+		"_pragma": []string{
+			"busy_timeout(5000)",
+			"foreign_keys(ON)",
+			"temp_store(MEMORY)",
+		},
+	}.Encode()
+	read, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open read-only pool: %w", err)
+	}
+	read.SetMaxOpenConns(4)
+	read.SetMaxIdleConns(4)
+	read.SetConnMaxIdleTime(5 * time.Minute)
+	if err := ping(ctx, read); err != nil {
+		_ = read.Close()
+		return nil, fmt.Errorf("read-only pool ping: %w", err)
+	}
+	return &DB{Write: read, Read: read, Path: abs}, nil
+}
+
 // Close closes both pools. Errors from either are joined.
 func (d *DB) Close() error {
+	if d.Write == d.Read {
+		return errors.Join(d.Read.Close(), d.archiveLock.Close())
+	}
 	return errors.Join(d.Write.Close(), d.Read.Close(), d.archiveLock.Close())
 }
 

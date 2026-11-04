@@ -15,6 +15,13 @@ as export or GC, against the same directory fails before touching the database
 with the stable error `archive_in_use`. The lock file must be a regular file;
 a symlink is refused. It is released after both pools close.
 
+`core/db.OpenReadOnly` is the one lock-free path. It opens an existing
+database with SQLite `mode=ro` and points both pools at that read-only handle,
+so a stray write fails with `SQLITE_READONLY` rather than racing the owner's
+writer. Only `suchi doctor` uses it, and only after `db.Open` reports
+`archive_in_use`; `--quarantine-corrupt` moves CAS files and still requires
+the lock.
+
 The lock belongs to the process, not the file. If Suchi exits or crashes, the
 operating system releases it, so the `.suchi.lock` file left behind is harmless
 and never needs deleting. This process boundary protects the single writer

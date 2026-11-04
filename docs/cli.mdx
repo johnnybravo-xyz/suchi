@@ -256,9 +256,14 @@ suchi doctor            # human-readable
 suchi doctor --scrub-cas
 ```
 
-Run `--quarantine-corrupt` only while the server and workers are stopped. The
-report-only scrub streams files without modifying them; quarantine moves each
-bad path out of the live CAS for later inspection or restoration.
+The doctor runs beside a live server. When another Suchi process holds the
+archive lock, it says so and reads the database read-only instead of failing
+with `archive_in_use`.
+
+`--quarantine-corrupt` needs the server and workers stopped and fails with
+`archive_in_use` while they run. The report-only scrub streams files without
+modifying them; quarantine moves each bad path out of the live CAS for later
+inspection or restoration.
 
 ## `suchi mcp [flags]`
 

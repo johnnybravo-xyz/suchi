@@ -34,6 +34,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/archivelock"
 	"github.com/johnnybravo-xyz/suchi/core/backup"
 	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/config"
@@ -85,7 +86,7 @@ func runDoctor(args []string) int {
 	}
 	fmt.Println()
 	ctx := context.Background()
-	d, err := db.Open(ctx, cfg.DataDir+"/suchi.db")
+	d, err := openDoctorDB(ctx, cfg.DataDir+"/suchi.db", *quarantineCorrupt)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "  ✗ open DB: %v\n", err)
 		return 1
@@ -377,6 +378,26 @@ func runDoctor(args []string) int {
 		}
 	}
 	return 0
+}
+
+// openDoctorDB takes the archive lock when it is free. When a running server
+// holds it, the report reads the live database read-only instead, except for
+// --quarantine-corrupt, which moves CAS files and needs exclusive ownership.
+func openDoctorDB(ctx context.Context, path string, quarantine bool) (*db.DB, error) {
+	d, err := db.Open(ctx, path)
+	if !errors.Is(err, archivelock.ErrArchiveInUse) {
+		return d, err
+	}
+	if quarantine {
+		return nil, fmt.Errorf("%w; stop the server before --quarantine-corrupt", err)
+	}
+	d, err = db.OpenReadOnly(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	fmt.Println("  · archive is in use by another Suchi process; reading it read-only")
+	fmt.Println()
+	return d, nil
 }
 
 func inspectOCRLanguages(ctx context.Context, tesseractPath string, configured []string) ([]string, []string, error) {

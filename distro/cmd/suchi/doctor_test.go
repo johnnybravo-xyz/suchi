@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/johnnybravo-xyz/suchi/core/archivelock"
 	"github.com/johnnybravo-xyz/suchi/core/config"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
@@ -222,5 +223,30 @@ func TestResolveDoctorDataDirDoesNotReplaceExplicitPath(t *testing.T) {
 	}
 	if got != "" || usedFallback || called {
 		t.Fatalf("resolveDoctorDataDir() = (%q, %t, %v), fallback called=%t", got, usedFallback, err, called)
+	}
+}
+
+func TestOpenDoctorDBReadsBesideRunningServer(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "suchi.db")
+	owner, err := db.Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = owner.Close() })
+
+	d, err := openDoctorDB(t.Context(), path, false)
+	if err != nil {
+		t.Fatalf("openDoctorDB beside owner: %v", err)
+	}
+	var version int
+	if err := d.Read.QueryRowContext(t.Context(), "PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := openDoctorDB(t.Context(), path, true); !errors.Is(err, archivelock.ErrArchiveInUse) {
+		t.Fatalf("quarantine beside owner error = %v, want archive_in_use", err)
 	}
 }

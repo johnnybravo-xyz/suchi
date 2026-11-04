@@ -36,6 +36,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- `suchi doctor` runs beside a live server. When another process holds the
+  archive lock, it reads the database read-only instead of failing with
+  `archive_in_use`; `--quarantine-corrupt` still requires the server stopped.
 - `PDF_MAX_CONTENT_BYTES` now also caps text from the `ocrmypdf` OCR engine,
   which previously always used 8 MiB.
 - Filing tree setup no longer marks **Solo** or another ready-made tree as
