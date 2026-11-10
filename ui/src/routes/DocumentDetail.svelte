@@ -2248,6 +2248,15 @@
             {/if}
           {/if}
         </section>
+      {:else if doc.extraction_note && !doc.processing}
+        <section class="card" aria-label={translate("documentDetail.noTextExtracted")}>
+          <h3>{translate("documentDetail.noTextExtracted")}</h3>
+          <p class="sub">{translate("documentDetail.noTextExtractedHelp")}</p>
+          <details class="extraction-note">
+            <summary>{translate("documentDetail.technicalDetails")}</summary>
+            <pre>{doc.extraction_note}</pre>
+          </details>
+        </section>
       {/if}
     </div>
   </div>
@@ -2615,6 +2624,7 @@
   .pager { justify-content:flex-end; margin-top:10px; }
   .extracted { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; font-size: .8rem; color: var(--muted); margin: 0; }
   .extracted.expanded { max-height: 65vh; }
+  .extraction-note pre { margin: 6px 0 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); font-size: .8rem; }
   .extracted-copy { width: 100%; max-width: none; font-size: .8rem; }
   @container (max-width: 520px) {
     .related-tabs { gap:0; }

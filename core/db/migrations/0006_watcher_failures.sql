@@ -30,3 +30,7 @@ ALTER TABLE render_moves ADD COLUMN prev_path_key TEXT;
 ALTER TABLE render_moves ADD COLUMN new_path_key TEXT;
 CREATE INDEX render_moves_new_path_key ON render_moves(new_path_key);
 CREATE INDEX render_moves_prev_path_key ON render_moves(prev_path_key);
+
+-- Why post-ingest stored no text: the tool that was missing or failed, or that
+-- the tools ran and found none. Empty whenever content is non-empty.
+ALTER TABLE documents ADD COLUMN extraction_note TEXT NOT NULL DEFAULT '';

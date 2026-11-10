@@ -450,7 +450,8 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		}
 		if res.Skipped || len(res.EML) == 0 {
 			log.Info("post-ingest.route.msg.skipped", "reason", res.StderrTail)
-			if err := h.updateDoc(ctx, e.DocID, "", "", 0); err != nil {
+			note := "msgconvert: " + firstNonEmpty(res.StderrTail, "not available")
+			if err := h.updateDoc(ctx, e.DocID, "", note, "", 0); err != nil {
 				return err
 			}
 			return h.postContentSteps(ctx, log, e.DocID)
@@ -491,7 +492,11 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		}
 		log.Info("post-ingest.route.djvu",
 			"non_blank", res.NonBlank, "skipped", res.Skipped, "truncated", res.Truncated)
-		if err := h.updateDoc(ctx, e.DocID, res.Text, "", 0); err != nil {
+		note := "djvutxt found no text layer"
+		if res.Skipped {
+			note = "djvutxt: " + firstNonEmpty(res.StderrTail, "not available")
+		}
+		if err := h.updateDoc(ctx, e.DocID, res.Text, note, "", 0); err != nil {
 			return err
 		}
 		return h.postContentSteps(ctx, log, e.DocID)
@@ -517,7 +522,8 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		if pdfRes.Skipped || len(pdfRes.PDF) == 0 {
 			log.Info("post-ingest.route.image.imgpdf_skipped",
 				"mime", mime, "reason", pdfRes.StderrTail)
-			if err := h.updateDoc(ctx, e.DocID, barcodeTokens, "", 0); err != nil {
+			note := "image to PDF: " + firstNonEmpty(pdfRes.StderrTail, "not available")
+			if err := h.updateDoc(ctx, e.DocID, barcodeTokens, note, "", 0); err != nil {
 				return err
 			}
 			return h.postContentSteps(ctx, log, e.DocID)
@@ -526,10 +532,11 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 			"mime", mime, "pdf_bytes", len(pdfRes.PDF),
 			"took", pdfRes.Duration.String())
 
-		ocrContent, archiveBlob, archiveSize, err := h.runOCR(ctx, log, pdfRes.PDF, true)
+		ocr, err := h.runOCR(ctx, log, pdfRes.PDF, true)
 		if err != nil {
 			return fmt.Errorf("image.ocr: %w", err)
 		}
+		ocrContent, archiveBlob, archiveSize := ocr.Text, ocr.ArchiveBlob, ocr.ArchiveSize
 		if archiveBlob == "" {
 			ref, cerr := h.cas.Put(bytes.NewReader(pdfRes.PDF))
 			if cerr != nil {
@@ -555,7 +562,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 			}
 			content += barcodeTokens
 		}
-		if err := h.updateDoc(ctx, e.DocID, content, archiveBlob, archiveSize); err != nil {
+		if err := h.updateDoc(ctx, e.DocID, content, ocr.Note, archiveBlob, archiveSize); err != nil {
 			return err
 		}
 		return h.postContentSteps(ctx, log, e.DocID)
@@ -571,7 +578,8 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 			log.Info("post-ingest.image.decode_failed", "err", berr.Error())
 		}
 		content := barcode.TokensFor(bcs)
-		if err := h.updateDoc(ctx, e.DocID, content, "", 0); err != nil {
+		note := "no OCR for " + mime + " and no barcode found"
+		if err := h.updateDoc(ctx, e.DocID, content, note, "", 0); err != nil {
 			return err
 		}
 		return h.postContentSteps(ctx, log, e.DocID)
@@ -591,7 +599,11 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		log.Info("post-ingest.route.anydoc",
 			"mime", mime, "non_blank", res.NonBlank,
 			"skipped", res.Skipped, "truncated", res.Truncated)
-		if err := h.updateDoc(ctx, e.DocID, res.Text, "", 0); err != nil {
+		note := "anydoc found no text"
+		if res.Skipped {
+			note = "anydoc: " + firstNonEmpty(res.StderrTail, "not available")
+		}
+		if err := h.updateDoc(ctx, e.DocID, res.Text, note, "", 0); err != nil {
 			return err
 		}
 		return h.postContentSteps(ctx, log, e.DocID)
@@ -611,7 +623,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		}
 		log.Info("post-ingest.route.text",
 			"mime", mime, "bytes", len(origBytes), "truncated", truncated)
-		if err := h.updateDoc(ctx, e.DocID, text, "", 0); err != nil {
+		if err := h.updateDoc(ctx, e.DocID, text, "file contains no text", "", 0); err != nil {
 			return err
 		}
 		return h.postContentSteps(ctx, log, e.DocID)
@@ -619,7 +631,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 
 	if !format.IsPDF() {
 		log.Info("post-ingest.skip.non_pdf", "mime", mime)
-		if err := h.updateDoc(ctx, e.DocID, "", "", 0); err != nil {
+		if err := h.updateDoc(ctx, e.DocID, "", "no text extractor for "+mime, "", 0); err != nil {
 			return err
 		}
 		return h.postContentSteps(ctx, log, e.DocID)
@@ -691,6 +703,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		contentSource = "server"
 		archiveBlob   string
 		archiveSize   int64
+		note          string
 	)
 
 	if ins.HasText {
@@ -705,14 +718,19 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		log.Info("post-ingest.route.device_ocr", "chars", len([]rune(content)))
 	} else {
 		// No accepted text exists; run the configured server OCR path.
-		c, ab, as, err := h.runOCR(ctx, log, pdfBytes, false)
+		ocr, err := h.runOCR(ctx, log, pdfBytes, false)
 		if err != nil {
 			return err
 		}
-		content, archiveBlob, archiveSize = c, ab, as
+		content, archiveBlob, archiveSize = ocr.Text, ocr.ArchiveBlob, ocr.ArchiveSize
+		note = fmt.Sprintf("pdftotext found %d characters", ins.NonBlank)
+		if ins.Skipped {
+			note = "pdftotext: " + firstNonEmpty(ins.StderrTail, "skipped")
+		}
+		note += "; " + ocr.Note
 	}
 
-	if err := h.updateDocWithSource(ctx, e.DocID, content, contentSource, archiveBlob, archiveSize); err != nil {
+	if err := h.updateDocWithSource(ctx, e.DocID, content, contentSource, note, archiveBlob, archiveSize); err != nil {
 		return err
 	}
 
@@ -1433,7 +1451,7 @@ func (h *Handler) handleEmail(ctx context.Context, log *slog.Logger, parentID in
 	parsed, err := eml.Parse(raw)
 	if err != nil {
 		log.Warn("post-ingest.email.parse_failed", "err", err.Error())
-		return false, h.updateDoc(ctx, parentID, "", "", 0)
+		return false, h.updateDoc(ctx, parentID, "", "email: "+err.Error(), "", 0)
 	}
 	// Message-ID dedup. If ANOTHER doc under the same owner already
 	// carries this Message-ID, this doc is a duplicate — remove the staging row
@@ -1935,10 +1953,17 @@ func (h *Handler) ocrLanguages() []string {
 	return append([]string(nil), h.langs...)
 }
 
-// runOCR dispatches to the configured OCR engine. Returns (content,
-// archiveBlobSHA, archiveBlobSize). archiveBlob is empty when the
-// engine doesn't produce a searchable-PDF archive (tessocr) or when
-// OCR was skipped.
+// ocrOutput is one OCR run. ArchiveBlob is empty when the engine doesn't
+// produce a searchable-PDF archive (tessocr) or when OCR was skipped. Note
+// explains an empty Text for documents.extraction_note.
+type ocrOutput struct {
+	Text        string
+	ArchiveBlob string
+	ArchiveSize int64
+	Note        string
+}
+
+// runOCR dispatches to the configured OCR engine.
 //
 // Engine selection:
 //   - "tesseract": run tessocr; fall through with empty content if its
@@ -1949,7 +1974,7 @@ func (h *Handler) ocrLanguages() []string {
 //
 // The engine decision is logged once per invocation so operators can
 // verify which path fired without turning on Debug.
-func (h *Handler) runOCR(ctx context.Context, log *slog.Logger, pdfBytes []byte, imageInput bool) (content, archiveBlob string, archiveSize int64, err error) {
+func (h *Handler) runOCR(ctx context.Context, log *slog.Logger, pdfBytes []byte, imageInput bool) (ocrOutput, error) {
 	engine := h.ocrEngine
 	if engine == OCREngineAuto {
 		if tessocr.Available() {
@@ -1958,50 +1983,60 @@ func (h *Handler) runOCR(ctx context.Context, log *slog.Logger, pdfBytes []byte,
 			engine = OCREngineOCRmyPDF
 		}
 	}
+	languages := h.ocrLanguages()
 
 	switch engine {
 	case OCREngineTesseract:
 		res, err := tessocr.OCR(ctx, bytes.NewReader(pdfBytes), log, tessocr.Options{
-			Languages:    h.ocrLanguages(),
+			Languages:    languages,
 			MaxTextBytes: h.limits.PDF,
 			ImageInput:   imageInput,
 		})
 		if err != nil {
-			return "", "", 0, fmt.Errorf("tessocr: %w", err)
+			return ocrOutput{}, fmt.Errorf("tessocr: %w", err)
 		}
 		if res.Skipped {
+			reason := firstNonEmpty(res.StderrTail, "tessocr skipped")
 			log.Info("post-ingest.route.ocr.skipped",
 				"engine", "tesseract",
-				"reason", firstNonEmpty(res.StderrTail, "tessocr skipped"))
-			return "", "", 0, nil
+				"reason", reason)
+			return ocrOutput{Note: "tesseract: " + reason}, nil
 		}
 		log.Info("post-ingest.route.ocr",
 			"engine", "tesseract", "pages", res.Pages, "text_chars", len(res.Text))
-		return res.Text, "", 0, nil
+		return ocrOutput{Text: res.Text, Note: ocrEmptyNote(res.Text, languages)}, nil
 
 	case OCREngineOCRmyPDF:
 		res, err := ocrmypdf.OCR(ctx, bytes.NewReader(pdfBytes), log, ocrmypdf.Options{
-			Languages: h.ocrLanguages(),
+			Languages: languages,
 			MaxText:   h.limits.PDF,
 		})
 		if err != nil {
-			return "", "", 0, fmt.Errorf("ocrmypdf: %w", err)
+			return ocrOutput{}, fmt.Errorf("ocrmypdf: %w", err)
 		}
 		if res.Skipped || len(res.ArchivePDF) == 0 {
+			reason := firstNonEmpty(res.StderrTail, "ocrmypdf skipped")
 			log.Info("post-ingest.route.ocr.skipped",
 				"engine", "ocrmypdf",
-				"reason", firstNonEmpty(res.StderrTail, "ocrmypdf skipped"))
-			return res.Text, "", 0, nil
+				"reason", reason)
+			return ocrOutput{Text: res.Text, Note: "ocrmypdf: " + reason}, nil
 		}
 		ref, err := h.cas.Put(bytes.NewReader(res.ArchivePDF))
 		if err != nil {
-			return "", "", 0, fmt.Errorf("cas put archive: %w", err)
+			return ocrOutput{}, fmt.Errorf("cas put archive: %w", err)
 		}
 		log.Info("post-ingest.route.ocr",
 			"engine", "ocrmypdf", "archive_sha", ref.SHA256, "text_chars", len(res.Text))
-		return res.Text, ref.SHA256, ref.Size, nil
+		return ocrOutput{Text: res.Text, ArchiveBlob: ref.SHA256, ArchiveSize: ref.Size, Note: ocrEmptyNote(res.Text, languages)}, nil
 	}
-	return "", "", 0, fmt.Errorf("post-ingest: unknown OCR engine %q", engine)
+	return ocrOutput{}, fmt.Errorf("post-ingest: unknown OCR engine %q", engine)
+}
+
+func ocrEmptyNote(text string, languages []string) string {
+	if strings.TrimSpace(text) != "" {
+		return ""
+	}
+	return "OCR found no text (languages: " + strings.Join(languages, ", ") + ")"
 }
 
 // postContentSteps runs the after-content-lands steps common to both
@@ -2263,8 +2298,8 @@ func (h *Handler) readBlob(sha string) ([]byte, error) {
 
 // updateDoc writes server-authoritative output. Empty or skipped server output
 // must not erase accepted provisional device text.
-func (h *Handler) updateDoc(ctx context.Context, id int64, content, archBlob string, archSize int64) error {
-	return h.updateDocWithSource(ctx, id, content, "server", archBlob, archSize)
+func (h *Handler) updateDoc(ctx context.Context, id int64, content, note, archBlob string, archSize int64) error {
+	return h.updateDocWithSource(ctx, id, content, "server", note, archBlob, archSize)
 }
 
 func (h *Handler) updateDocWithSource(
@@ -2272,11 +2307,16 @@ func (h *Handler) updateDocWithSource(
 	id int64,
 	content string,
 	contentSource string,
+	note string,
 	archBlob string,
 	archSize int64,
 ) error {
+	// note explains why content is empty; it is cleared whenever text lands.
 	if strings.TrimSpace(content) == "" {
+		content = ""
 		contentSource = ""
+	} else {
+		note = ""
 	}
 	if contentSource != "" && contentSource != "device_ocr" && contentSource != "server" {
 		return fmt.Errorf("post-ingest: invalid content source %q", contentSource)
@@ -2299,11 +2339,15 @@ func (h *Handler) updateDocWithSource(
 			        WHEN ? AND content_source = 'device_ocr' THEN content_source
 			        ELSE ?
 			    END,
+			    extraction_note = CASE
+			        WHEN ? AND content_source = 'device_ocr' THEN ''
+			        ELSE ?
+			    END,
 			    archive_blob = ?, archive_size = ?,
 			    pipeline_version_content = ?, pipeline_version_ocr = ?,
 			    updated_at = ?
 			WHERE id = ?
-		`, emptyOutput, content, emptyOutput, contentSource,
+		`, emptyOutput, content, emptyOutput, contentSource, emptyOutput, note,
 			archBlobArg, archSizeArg, PipelineVersionContent, PipelineVersionOCR,
 			time.Now().Unix(), id)
 		return err

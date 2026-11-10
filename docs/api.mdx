@@ -1029,6 +1029,10 @@ server text replaces it. Pass `include_content=0` for metadata-only reads; the
 response keeps the stable `content` key with an empty string and does not carry
 OCR text over the wire. This is the required mobile metadata/detail request.
 
+`extraction_note` is present only when processing stored no text. It names the
+tool that was missing or failed, with its error, or says the tools found no
+text, for example `pdftotext: Syntax Error: broken xref; tesseract: pdftoppm not available`.
+
 `jd_category_code` / `jd_category_name` / `jd_area_name` are denormalized
 from the JD tree so API clients can render a filing chip
 without a second round-trip. See [`GET /api/jd/categories/`](#get-apijdcategories)

@@ -10,6 +10,8 @@ and invoice generators produce, is still routed as a PDF; qpdf repairs the
 working copy and the original stays unchanged. Every branch **degrades gracefully**:
 if the binary a branch needs isn't installed, the doc is still stored,
 but `documents.content` lands empty, so search finds it only by title.
+Document Detail then shows **No text was extracted** with the tool and error
+behind it.
 `suchi doctor` lists missing tools. After installing them, stop the server and
 run `suchi rescan --only-no-ocr` to queue documents that have no text; the
 server extracts them when it starts again.

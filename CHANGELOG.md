@@ -6,6 +6,10 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Added
 
+- Document Detail shows **No text was extracted** when processing stored no
+  text, with the missing or failing tool and its error under **Technical
+  details**. Previously such documents matched only by title with no sign why.
+  Existing documents show it after a rescan.
 - Document Detail now has a **Rescan** action that re-runs processing for the
   open document and remains disabled while that document is already processing.
   It is hidden while the document still needs its password.

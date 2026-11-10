@@ -890,6 +890,8 @@ type DocumentDetail struct {
 	TitleOwner          string                  `json:"title_owner"`
 	Content             string                  `json:"content"`
 	ContentSource       string                  `json:"content_source"`
+	// ExtractionNote says why processing stored no text; empty otherwise.
+	ExtractionNote string `json:"extraction_note,omitempty"`
 	// Device OCR provenance remains visible after server text supersedes it.
 	DeviceContentConfidence *float64 `json:"device_content_confidence,omitempty"`
 	DeviceOCRLanguage       string   `json:"device_ocr_language,omitempty"`
@@ -1089,6 +1091,7 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 		       d.languages, d.languages_locked,
 		       d.source_mtime, d.content_source, d.device_content_confidence,
 		       d.device_ocr_language, d.device_content_received_at, COALESCE(d.encryption_state, ''),
+		       d.extraction_note,
 		       EXISTS (SELECT 1 FROM jobs j WHERE j.doc_id = d.id AND j.state IN ('pending', 'running') AND j.kind IN (?, ?))
 		FROM documents d
 		JOIN jd_systems js ON js.id = d.system_id
@@ -1102,7 +1105,7 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 		&d.JDCategoryID, &sensitivity, &d.CreatedAt, &d.AddedAt, &d.UpdatedAt, &trashed,
 		&jdCode, &jdName, &jdAreaName, &languagesStored, &languagesLocked,
 		&sourceMTime, &d.ContentSource, &deviceContentConfidence,
-		&d.DeviceOCRLanguage, &deviceContentReceivedAt, &d.EncryptionState, &d.Processing)
+		&d.DeviceOCRLanguage, &deviceContentReceivedAt, &d.EncryptionState, &d.ExtractionNote, &d.Processing)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "document not found")
 		return

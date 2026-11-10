@@ -333,6 +333,54 @@ func TestOCRmyPDFHonorsPDFContentLimit(t *testing.T) {
 	}
 }
 
+func TestEmptyPDFTextRecordsExtractionNote(t *testing.T) {
+	ctx := context.Background()
+	d, cas := openPostIngestHarness(t)
+	docID := seedPostIngestDocument(t, d, cas, "application/pdf", []byte("pdf bytes"))
+
+	binDir := t.TempDir()
+	writeExecutable(t, filepath.Join(binDir, "qpdf"), "#!/bin/sh\n/bin/cat in.pdf\n")
+	writeExecutable(t, filepath.Join(binDir, "pdftotext"), "#!/bin/sh\necho 'Syntax Error: broken xref' >&2\nexit 1\n")
+	t.Setenv("PATH", binDir)
+
+	h := New(d, cas, testActions(t), slog.New(slog.NewTextHandler(io.Discard, nil)),
+		WithOCREngine(OCREngineTesseract))
+	if err := h.Handle(ctx, pluginapi.Event{DocID: docID}); err != nil {
+		t.Fatal(err)
+	}
+	readNote := func() string {
+		var note string
+		if err := d.Read.QueryRowContext(ctx,
+			`SELECT extraction_note FROM documents WHERE id = ?`, docID).Scan(&note); err != nil {
+			t.Fatal(err)
+		}
+		return note
+	}
+	want := "pdftotext: Syntax Error: broken xref; tesseract: pdftoppm not available"
+	if got := readNote(); got != want {
+		t.Fatalf("extraction_note = %q, want %q", got, want)
+	}
+
+	if err := h.updateDoc(ctx, docID, " \n\t", "OCR found no text", "", 0); err != nil {
+		t.Fatal(err)
+	}
+	var content string
+	if err := d.Read.QueryRowContext(ctx,
+		`SELECT content FROM documents WHERE id = ?`, docID).Scan(&content); err != nil {
+		t.Fatal(err)
+	}
+	if content != "" || readNote() != "OCR found no text" {
+		t.Fatalf("whitespace-only content = %q, note = %q; want empty content with note", content, readNote())
+	}
+
+	if err := h.updateDoc(ctx, docID, "recovered text", "unused", "", 0); err != nil {
+		t.Fatal(err)
+	}
+	if got := readNote(); got != "" {
+		t.Fatalf("extraction_note after text landed = %q, want empty", got)
+	}
+}
+
 func TestEmptyServerOutputPreservesAcceptedDeviceText(t *testing.T) {
 	ctx := context.Background()
 	d, cas := openPostIngestHarness(t)
@@ -345,7 +393,7 @@ func TestEmptyServerOutputPreservesAcceptedDeviceText(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := New(d, cas, testActions(t), slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err := h.updateDoc(ctx, docID, "", "", 0); err != nil {
+	if err := h.updateDoc(ctx, docID, "", "", "", 0); err != nil {
 		t.Fatal(err)
 	}
 	var content, contentSource string
