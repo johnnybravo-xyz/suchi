@@ -49,6 +49,7 @@ def main() -> int:
     stale_image = re.compile(
         r"ghcr\.io/johnnybravo-xyz/suchi:(?:v\d+\.\d+\.\d+-(?:beta|rc)[^\s`]*|beta(?:-standard|-full)?|rc(?:-full)?)"
     )
+    release_image = re.compile(r"ghcr\.io/johnnybravo-xyz/suchi:(v\d+\.\d+\.\d+)(?:-full)?\b")
     for path in active_docs:
         if path.name == "release-process.mdx":
             continue
@@ -58,6 +59,11 @@ def main() -> int:
                 errors.append(
                     f"{path.relative_to(ROOT)}:{line_number}: stale release channel {match.group(0)!r}"
                 )
+            for tag in release_image.findall(line):
+                if tag != version:
+                    errors.append(
+                        f"{path.relative_to(ROOT)}:{line_number}: stale release image {tag!r}; use {version}"
+                    )
 
     if errors:
         print("release documentation check failed:", file=sys.stderr)
