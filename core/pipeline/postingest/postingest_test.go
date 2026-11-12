@@ -381,6 +381,23 @@ func TestEmptyPDFTextRecordsExtractionNote(t *testing.T) {
 	}
 }
 
+func TestUsableOCRLanguagesDropsMissingPacks(t *testing.T) {
+	binDir := t.TempDir()
+	writeExecutable(t, filepath.Join(binDir, "tesseract"),
+		"#!/bin/sh\necho 'List of available languages in \"/tessdata/\" (2):'\necho eng\necho osd\n")
+	t.Setenv("PATH", binDir)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	usable, missing := usableOCRLanguages(t.Context(), log, []string{"fra", "eng"})
+	if strings.Join(usable, ",") != "eng" || strings.Join(missing, ",") != "fra" {
+		t.Fatalf("usable/missing = %v/%v, want [eng]/[fra]", usable, missing)
+	}
+	usable, missing = usableOCRLanguages(t.Context(), log, []string{"fra"})
+	if strings.Join(usable, ",") != "fra" || strings.Join(missing, ",") != "fra" {
+		t.Fatalf("none installed: usable/missing = %v/%v, want configured list kept", usable, missing)
+	}
+}
+
 func TestEmptyServerOutputPreservesAcceptedDeviceText(t *testing.T) {
 	ctx := context.Background()
 	d, cas := openPostIngestHarness(t)

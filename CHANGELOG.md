@@ -16,6 +16,10 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Changed
 
+- OCR skips configured languages whose Tesseract data is not installed and
+  logs `post-ingest.ocr.languages_missing`, instead of failing the whole run.
+  `OCR_LANGUAGES=fra,eng` without the French pack previously left scanned
+  documents with no text at all.
 - The Solo and Household filing trees add **Travel** (17) under their
   administration lane for tickets, boarding passes, itineraries, bookings and
   trip receipts. Existing archives get it when an administrator applies the

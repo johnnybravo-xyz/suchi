@@ -398,6 +398,12 @@ below combine English, Nepali, and German; other codes are listed in
 [Tesseract's language data](https://github.com/tesseract-ocr/tessdata_fast).
 Orientation correction and QR decoding do not supply missing language data.
 
+When a configured language has no installed data, OCR runs with the configured
+languages that are installed and logs `post-ingest.ocr.languages_missing`
+naming the missing ones. Only when none is installed does OCR fail, and the
+document then shows **No text was extracted**. `suchi doctor` lists missing
+packs under **OCR languages**.
+
 #### Docker installations
 
 Language packs belong in a derived image: the supplied Compose service has a

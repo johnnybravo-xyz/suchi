@@ -14,6 +14,8 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -1983,7 +1985,7 @@ func (h *Handler) runOCR(ctx context.Context, log *slog.Logger, pdfBytes []byte,
 			engine = OCREngineOCRmyPDF
 		}
 	}
-	languages := h.ocrLanguages()
+	languages, missing := usableOCRLanguages(ctx, log, h.ocrLanguages())
 
 	switch engine {
 	case OCREngineTesseract:
@@ -2004,7 +2006,7 @@ func (h *Handler) runOCR(ctx context.Context, log *slog.Logger, pdfBytes []byte,
 		}
 		log.Info("post-ingest.route.ocr",
 			"engine", "tesseract", "pages", res.Pages, "text_chars", len(res.Text))
-		return ocrOutput{Text: res.Text, Note: ocrEmptyNote(res.Text, languages)}, nil
+		return ocrOutput{Text: res.Text, Note: ocrEmptyNote(res.Text, languages, missing)}, nil
 
 	case OCREngineOCRmyPDF:
 		res, err := ocrmypdf.OCR(ctx, bytes.NewReader(pdfBytes), log, ocrmypdf.Options{
@@ -2027,16 +2029,50 @@ func (h *Handler) runOCR(ctx context.Context, log *slog.Logger, pdfBytes []byte,
 		}
 		log.Info("post-ingest.route.ocr",
 			"engine", "ocrmypdf", "archive_sha", ref.SHA256, "text_chars", len(res.Text))
-		return ocrOutput{Text: res.Text, ArchiveBlob: ref.SHA256, ArchiveSize: ref.Size, Note: ocrEmptyNote(res.Text, languages)}, nil
+		return ocrOutput{Text: res.Text, ArchiveBlob: ref.SHA256, ArchiveSize: ref.Size, Note: ocrEmptyNote(res.Text, languages, missing)}, nil
 	}
 	return ocrOutput{}, fmt.Errorf("post-ingest: unknown OCR engine %q", engine)
 }
 
-func ocrEmptyNote(text string, languages []string) string {
+func ocrEmptyNote(text string, languages, missing []string) string {
 	if strings.TrimSpace(text) != "" {
 		return ""
 	}
-	return "OCR found no text (languages: " + strings.Join(languages, ", ") + ")"
+	note := "OCR found no text (languages: " + strings.Join(languages, ", ")
+	if len(missing) > 0 {
+		note += "; not installed: " + strings.Join(missing, ", ")
+	}
+	return note + ")"
+}
+
+// usableOCRLanguages drops configured languages whose Tesseract pack is not
+// installed, so one missing pack degrades OCR instead of failing every run.
+// Both engines use the tesseract on PATH. When the packs cannot be listed, or
+// none of the configured ones is installed, it returns the configured list and
+// lets the engine report the failure.
+func usableOCRLanguages(ctx context.Context, log *slog.Logger, configured []string) (usable, missing []string) {
+	path, err := exec.LookPath(tessocr.DefaultTesseract)
+	if err != nil {
+		return configured, nil
+	}
+	_, missing, err = tessocr.InspectLanguages(ctx, path, configured)
+	if err != nil {
+		log.Warn("post-ingest.ocr.languages_unlisted", "err", err.Error())
+		return configured, nil
+	}
+	if len(missing) == 0 {
+		return configured, nil
+	}
+	for _, language := range configured {
+		if !slices.Contains(missing, language) {
+			usable = append(usable, language)
+		}
+	}
+	if len(usable) == 0 {
+		return configured, missing
+	}
+	log.Warn("post-ingest.ocr.languages_missing", "missing", missing, "using", usable)
+	return usable, missing
 }
 
 // postContentSteps runs the after-content-lands steps common to both
