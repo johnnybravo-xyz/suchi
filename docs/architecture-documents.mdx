@@ -35,6 +35,14 @@ and authorization. Keyed response receipts commit with document/job in
 
 Device OCR is provisional PDF text subject to configured confidence. Native PDF
 text remains authoritative; empty extraction cannot erase accepted device text.
+For scanned PDFs and raster images without accepted device text, post-ingest
+tries the configured OCR engines in order. Local engines receive only installed
+language packs; the optional HTTP engine receives the configured language list
+and the derived working PDF. The first nonblank result becomes server-sourced
+content. All-soft outcomes store joined sanitized reasons; any unrecovered
+retryable failure leaves the job retryable. OCRmyPDF archive bytes enter CAS
+only after that decision, so later text discards a pending archive and job
+retries persist none. No engine-attempt or provider provenance schema is added.
 `core/mimeutil` owns the normalized document-format registry: MIME aliases,
 filename-refinement hints, output extensions, and post-ingest capabilities.
 Mail, filesystem intake, post-ingest routing, downloads, and rendered filenames

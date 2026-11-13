@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -28,6 +29,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/lang"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/docsplit"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/eml"
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/httpocr"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/msg"
 	renderview "github.com/johnnybravo-xyz/suchi/core/render/view"
 	"github.com/johnnybravo-xyz/suchi/core/rescan"
@@ -267,7 +269,7 @@ func TestPDFContentAuthority(t *testing.T) {
 				d,
 				cas, testActions(t),
 				slog.New(slog.NewTextHandler(io.Discard, nil)),
-				WithOCREngine(OCREngineTesseract),
+				WithOCREngines([]string{OCREngineTesseract}),
 			)
 			if err := h.Handle(ctx, pluginapi.Event{DocID: docID}); err != nil {
 				t.Fatal(err)
@@ -324,7 +326,7 @@ func TestOCRmyPDFHonorsPDFContentLimit(t *testing.T) {
 		d,
 		cas, testActions(t),
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
-		WithOCREngine(OCREngineOCRmyPDF),
+		WithOCREngines([]string{OCREngineOCRmyPDF}),
 		WithContentLimits(ContentLimits{PDF: 16}),
 	)
 	err := h.Handle(ctx, pluginapi.Event{DocID: docID})
@@ -344,7 +346,7 @@ func TestEmptyPDFTextRecordsExtractionNote(t *testing.T) {
 	t.Setenv("PATH", binDir)
 
 	h := New(d, cas, testActions(t), slog.New(slog.NewTextHandler(io.Discard, nil)),
-		WithOCREngine(OCREngineTesseract))
+		WithOCREngines([]string{OCREngineTesseract}))
 	if err := h.Handle(ctx, pluginapi.Event{DocID: docID}); err != nil {
 		t.Fatal(err)
 	}
@@ -378,6 +380,207 @@ func TestEmptyPDFTextRecordsExtractionNote(t *testing.T) {
 	}
 	if got := readNote(); got != "" {
 		t.Fatalf("extraction_note after text landed = %q, want empty", got)
+	}
+}
+
+func TestOrderedOCREnginesFallBackAfterHTTPFailure(t *testing.T) {
+	for _, status := range []int{http.StatusBadRequest, http.StatusServiceUnavailable} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var receivedLanguages []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if err := r.ParseMultipartForm(1 << 20); err != nil {
+					t.Errorf("parse multipart: %v", err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				receivedLanguages = append([]string(nil), r.MultipartForm.Value["ocr_lang"]...)
+				w.WriteHeader(status)
+			}))
+			defer server.Close()
+
+			binDir := t.TempDir()
+			writeExecutable(t, filepath.Join(binDir, "pdftoppm"),
+				"#!/bin/sh\nprintf 'page' > \"$5-1.pgm\"\n")
+			writeExecutable(t, filepath.Join(binDir, "tesseract"), `#!/bin/sh
+if [ "$1" = "--list-langs" ]; then
+  echo "List of available languages (1):"
+  echo eng
+  exit 0
+fi
+echo "local fallback text"
+`)
+			t.Setenv("PATH", binDir)
+
+			h := New(nil, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)),
+				WithLanguages([]string{"fra", "eng"}),
+				WithOCREngines([]string{OCREngineHTTP, OCREngineTesseract}),
+				WithHTTPOCR(httpocr.Options{Endpoint: server.URL}),
+			)
+			out, err := h.runOCR(t.Context(), h.log, []byte("pdf"), false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.TrimSpace(out.Text) != "local fallback text" || out.Note != "" {
+				t.Fatalf("OCR output = %+v", out)
+			}
+			if strings.Join(receivedLanguages, ",") != "fra,eng" {
+				t.Fatalf("HTTP OCR languages = %v, want configured languages unfiltered", receivedLanguages)
+			}
+		})
+	}
+}
+
+func TestOrderedOCREnginesRetainOnlyUnrecoveredFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		httpCode  int
+		wantError bool
+		wantNote  string
+	}{
+		{
+			name:     "all soft failures become extraction note",
+			httpCode: http.StatusBadRequest,
+			wantNote: "http: HTTP 400; tesseract: pdftoppm not available",
+		},
+		{
+			name:      "retryable HTTP failure keeps job retryable",
+			httpCode:  http.StatusServiceUnavailable,
+			wantError: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.httpCode)
+			}))
+			defer server.Close()
+			t.Setenv("PATH", t.TempDir())
+
+			h := New(nil, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)),
+				WithOCREngines([]string{OCREngineHTTP, OCREngineTesseract}),
+				WithHTTPOCR(httpocr.Options{Endpoint: server.URL}),
+			)
+			out, err := h.runOCR(t.Context(), h.log, []byte("pdf"), false)
+			if tc.wantError {
+				if err == nil || !strings.Contains(err.Error(), "HTTP 503") {
+					t.Fatalf("runOCR error = %v", err)
+				}
+				if out != (ocrOutput{}) {
+					t.Fatalf("retryable output = %+v", out)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if out.Note != tc.wantNote {
+				t.Fatalf("extraction note = %q, want %q", out.Note, tc.wantNote)
+			}
+		})
+	}
+}
+
+func TestOrderedOCREnginesStopOnCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cancel()
+		time.Sleep(50 * time.Millisecond)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	marker := filepath.Join(t.TempDir(), "local-started")
+	binDir := t.TempDir()
+	writeExecutable(t, filepath.Join(binDir, "pdftoppm"),
+		"#!/bin/sh\nprintf started > '"+marker+"'\n")
+	writeExecutable(t, filepath.Join(binDir, "tesseract"), "#!/bin/sh\nexit 0\n")
+	t.Setenv("PATH", binDir)
+
+	h := New(nil, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)),
+		WithOCREngines([]string{OCREngineHTTP, OCREngineTesseract}),
+		WithHTTPOCR(httpocr.Options{Endpoint: server.URL}),
+	)
+	if _, err := h.runOCR(ctx, h.log, []byte("pdf"), false); !errors.Is(err, context.Canceled) {
+		t.Fatalf("runOCR error = %v, want context cancellation", err)
+	}
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("local fallback started after cancellation: %v", err)
+	}
+}
+
+func TestOCRmyPDFArchiveWaitsForFallbackOutcome(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		httpCode    int
+		response    string
+		wantText    string
+		wantArchive bool
+		wantError   bool
+	}{
+		{
+			name:     "later text discards pending archive",
+			httpCode: http.StatusOK,
+			response: `{"status":"success","document":{"md_content":"# remote text"}}`,
+			wantText: "# remote text",
+		},
+		{
+			name:        "all soft failures retain pending archive",
+			httpCode:    http.StatusBadRequest,
+			wantArchive: true,
+		},
+		{
+			name:      "retryable failure persists no archive",
+			httpCode:  http.StatusServiceUnavailable,
+			wantError: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.httpCode)
+				_, _ = io.WriteString(w, tc.response)
+			}))
+			defer server.Close()
+
+			binDir := t.TempDir()
+			writeExecutable(t, filepath.Join(binDir, "ocrmypdf"),
+				"#!/bin/sh\n/bin/cp in.pdf out.pdf\n: > text.txt\n")
+			t.Setenv("PATH", binDir)
+			d, cas := openPostIngestHarness(t)
+			h := New(d, cas, testActions(t), slog.New(slog.NewTextHandler(io.Discard, nil)),
+				WithOCREngines([]string{OCREngineOCRmyPDF, OCREngineHTTP}),
+				WithHTTPOCR(httpocr.Options{Endpoint: server.URL}),
+			)
+
+			out, err := h.runOCR(t.Context(), h.log, []byte("archive candidate"), false)
+			if tc.wantError {
+				if err == nil || !strings.Contains(err.Error(), "HTTP 503") {
+					t.Fatalf("runOCR error = %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if out.Text != tc.wantText {
+				t.Fatalf("text = %q, want %q", out.Text, tc.wantText)
+			}
+			if (out.ArchiveBlob != "") != tc.wantArchive {
+				t.Fatalf("archive = %q, want present %t", out.ArchiveBlob, tc.wantArchive)
+			}
+			if tc.wantArchive {
+				reader, err := cas.Get(out.ArchiveBlob)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer reader.Close()
+				archive, err := io.ReadAll(reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(archive) != "archive candidate" {
+					t.Fatalf("archive bytes = %q", archive)
+				}
+			}
+		})
 	}
 }
 

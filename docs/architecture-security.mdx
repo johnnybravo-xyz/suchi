@@ -217,3 +217,13 @@ digest session IDs, API tokens, and recovery codes. Exclude document bodies and
 credentials/share bearers from audit.
 Logs/metrics use matched route patterns, propagated outward through request copies.
 [Privacy](/privacy) owns the user-facing egress/data contract.
+
+External OCR has a separate boot-time egress gate. `core/config` accepts one
+full HTTP(S) endpoint without userinfo, query, or fragment; only hosts classified
+by `netutil.IsLocalHost` may use cleartext HTTP. Every other host requires HTTPS
+and `EXTRACT_EGRESS_ACK=true`. `core/pipeline/httpocr` rejects redirects, sends
+an optional key only in `X-Api-Key`, uses a constant multipart filename, and
+maps transport/status failures to bounded classes before they can reach jobs,
+notes, or logs. Boot and doctor redact the validated endpoint to its origin.
+[Privacy](/privacy#outbound-connections) owns the operator-facing working-PDF
+disclosure.

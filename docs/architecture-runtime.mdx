@@ -59,9 +59,11 @@ Build version/revision resolve once at boot and enter authenticated `/api/whoami
 metadata. Docker receives revision explicitly because its context excludes `.git`.
 Settings consumes that identity; no update service is involved.
 
-Startup and doctor egress inventories resolve subscription inference destinations
-through the shipped provider registry before redacting them to origins. This
-reports active ChatGPT inference even though its stored endpoint URL is empty.
+Startup and doctor share one egress inventory. It includes the validated HTTP
+OCR origin when the ordered engine list selects `http`, and resolves subscription
+inference destinations through the shipped provider registry before redacting
+them to origins. This reports active ChatGPT inference even though its stored
+endpoint URL is empty.
 
 Production build entry points generate the Svelte bundle, verify its source and
 bundle hashes, and compile `core/ui` with the `embedded_ui` build tag. The
@@ -102,12 +104,14 @@ current committed state on execution. Import reports queued work, not completed
 filesystem projection. Existing retry/dead-job handling owns failures; no extra
 scheduler, broker, provider or automation switch is needed.
 
-Local parsing remains useful without classification. Remote model calls require
-egress acknowledgment and reject redirects; intake/identity have explicit configured
-destinations, never a mandatory Suchi-operated service. MCP calls its configured
-Suchi origin without redirects, accepts bounded valid JSON and excludes queries,
-response bodies and transport diagnostics from tool errors. It uses ordinary
-scoped HTTP/object authorization.
+Local parsing and OCR remain useful without external services. Remote model
+calls require model egress acknowledgement. HTTP OCR is selected only through
+the ordered OCR engine list; non-local endpoints require HTTPS and extraction
+egress acknowledgement. Both reject redirects. Intake and identity have explicit
+configured destinations, never a mandatory Suchi-operated service. MCP calls
+its configured Suchi origin without redirects, accepts bounded valid JSON and
+excludes queries, response bodies and transport diagnostics from tool errors.
+It uses ordinary scoped HTTP/object authorization.
 
 `core/sandbox` bounds subprocess duration/output, sets explicit environment/temp
 directories and kills Unix process groups on cancellation. It is **not OS-level
@@ -115,15 +119,27 @@ isolation**: no filesystem/network denial or process-memory limit. Keep format
 bounds and deployment isolation explicit; stub tests prove neither parser safety
 nor real-tool availability.
 
-`core/pipeline/tessocr` shares one deadline/text cap across rasterization/pages;
-`core/pipeline/imgpdf` owns raster-to-PDF including HEIC/HEIF, validates PDF output
-before OCR/CAS and keeps temporary scratch local. Image barcode fallback preserves
-successful in-process results, validates dimensions and bounds native processing
-without logging decoded payloads/stderr or fetching decoded URLs. [Supported
-formats](/formats) owns sparse OCR, image density/orientation, encoder policies,
-barcode limits and dependencies. [Pipeline versions](/pipeline-versions) describes
-repair of older derivatives. Verify actual tools/output, not binary presence or
-an `archive_blob` field alone.
+`core/pipeline/postingest` owns a private OCR engine interface and ordered
+fallback. Local adapters call `core/pipeline/tessocr` or
+`core/pipeline/ocrmypdf`; the HTTP adapter calls `core/pipeline/httpocr` outside
+write transactions. Retryable HTTP failures survive only when no later engine
+returns text, so the durable job retries and uploads the working PDF again.
+OCRmyPDF archive bytes remain pending until the chain selects a final outcome,
+preventing discarded or retryable candidates from entering CAS.
+
+`core/pipeline/httpocr` builds a bounded multipart stream around the existing
+working-PDF bytes without copying the document, sets `Content-Length`, rejects
+redirects, and parses only inline Docling-compatible JSON. Endpoint validation
+and egress inventory use the same resolved config. `core/pipeline/tessocr`
+shares one deadline/text cap across rasterization/pages; `core/pipeline/imgpdf`
+owns raster-to-PDF including HEIC/HEIF, validates PDF output before OCR/CAS and
+keeps temporary scratch local. Image barcode fallback preserves successful
+in-process results, validates dimensions and bounds native processing without
+logging decoded payloads/stderr or fetching decoded URLs. [Supported
+formats](/formats) owns OCR dispatch, sparse OCR, image density/orientation,
+encoder policies, barcode limits and dependencies. [Pipeline
+versions](/pipeline-versions) describes repair of older derivatives. Verify
+actual tools/output, not binary presence or an `archive_blob` field alone.
 
 Account subscription is a provider-neutral settings/API boundary.
 `core/settings/subscriptions.go` defines typed login, poll, model and masked

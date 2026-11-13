@@ -5,8 +5,10 @@ package config
 import (
 	"net/netip"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPublicURLValidation(t *testing.T) {
@@ -346,5 +348,128 @@ func TestScanASNRejectsSeparatorPrefixCollision(t *testing.T) {
 
 	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "SCAN_SPLIT_TOKEN") {
 		t.Fatalf("collision error = %v", err)
+	}
+}
+
+func TestParseOCREngines(t *testing.T) {
+	for _, tc := range []struct {
+		raw     string
+		want    string
+		wantErr string
+	}{
+		{raw: "auto", want: "auto"},
+		{raw: " http, tesseract ", want: "http,tesseract"},
+		{raw: "tesseract,ocrmypdf", want: "tesseract,ocrmypdf"},
+		{raw: "", wantErr: "empty engine"},
+		{raw: "http,,tesseract", wantErr: "empty engine"},
+		{raw: "http,http", wantErr: "duplicate"},
+		{raw: "auto,tesseract", wantErr: "auto must be the only"},
+		{raw: "cloud", wantErr: "unknown value"},
+	} {
+		t.Run(tc.raw, func(t *testing.T) {
+			got, err := parseOCREngines(tc.raw)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("parseOCREngines error = %v, want %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Join(got, ",") != tc.want {
+				t.Fatalf("parseOCREngines = %v, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestOCRHTTPConfigValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		url     string
+		ack     bool
+		wantErr string
+	}{
+		{name: "private HTTP", url: "http://192.168.1.20:5001/v1/convert/file"},
+		{name: "local alias HTTP", url: "http://extractor.local:5001/convert"},
+		{name: "remote HTTPS acknowledged", url: "https://ocr.example.test/convert/", ack: true},
+		{name: "missing URL", wantErr: "OCR_HTTP_URL is required"},
+		{name: "unqualified HTTP", url: "http://extractor:5001/convert", wantErr: "must use https"},
+		{name: "remote HTTP", url: "http://ocr.example.test", ack: true, wantErr: "must use https"},
+		{name: "remote without acknowledgement", url: "https://ocr.example.test", wantErr: "EXTRACT_EGRESS_ACK"},
+		{name: "userinfo", url: "https://secret@ocr.example.test", ack: true, wantErr: "userinfo"},
+		{name: "query", url: "https://ocr.example.test?key=secret", ack: true, wantErr: "query"},
+		{name: "fragment", url: "https://ocr.example.test#secret", ack: true, wantErr: "fragment"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateConfigEnv(t)
+			t.Setenv("PUBLIC_URL", "http://localhost")
+			t.Setenv("OCR_ENGINE", "http,tesseract")
+			t.Setenv("OCR_HTTP_URL", tc.url)
+			if tc.ack {
+				t.Setenv("EXTRACT_EGRESS_ACK", "true")
+			}
+			cfg, err := Load()
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("Load error = %v, want %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.OCRHTTPURL != tc.url {
+				t.Fatalf("OCRHTTPURL = %q, want %q", cfg.OCRHTTPURL, tc.url)
+			}
+			if strings.Join(cfg.OCREngines, ",") != "http,tesseract" {
+				t.Fatalf("OCREngines = %v", cfg.OCREngines)
+			}
+		})
+	}
+}
+
+func TestOCRHTTPAPIKeyFileAndTimeout(t *testing.T) {
+	isolateConfigEnv(t)
+	t.Setenv("PUBLIC_URL", "http://localhost")
+	t.Setenv("OCR_ENGINE", "http")
+	t.Setenv("OCR_HTTP_URL", "http://127.0.0.1:5001/v1/convert/file")
+	t.Setenv("SUCHI_OCR_HTTP_TIMEOUT", "45s")
+	keyPath := filepath.Join(t.TempDir(), "ocr-http-key")
+	if err := os.WriteFile(keyPath, []byte("private-key\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OCR_HTTP_API_KEY_FILE", keyPath)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OCRHTTPAPIKey != "private-key" || cfg.OCRHTTPTimeout != 45*time.Second {
+		t.Fatalf("HTTP OCR secret/timeout = %q/%s", cfg.OCRHTTPAPIKey, cfg.OCRHTTPTimeout)
+	}
+}
+
+func TestInactiveOCRHTTPDoesNotReadSecretFile(t *testing.T) {
+	isolateConfigEnv(t)
+	t.Setenv("PUBLIC_URL", "http://localhost")
+	t.Setenv("OCR_HTTP_API_KEY_FILE", filepath.Join(t.TempDir(), "missing"))
+	t.Setenv("SUCHI_OCR_HTTP_TIMEOUT", "invalid")
+
+	if _, err := Load(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestActiveOCRHTTPRejectsInvalidTimeout(t *testing.T) {
+	isolateConfigEnv(t)
+	t.Setenv("PUBLIC_URL", "http://localhost")
+	t.Setenv("OCR_ENGINE", "http")
+	t.Setenv("OCR_HTTP_URL", "http://127.0.0.1:5001/v1/convert/file")
+	t.Setenv("SUCHI_OCR_HTTP_TIMEOUT", "0s")
+
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "must be positive") {
+		t.Fatalf("Load error = %v", err)
 	}
 }

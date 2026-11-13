@@ -15,11 +15,13 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/asn"
+	"github.com/johnnybravo-xyz/suchi/core/netutil"
 )
 
 // Config is the fully-resolved runtime configuration.
@@ -104,14 +106,15 @@ type Config struct {
 	AnyDocMaxContentBytes int64
 	DjvuMaxContentBytes   int64
 
-	// OCR engine selector for scanned-PDF ingest. Values:
-	//   "auto"      — prefer tesseract-only (tessocr) when available,
-	//                 fall back to ocrmypdf, else skip OCR.
-	//   "tesseract" — force tessocr; error/skip if binaries missing.
-	//   "ocrmypdf"  — force ocrmypdf; error/skip if the binary is missing.
-	// tessocr is ~4× smaller in the image but produces no
-	// searchable-PDF archive (documents.archive_blob stays NULL).
-	OCREngine string
+	// Ordered OCR engines for scanned PDFs and raster images. "auto" keeps the
+	// local default and must be the only entry. External engines are opt-in.
+	OCREngines []string
+	// The HTTP engine calls one operator-configured endpoint that implements
+	// Suchi's fixed multipart request and Docling-compatible response contract.
+	OCRHTTPURL       string
+	OCRHTTPAPIKey    string
+	OCRHTTPTimeout   time.Duration
+	ExtractEgressAck bool
 
 	// Scan-intake preprocessing knobs. Blank-page detection runs
 	// after qpdf normalization and before pdf-inspector: if any pages
@@ -212,6 +215,8 @@ func Load() (*Config, error) {
 		LLMEndpointURL:                   env("LLM_ENDPOINT_URL", ""),
 		LLMModel:                         env("LLM_MODEL", ""),
 		LLMEgressAck:                     env("LLM_EGRESS_ACK", "") == "true",
+		OCRHTTPURL:                       env("OCR_HTTP_URL", ""),
+		ExtractEgressAck:                 env("EXTRACT_EGRESS_ACK", "") == "true",
 	}
 	if c.IngestFSDir == "" && c.IngestFSOwnerEmail != "" {
 		c.IngestFSDir = filepath.Join(c.DataDir, "staging")
@@ -267,11 +272,18 @@ func Load() (*Config, error) {
 		c.DeviceOCRMinConfidence = f
 	}
 
-	c.OCREngine = strings.ToLower(env("OCR_ENGINE", "auto"))
-	switch c.OCREngine {
-	case "auto", "tesseract", "ocrmypdf":
-	default:
-		return nil, fmt.Errorf("OCR_ENGINE: unknown value %q (want auto|tesseract|ocrmypdf)", c.OCREngine)
+	c.OCREngines, err = parseOCREngines(env("OCR_ENGINE", "auto"))
+	if err != nil {
+		return nil, err
+	}
+	c.OCRHTTPTimeout = 10 * time.Minute
+	if slices.Contains(c.OCREngines, "http") {
+		if c.OCRHTTPTimeout, err = time.ParseDuration(env("SUCHI_OCR_HTTP_TIMEOUT", "10m")); err != nil {
+			return nil, fmt.Errorf("SUCHI_OCR_HTTP_TIMEOUT: %w", err)
+		}
+		if c.OCRHTTPTimeout <= 0 {
+			return nil, errors.New("SUCHI_OCR_HTTP_TIMEOUT: must be positive")
+		}
 	}
 
 	switch value := strings.ToLower(env("SCAN_BLANK_REMOVAL", "auto")); value {
@@ -365,6 +377,14 @@ func Load() (*Config, error) {
 	if c.LLMAPIKey, err = readSecret("LLM_API_KEY"); err != nil {
 		return nil, err
 	}
+	if slices.Contains(c.OCREngines, "http") {
+		if c.OCRHTTPAPIKey, err = readSecret("OCR_HTTP_API_KEY"); err != nil {
+			return nil, err
+		}
+		if err := validateOCRHTTPConfig(c); err != nil {
+			return nil, err
+		}
+	}
 
 	if c.PublicURL == "" {
 		return nil, errors.New("PUBLIC_URL is required")
@@ -407,6 +427,65 @@ func Load() (*Config, error) {
 	}
 
 	return c, nil
+}
+
+func parseOCREngines(raw string) ([]string, error) {
+	parts := strings.Split(raw, ",")
+	engines := make([]string, 0, len(parts))
+	seen := make(map[string]bool, len(parts))
+	for _, part := range parts {
+		engine := strings.ToLower(strings.TrimSpace(part))
+		if engine == "" {
+			return nil, errors.New("OCR_ENGINE: empty engine name")
+		}
+		switch engine {
+		case "auto", "tesseract", "ocrmypdf", "http":
+		default:
+			return nil, fmt.Errorf("OCR_ENGINE: unknown value %q (want auto|tesseract|ocrmypdf|http)", engine)
+		}
+		if seen[engine] {
+			return nil, fmt.Errorf("OCR_ENGINE: duplicate engine %q", engine)
+		}
+		seen[engine] = true
+		engines = append(engines, engine)
+	}
+	if seen["auto"] && len(engines) != 1 {
+		return nil, errors.New("OCR_ENGINE: auto must be the only engine")
+	}
+	return engines, nil
+}
+
+func validateOCRHTTPConfig(c *Config) error {
+	raw := strings.TrimSpace(c.OCRHTTPURL)
+	if raw == "" {
+		return errors.New("OCR_HTTP_URL is required when OCR_ENGINE includes http")
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("OCR_HTTP_URL: %w", err)
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if (scheme != "http" && scheme != "https") || u.Hostname() == "" || u.Opaque != "" {
+		return errors.New("OCR_HTTP_URL: must be an absolute http or https URL with a host")
+	}
+	if u.User != nil {
+		return errors.New("OCR_HTTP_URL: userinfo is not allowed")
+	}
+	if u.RawQuery != "" || u.ForceQuery {
+		return errors.New("OCR_HTTP_URL: query is not allowed")
+	}
+	if strings.Contains(raw, "#") {
+		return errors.New("OCR_HTTP_URL: fragment is not allowed")
+	}
+	local := netutil.IsLocalHost(u.Hostname())
+	if !local && scheme != "https" {
+		return errors.New("OCR_HTTP_URL: non-local endpoint must use https")
+	}
+	if !local && !c.ExtractEgressAck {
+		return errors.New("OCR_HTTP_URL: non-local endpoint requires EXTRACT_EGRESS_ACK=true")
+	}
+	c.OCRHTTPURL = u.String()
+	return nil
 }
 
 func validateOriginURL(name, raw string) error {

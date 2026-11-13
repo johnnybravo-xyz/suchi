@@ -38,6 +38,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/djvu"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/docsplit"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/eml"
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/httpocr"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/imgpdf"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/msg"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/ocrmypdf"
@@ -110,12 +111,13 @@ type ContentLimits struct {
 	DjVu   int64
 }
 
-// OCR engine selectors. "auto" prefers tessocr
-// when its binaries are on PATH, else falls back to ocrmypdf.
+// OCR engine selectors. "auto" prefers tessocr when its binaries are on PATH,
+// else falls back to ocrmypdf.
 const (
 	OCREngineAuto      = "auto"
 	OCREngineTesseract = "tesseract"
 	OCREngineOCRmyPDF  = "ocrmypdf"
+	OCREngineHTTP      = "http"
 )
 
 // Handler chains qpdf → pdf-inspector → ocrmypdf, updates the
@@ -134,7 +136,8 @@ type Handler struct {
 	classifyEnabled func() bool     // optional live classifier state
 	languageState   func() []string // optional live OCR-language state
 	limits          ContentLimits
-	ocrEngine       string // "auto" | "tesseract" | "ocrmypdf"
+	ocrEngineNames  []string
+	httpOCR         httpocr.Options
 	scanBlank       ScanBlank
 	scanSplit       ScanSplit
 	scanSplitState  func() ScanSplit // optional live marker-analysis state
@@ -235,14 +238,19 @@ func WithContentLimits(l ContentLimits) Option {
 	return func(h *Handler) { h.limits = l }
 }
 
-// WithOCREngine chooses between "auto" (default), "tesseract" and
-// "ocrmypdf". Empty string is a no-op — the New() default wins.
-func WithOCREngine(engine string) Option {
+// WithOCREngines sets the ordered OCR fallback list. An empty list leaves the
+// local "auto" default in place.
+func WithOCREngines(engines []string) Option {
 	return func(h *Handler) {
-		if engine != "" {
-			h.ocrEngine = engine
+		if len(engines) > 0 {
+			h.ocrEngineNames = append([]string(nil), engines...)
 		}
 	}
+}
+
+// WithHTTPOCR supplies the validated external OCR endpoint and secret.
+func WithHTTPOCR(opts httpocr.Options) Option {
+	return func(h *Handler) { h.httpOCR = opts }
 }
 
 // WithScanBlank enables/tunes blank-page detection. When Enabled=true,
@@ -290,13 +298,13 @@ func WithScanSplitState(state func() ScanSplit) Option {
 // no LLM handoff, extractor defaults, OCR engine "auto".
 func New(d *db.DB, cas *blob.CAS, actions *automations.Registry, log *slog.Logger, opts ...Option) *Handler {
 	h := &Handler{
-		db:         d,
-		actions:    actions,
-		cas:        cas,
-		log:        log.With("component", "post-ingest"),
-		langs:      []string{"eng"},
-		ocrEngine:  OCREngineAuto,
-		convertMSG: msg.Convert,
+		db:             d,
+		actions:        actions,
+		cas:            cas,
+		log:            log.With("component", "post-ingest"),
+		langs:          []string{"eng"},
+		ocrEngineNames: []string{OCREngineAuto},
+		convertMSG:     msg.Convert,
 	}
 	for _, o := range opts {
 		o(h)
@@ -1955,9 +1963,8 @@ func (h *Handler) ocrLanguages() []string {
 	return append([]string(nil), h.langs...)
 }
 
-// ocrOutput is one OCR run. ArchiveBlob is empty when the engine doesn't
-// produce a searchable-PDF archive (tessocr) or when OCR was skipped. Note
-// explains an empty Text for documents.extraction_note.
+// ocrOutput is the selected OCR result. ArchiveBlob is empty unless OCRmyPDF's
+// candidate won or every engine failed softly after it produced an archive.
 type ocrOutput struct {
 	Text        string
 	ArchiveBlob string
@@ -1965,79 +1972,192 @@ type ocrOutput struct {
 	Note        string
 }
 
-// runOCR dispatches to the configured OCR engine.
-//
-// Engine selection:
-//   - "tesseract": run tessocr; fall through with empty content if its
-//     binaries are missing.
-//   - "ocrmypdf": run ocrmypdf; skip if the binary is missing.
-//   - "auto": prefer tessocr when both binaries are available, else fall
-//     back to ocrmypdf. Zero-config on any image that ships either.
-//
-// The engine decision is logged once per invocation so operators can
-// verify which path fired without turning on Debug.
-func (h *Handler) runOCR(ctx context.Context, log *slog.Logger, pdfBytes []byte, imageInput bool) (ocrOutput, error) {
-	engine := h.ocrEngine
-	if engine == OCREngineAuto {
-		if tessocr.Available() {
-			engine = OCREngineTesseract
-		} else {
-			engine = OCREngineOCRmyPDF
-		}
-	}
-	languages, missing := usableOCRLanguages(ctx, log, h.ocrLanguages())
-
-	switch engine {
-	case OCREngineTesseract:
-		res, err := tessocr.OCR(ctx, bytes.NewReader(pdfBytes), log, tessocr.Options{
-			Languages:    languages,
-			MaxTextBytes: h.limits.PDF,
-			ImageInput:   imageInput,
-		})
-		if err != nil {
-			return ocrOutput{}, fmt.Errorf("tessocr: %w", err)
-		}
-		if res.Skipped {
-			reason := firstNonEmpty(res.StderrTail, "tessocr skipped")
-			log.Info("post-ingest.route.ocr.skipped",
-				"engine", "tesseract",
-				"reason", reason)
-			return ocrOutput{Note: "tesseract: " + reason}, nil
-		}
-		log.Info("post-ingest.route.ocr",
-			"engine", "tesseract", "pages", res.Pages, "text_chars", len(res.Text))
-		return ocrOutput{Text: res.Text, Note: ocrEmptyNote(res.Text, languages, missing)}, nil
-
-	case OCREngineOCRmyPDF:
-		res, err := ocrmypdf.OCR(ctx, bytes.NewReader(pdfBytes), log, ocrmypdf.Options{
-			Languages: languages,
-			MaxText:   h.limits.PDF,
-		})
-		if err != nil {
-			return ocrOutput{}, fmt.Errorf("ocrmypdf: %w", err)
-		}
-		if res.Skipped || len(res.ArchivePDF) == 0 {
-			reason := firstNonEmpty(res.StderrTail, "ocrmypdf skipped")
-			log.Info("post-ingest.route.ocr.skipped",
-				"engine", "ocrmypdf",
-				"reason", reason)
-			return ocrOutput{Text: res.Text, Note: "ocrmypdf: " + reason}, nil
-		}
-		ref, err := h.cas.Put(bytes.NewReader(res.ArchivePDF))
-		if err != nil {
-			return ocrOutput{}, fmt.Errorf("cas put archive: %w", err)
-		}
-		log.Info("post-ingest.route.ocr",
-			"engine", "ocrmypdf", "archive_sha", ref.SHA256, "text_chars", len(res.Text))
-		return ocrOutput{Text: res.Text, ArchiveBlob: ref.SHA256, ArchiveSize: ref.Size, Note: ocrEmptyNote(res.Text, languages, missing)}, nil
-	}
-	return ocrOutput{}, fmt.Errorf("post-ingest: unknown OCR engine %q", engine)
+type ocrCandidate struct {
+	Text       string
+	ArchivePDF []byte
+	Note       string
 }
 
-func ocrEmptyNote(text string, languages, missing []string) string {
-	if strings.TrimSpace(text) != "" {
-		return ""
+type ocrRequest struct {
+	pdf                 []byte
+	imageInput          bool
+	maxTextBytes        int64
+	configuredLanguages []string
+	localLanguages      []string
+	missingLanguages    []string
+	localReady          bool
+}
+
+func (r *ocrRequest) languagesForLocal(ctx context.Context, log *slog.Logger) ([]string, []string) {
+	if !r.localReady {
+		r.localLanguages, r.missingLanguages = usableOCRLanguages(ctx, log, r.configuredLanguages)
+		r.localReady = true
 	}
+	return r.localLanguages, r.missingLanguages
+}
+
+type ocrEngine interface {
+	name() string
+	extract(context.Context, *slog.Logger, *ocrRequest) (ocrCandidate, error)
+}
+
+type tesseractOCREngine struct{}
+
+func (tesseractOCREngine) name() string { return OCREngineTesseract }
+
+func (tesseractOCREngine) extract(ctx context.Context, log *slog.Logger, request *ocrRequest) (ocrCandidate, error) {
+	languages, missing := request.languagesForLocal(ctx, log)
+	res, err := tessocr.OCR(ctx, bytes.NewReader(request.pdf), log, tessocr.Options{
+		Languages: languages, MaxTextBytes: request.maxTextBytes, ImageInput: request.imageInput,
+	})
+	if err != nil {
+		return ocrCandidate{}, fmt.Errorf("tessocr: %w", err)
+	}
+	candidate := ocrCandidate{Text: res.Text}
+	if strings.TrimSpace(candidate.Text) == "" {
+		if res.Skipped {
+			candidate.Note = "tesseract: " + firstNonEmpty(res.StderrTail, "tessocr skipped")
+		} else {
+			candidate.Note = "tesseract: " + ocrEmptyNote(languages, missing)
+		}
+	}
+	return candidate, nil
+}
+
+type ocrmypdfOCREngine struct{}
+
+func (ocrmypdfOCREngine) name() string { return OCREngineOCRmyPDF }
+
+func (ocrmypdfOCREngine) extract(ctx context.Context, log *slog.Logger, request *ocrRequest) (ocrCandidate, error) {
+	languages, missing := request.languagesForLocal(ctx, log)
+	res, err := ocrmypdf.OCR(ctx, bytes.NewReader(request.pdf), log, ocrmypdf.Options{
+		Languages: languages, MaxText: request.maxTextBytes,
+	})
+	if err != nil {
+		return ocrCandidate{}, fmt.Errorf("ocrmypdf: %w", err)
+	}
+	candidate := ocrCandidate{Text: res.Text, ArchivePDF: res.ArchivePDF}
+	if strings.TrimSpace(candidate.Text) == "" {
+		if res.Skipped || len(res.ArchivePDF) == 0 {
+			candidate.Note = "ocrmypdf: " + firstNonEmpty(res.StderrTail, "ocrmypdf skipped")
+		} else {
+			candidate.Note = "ocrmypdf: " + ocrEmptyNote(languages, missing)
+		}
+	}
+	return candidate, nil
+}
+
+type httpOCREngine struct {
+	options httpocr.Options
+}
+
+func (httpOCREngine) name() string { return OCREngineHTTP }
+
+func (e httpOCREngine) extract(ctx context.Context, log *slog.Logger, request *ocrRequest) (ocrCandidate, error) {
+	opts := e.options
+	opts.Languages = request.configuredLanguages
+	opts.MaxTextBytes = request.maxTextBytes
+	result, err := httpocr.Extract(ctx, request.pdf, log, opts)
+	if err != nil {
+		return ocrCandidate{}, err
+	}
+	candidate := ocrCandidate{Text: result.Text}
+	if strings.TrimSpace(candidate.Text) == "" {
+		candidate.Note = "http: " + firstNonEmpty(result.Reason, "returned no text")
+	}
+	return candidate, nil
+}
+
+func (h *Handler) configuredOCREngine(name string) (ocrEngine, error) {
+	switch name {
+	case OCREngineTesseract:
+		return tesseractOCREngine{}, nil
+	case OCREngineOCRmyPDF:
+		return ocrmypdfOCREngine{}, nil
+	case OCREngineHTTP:
+		return httpOCREngine{options: h.httpOCR}, nil
+	default:
+		return nil, fmt.Errorf("post-ingest: unknown OCR engine %q", name)
+	}
+}
+
+// runOCR tries the configured engines in order. Retryable failures are ignored
+// only when a later engine returns text; otherwise they keep the durable job
+// retryable.
+func (h *Handler) runOCR(ctx context.Context, log *slog.Logger, pdfBytes []byte, imageInput bool) (ocrOutput, error) {
+	engines := h.ocrEngineNames
+	if len(engines) == 1 && engines[0] == OCREngineAuto {
+		if tessocr.Available() {
+			engines = []string{OCREngineTesseract}
+		} else {
+			engines = []string{OCREngineOCRmyPDF}
+		}
+	}
+
+	request := &ocrRequest{
+		pdf:                 pdfBytes,
+		imageInput:          imageInput,
+		maxTextBytes:        h.limits.PDF,
+		configuredLanguages: h.ocrLanguages(),
+	}
+	var (
+		notes          []string
+		retryable      []error
+		pendingArchive []byte
+	)
+	for _, configuredName := range engines {
+		if err := ctx.Err(); err != nil {
+			return ocrOutput{}, err
+		}
+		engine, err := h.configuredOCREngine(configuredName)
+		if err != nil {
+			return ocrOutput{}, err
+		}
+		engineName := engine.name()
+		candidate, err := engine.extract(ctx, log, request)
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ocrOutput{}, ctxErr
+			}
+			retryable = append(retryable, err)
+			log.Warn("post-ingest.route.ocr.retryable", "engine", engineName, "err", err.Error())
+			continue
+		}
+		if strings.TrimSpace(candidate.Text) != "" {
+			log.Info("post-ingest.route.ocr", "engine", engineName, "text_chars", len(candidate.Text))
+			return h.persistOCRCandidate(candidate)
+		}
+		if len(candidate.ArchivePDF) > 0 {
+			pendingArchive = candidate.ArchivePDF
+		}
+		if candidate.Note != "" {
+			notes = append(notes, candidate.Note)
+			log.Info("post-ingest.route.ocr.skipped", "engine", engineName, "reason", candidate.Note)
+		}
+	}
+	if len(retryable) > 0 {
+		return ocrOutput{}, errors.Join(retryable...)
+	}
+	return h.persistOCRCandidate(ocrCandidate{
+		ArchivePDF: pendingArchive,
+		Note:       strings.Join(notes, "; "),
+	})
+}
+
+func (h *Handler) persistOCRCandidate(candidate ocrCandidate) (ocrOutput, error) {
+	out := ocrOutput{Text: candidate.Text, Note: candidate.Note}
+	if len(candidate.ArchivePDF) == 0 {
+		return out, nil
+	}
+	ref, err := h.cas.Put(bytes.NewReader(candidate.ArchivePDF))
+	if err != nil {
+		return ocrOutput{}, fmt.Errorf("cas put archive: %w", err)
+	}
+	out.ArchiveBlob, out.ArchiveSize = ref.SHA256, ref.Size
+	return out, nil
+}
+
+func ocrEmptyNote(languages, missing []string) string {
 	note := "OCR found no text (languages: " + strings.Join(languages, ", ")
 	if len(missing) > 0 {
 		note += "; not installed: " + strings.Join(missing, ", ")

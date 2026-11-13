@@ -180,6 +180,8 @@ var fileConfigAliases = map[string][]string{
 	"OIDC_CLIENT_SECRET_FILE": {"OIDC_CLIENT_SECRET", "OIDC_CLIENT_SECRET_FILE"},
 	"LLM_API_KEY":             {"LLM_API_KEY", "LLM_API_KEY_FILE"},
 	"LLM_API_KEY_FILE":        {"LLM_API_KEY", "LLM_API_KEY_FILE"},
+	"OCR_HTTP_API_KEY":        {"OCR_HTTP_API_KEY", "OCR_HTTP_API_KEY_FILE"},
+	"OCR_HTTP_API_KEY_FILE":   {"OCR_HTTP_API_KEY", "OCR_HTTP_API_KEY_FILE"},
 }
 
 func processEnvKeys() map[string]struct{} {

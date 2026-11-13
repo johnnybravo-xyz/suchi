@@ -48,6 +48,9 @@ func TestLoadFileAndLoad(t *testing.T) {
 public_url = "https://suchi.example.com"
 admin_email = "admin@example.com"
 body_limit = "64M"
+ocr_engine = "http"
+ocr_http_url = "http://127.0.0.1:5001/v1/convert/file"
+ocr_http_api_key_file = "/missing/ocr-secret"
 
 [oidc]
 issuer_url = "https://id.example.com"
@@ -64,6 +67,7 @@ api_key_file = "/missing/llm-secret"
 		t.Setenv("BODY_LIMIT", "12M")
 		t.Setenv("OIDC_CLIENT_SECRET", "environment-oidc-secret")
 		t.Setenv("LLM_API_KEY", "environment-llm-key")
+		t.Setenv("OCR_HTTP_API_KEY", "environment-ocr-key")
 
 		if _, err := LoadFile(); err != nil {
 			t.Fatalf("LoadFile: %v", err)
@@ -75,8 +79,11 @@ api_key_file = "/missing/llm-secret"
 		if cfg.BodyLimit != 12<<20 {
 			t.Fatalf("BodyLimit = %d, want %d", cfg.BodyLimit, 12<<20)
 		}
-		if cfg.OIDCClientSecret != "environment-oidc-secret" || cfg.LLMAPIKey != "environment-llm-key" {
-			t.Fatalf("environment secrets did not win: oidc=%q llm=%q", cfg.OIDCClientSecret, cfg.LLMAPIKey)
+		if cfg.OIDCClientSecret != "environment-oidc-secret" ||
+			cfg.LLMAPIKey != "environment-llm-key" ||
+			cfg.OCRHTTPAPIKey != "environment-ocr-key" {
+			t.Fatalf("environment secrets did not win: oidc=%q llm=%q ocr=%q",
+				cfg.OIDCClientSecret, cfg.LLMAPIKey, cfg.OCRHTTPAPIKey)
 		}
 		if cfg.AdminEmail != "admin@example.com" || cfg.OIDCIssuerURL != "https://id.example.com" {
 			t.Fatalf("nested mapping failed: AdminEmail=%q OIDCIssuerURL=%q", cfg.AdminEmail, cfg.OIDCIssuerURL)
@@ -129,7 +136,8 @@ func isolateConfigEnv(t *testing.T) {
 		FileConfigEnv, "PUBLIC_URL", "DATA_DIR", "LISTEN_ADDR", "SHARE_PUBLIC_URL", "SHARE_LISTEN_ADDR",
 		"LOG_LEVEL", "SUCHI_PPROF", "BODY_LIMIT", "BACKUP_INTERVAL", "BACKUP_KEEP", "AUDIT_RETENTION_DAYS",
 		"TRUSTED_PROXY_CIDRS", "OCR_LANGUAGES", "OCR_ENGINE", "PDF_MAX_CONTENT_BYTES",
-		"ANYDOC_MAX_CONTENT_BYTES", "DJVU_MAX_CONTENT_BYTES", "SCAN_BLANK_REMOVAL",
+		"ANYDOC_MAX_CONTENT_BYTES", "DJVU_MAX_CONTENT_BYTES", "OCR_HTTP_URL", "OCR_HTTP_API_KEY",
+		"OCR_HTTP_API_KEY_FILE", "SUCHI_OCR_HTTP_TIMEOUT", "EXTRACT_EGRESS_ACK", "SCAN_BLANK_REMOVAL",
 		"DEVICE_OCR_MIN_CONFIDENCE",
 		"SCAN_BLANK_WHITENESS_THRESHOLD", "SCAN_SPLIT_ENABLED", "SCAN_SPLIT_TOKEN", "SCAN_SPLIT_DPI",
 		"SCAN_ASN_MODE", "SCAN_ASN_PREFIX",

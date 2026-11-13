@@ -54,6 +54,8 @@ func TestEnumerateEgressIncludesDatabaseRowsAndRedactsSecrets(t *testing.T) {
 		OIDCIssuerURL:                    "https://id.example.test/tenant?hint=secret",
 		IngestIMAPOAuthClientIDMicrosoft: "11111111-1111-1111-1111-111111111111",
 		IngestIMAPOAuthScopesMicrosoft:   "offline_access",
+		OCREngines:                       []string{"http", "tesseract"},
+		OCRHTTPURL:                       "https://extract.example.test/private/token",
 	}
 	got, err := diagnostics.EnumerateEgress(ctx, d, cfg, "https://api.openai.com/v1?key=secret")
 	if err != nil {
@@ -63,6 +65,7 @@ func TestEnumerateEgressIncludesDatabaseRowsAndRedactsSecrets(t *testing.T) {
 	for _, want := range []string{
 		"imap mail.example.test:993 (Bills)",
 		"llm-classifier https://api.openai.com",
+		"ocr-http https://extract.example.test",
 		"oauth.microsoft https://login.microsoftonline.com/common",
 		"oidc.discovery https://id.example.test/tenant",
 	} {

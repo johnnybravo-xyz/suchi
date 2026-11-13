@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 
@@ -49,6 +50,9 @@ func EnumerateEgress(ctx context.Context, d *db.DB, cfg *config.Config, llmEndpo
 	}
 	if llmEndpointURL != "" {
 		add("llm-classifier " + redactURL(llmEndpointURL, false))
+	}
+	if slices.Contains(cfg.OCREngines, "http") && cfg.OCRHTTPURL != "" {
+		add("ocr-http " + redactURL(cfg.OCRHTTPURL, false))
 	}
 	sort.Strings(out)
 	return out, errors.Join(queryErrs...)

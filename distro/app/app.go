@@ -37,6 +37,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/lang"
 	"github.com/johnnybravo-xyz/suchi/core/netutil"
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/httpocr"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
 	"github.com/johnnybravo-xyz/suchi/core/render/view"
 	"github.com/johnnybravo-xyz/suchi/core/rescan"
@@ -434,7 +435,10 @@ func Run(ctx context.Context, opts Options) error {
 			AnyDoc: cfg.AnyDocMaxContentBytes,
 			DjVu:   cfg.DjvuMaxContentBytes,
 		}),
-		postingest.WithOCREngine(cfg.OCREngine),
+		postingest.WithOCREngines(cfg.OCREngines),
+		postingest.WithHTTPOCR(httpocr.Options{
+			Endpoint: cfg.OCRHTTPURL, APIKey: cfg.OCRHTTPAPIKey, Timeout: cfg.OCRHTTPTimeout,
+		}),
 		postingest.WithScanBlank(postingest.ScanBlank{
 			Enabled:            cfg.ScanBlankRemoval,
 			WhitenessThreshold: cfg.ScanBlankWhitenessThreshold,
