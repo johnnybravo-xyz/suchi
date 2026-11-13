@@ -38,12 +38,17 @@ backup_interval: "24h"
 # OCR + ingest
 # --------------------------------------------------------------------
 
-ocr_languages: "eng"
-ocr_engine: "auto"
+ocr_languages: "eng" # local packs are filtered; HTTP receives this list unchanged
+ocr_engine: "auto" # auto alone, or ordered CSV: "http,tesseract"
 device_ocr_min_confidence: 0.65
 pdf_max_content_bytes: "8M"
 anydoc_max_content_bytes: "32M"
 djvu_max_content_bytes: "32M"
+# Optional fixed-contract HTTP OCR. URL is the full conversion endpoint.
+# ocr_http_url: "http://extractor.local:5001/v1/convert/file"
+# ocr_http_api_key_file: "/run/secrets/ocr-http-key"
+# suchi_ocr_http_timeout: "10m"
+# extract_egress_ack: true # required for non-local HTTPS
 scan_blank_removal: "auto"
 scan_blank_whiteness_threshold: 0.995
 scan_split_enabled: "off"

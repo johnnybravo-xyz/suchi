@@ -11,19 +11,33 @@ cloud OCR, or cloud search dependency.
 
 Outbound traffic occurs only when an operator configures or uses an integration:
 
-| Integration                 | Data sent                                                                                                                                                                                                                                                                                                                                       |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| OIDC                        | Discovery, authorization, and token requests to the configured issuer                                                                                                                                                                                                                                                                           |
-| IMAP intake                 | Mailbox credentials or OAuth tokens and mailbox reads                                                                                                                                                                                                                                                                                           |
-| Microsoft mailbox sign-in   | Device-code and token requests to Microsoft                                                                                                                                                                                                                                                                                                     |
+| Integration                 | Data sent |
+| --------------------------- | --------- |
+| OIDC                        | Discovery, authorization, and token requests to the configured issuer |
+| IMAP intake                 | Mailbox credentials or OAuth tokens and mailbox reads |
+| Microsoft mailbox sign-in   | Device-code and token requests to Microsoft |
+| HTTP OCR                    | The complete derived working PDF plus configured OCR language codes; this contains the document pages even though the immutable original blob is not sent |
 | Hosted model assistance     | Extracted text and bounded classification context from the document's filing system, including matching automation IDs, question text, and closed answers but not action mappings or destination values; for an authorized archive question, the question, newest complete history pairs within four messages/12 KB, and up to six system/membership/ACL-filtered sources containing title, sensitivity, snippet, and capability-gated accepted fact value/evidence |
-| Operator pre-consume script | Whatever the operator's executable chooses to send                                                                                                                                                                                                                                                                                              |
+| Operator pre-consume script | Whatever the operator's executable chooses to send |
 
-Hosted LLM use requires an explicit egress acknowledgement. Local LLM endpoints
-do not require that acknowledgement, but they are still network destinations
-chosen by the operator. Suchi logs a redacted inventory of its managed egress
-destinations at boot; `suchi doctor` prints the same inventory without exposing
-credentials. A pre-consume script is not network-isolated and its destinations
+Hosted LLM use requires an explicit egress acknowledgement. HTTP OCR uses the
+same local-host classification: loopback, private, link-local, `.local`, and
+`.localhost` endpoints need no acknowledgement; every other endpoint requires
+HTTPS and `EXTRACT_EGRESS_ACK=true`. Local endpoints are still network
+destinations chosen by the operator. Suchi rejects OCR redirects.
+
+Enabling `OCR_ENGINE=http` is instance-wide consent for every OCR-eligible
+document, including documents later marked Confidential or Restricted. Every
+durable job retry sends the working PDF again. Suchi can inventory only the
+configured origin; an extraction service can call models, artifact stores, or
+other downstream systems that Suchi cannot inspect. Apply network controls and
+retention terms at that service boundary.
+
+Suchi logs a redacted inventory of its managed egress destinations at boot;
+`suchi doctor` prints the same inventory without credentials or URL paths.
+HTTP OCR errors and notes contain only bounded status classes, never response
+bodies, endpoint URLs, API keys, source filenames, titles, document IDs, or
+owners. A pre-consume script is not network-isolated and its destinations
 cannot be inventoried by Suchi; constrain process or container egress when
 needed.
 

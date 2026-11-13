@@ -82,12 +82,19 @@ audit_retention_days = 20
 # OCR + ingest limits
 # --------------------------------------------------------------------
 
-ocr_languages = ["eng"]          # array; CSV form ("eng,deu") also works
-ocr_engine = "auto"              # auto | tesseract | ocrmypdf
+ocr_languages = ["eng"]          # local packs are filtered; HTTP receives this list unchanged
+ocr_engine = "auto"              # auto alone, or ordered CSV: "http,tesseract"
 device_ocr_min_confidence = 0.65 # finite 0..1; provisional mobile OCR threshold
 pdf_max_content_bytes = "8M"
 anydoc_max_content_bytes = "32M"
 djvu_max_content_bytes = "32M"
+
+# Optional fixed-contract HTTP OCR. The URL is the full conversion endpoint.
+# Local/private HTTP needs no acknowledgement; other hosts require HTTPS + ack.
+# ocr_http_url = "http://extractor.local:5001/v1/convert/file"
+# ocr_http_api_key_file = "/run/secrets/ocr-http-key"
+# suchi_ocr_http_timeout = "10m"
+# extract_egress_ack = true
 
 # --------------------------------------------------------------------
 # Scan pre-processing

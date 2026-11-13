@@ -62,8 +62,8 @@ flowchart TD
     INSP -- ≥ 32 non-whitespace<br/>chars --> TN[text-native shortcut<br/>write content directly]
     INSP -- otherwise --> DEVICE{Accepted nonblank<br/>device OCR?}
     DEVICE -- yes --> DT[retain device text]
-    DEVICE -- no --> OCR[OCR path<br/><i>tesseract or ocrmypdf</i>]
-    OCR -.->|only when engine=ocrmypdf| ARCH[(searchable-PDF archive<br/>documents.archive_blob)]
+    DEVICE -- no --> OCR[ordered OCR path<br/><i>local or configured HTTP service</i>]
+    OCR -.->|OCRmyPDF candidate retained| ARCH[(searchable-PDF archive<br/>documents.archive_blob)]
     TN --> ZUG[zugferd<br/><i>Factur-X / XRechnung CII XML</i>]
     DT --> ZUG
     OCR --> ZUG
@@ -96,9 +96,10 @@ Detail per step (matching the boxes above):
   skipping server OCR. This creates no new searchable-PDF archive, including
   with OCRmyPDF. See [upload OCR metadata](/api#post-apidocuments) for confidence
   and validation rules. Without accepted text, use server OCR below.
-- **OCR path** — writes the text sidecar to `documents.content`. When
-  the engine is `ocrmypdf` it also writes a searchable-PDF archive
-  into `documents.archive_blob`.
+- **OCR path** — tries configured engines in order and writes the first nonblank
+  result to `documents.content`. An OCRmyPDF searchable-PDF candidate is written
+  to `documents.archive_blob` only if it supplies the winning text or every
+  engine fails softly.
 - **zugferd** — `qpdf --list-attachments` → `--show-attachment` → CII
   XML parse. A Factur-X / ZUGFeRD / XRechnung attachment populates the managed
   `invoice_number`, `invoice_date`, `invoice_currency`, `invoice_total_gross`,
@@ -113,28 +114,57 @@ bytes as-is (encrypted PDFs will then fail downstream).
 
 ### OCR engine dispatch
 
-Two engines are supported and picked at boot via `OCR_ENGINE`:
+`OCR_ENGINE` is an ordered comma-separated list. Suchi stops at the first
+engine that returns nonblank text. `auto` is the default and must be the only
+entry; it never sends a document to another service.
 
-| `OCR_ENGINE`     | Engine                                                          | Binaries                             | Extras                 |
-| ---------------- | --------------------------------------------------------------- | ------------------------------------ | ---------------------- |
-| `auto` (default) | prefers **tesseract**, falls back to **ocrmypdf**               | pdftoppm + tesseract, OR ocrmypdf    | zero-config            |
-| `tesseract`      | in-process pdftoppm → tesseract chain (`core/pipeline/tessocr`) | pdftoppm (poppler-utils) + tesseract | standard image default |
-| `ocrmypdf`       | ocrmypdf CLI wrapper (`core/pipeline/ocrmypdf`)                 | ocrmypdf + tesseract                 | full image default     |
+| `OCR_ENGINE` entry | Engine | Local binaries | Output |
+| --- | --- | --- | --- |
+| `auto` (default) | prefers **tesseract**, otherwise **ocrmypdf** | pdftoppm + tesseract, or ocrmypdf | decided by the installed image |
+| `tesseract` | in-process pdftoppm → tesseract chain (`core/pipeline/tessocr`) | pdftoppm + tesseract | text |
+| `ocrmypdf` | OCRmyPDF CLI wrapper (`core/pipeline/ocrmypdf`) | ocrmypdf + tesseract | text plus a searchable-PDF candidate |
+| `http` | fixed multipart request with a Docling-compatible JSON response | none | Markdown |
 
-`tesseract` is the smaller runtime path and does not produce a searchable-PDF archive —
-`documents.archive_blob` stays NULL for scanned docs. FTS + full-text
-search still work over `documents.content`. Pick `ocrmypdf` when you
-want the archive PDF (e.g. long-term retention where the searchable
-PDF matters more than image size), or set to `auto` and let the image
-you deployed decide.
+For example, `OCR_ENGINE=http,tesseract` calls the configured service first and
+uses local Tesseract if the service returns no text or rejects the document.
+A timeout, connection failure, HTTP 408/429/5xx, malformed response, or
+oversized response remains retryable unless a later engine returns text. If a
+later engine does return text, that result is final even when the earlier
+outage was temporary. A rescan does not later upgrade a document that already
+has text.
 
-The lightweight engine retries a successfully processed page once with sparse
-text segmentation (`--psm 11`) only when normal OCR found no text. This helps
-isolated labels without replacing text already found. Rasterization, every page,
-and any retry share one `SUCHI_TESSERACT_TIMEOUT` deadline; extracted text is
-bounded by the configured output cap. It does not infer rotation from unreliable
-orientation guesses or correct photographed perspective. Configure
-`OCR_LANGUAGES` for the languages on the page; the default is English.
+`tesseract` is the smaller runtime path and does not produce a searchable-PDF
+archive; FTS and full-text search still use `documents.content`. Pick
+`ocrmypdf` when the searchable archive matters. If OCRmyPDF produces an archive
+but no text, Suchi delays the CAS write while trying later engines: later text
+discards it, all soft failures retain it with the extraction note, and a
+retryable job failure retains nothing.
+
+The `http` engine sends the derived working PDF—not the immutable original—to
+the full `OCR_HTTP_URL` endpoint as multipart field `files` with filename
+`document.pdf`. The service must accept the documented Docling v1.21.0 shape
+and return inline JSON with `status` plus `document.md_content`; Suchi stores
+the Markdown unchanged. Docling is one compatible service, but a custom service
+can expose the same contract on any configured path. See
+[Configuration](/config#storage--runtime) and [Privacy](/privacy#outbound-connections)
+before enabling document egress.
+
+Language values are forwarded unchanged; they are not portable capability
+claims. In a pinned Docling Serve v1.21.0 smoke, the default `auto` OCR preset
+accepted `eng`, `fra`, `deu`, and even unknown `xyz`. French and German
+diacritics were not preserved, and `xyz` produced the same French output as
+`fra`. Configure the service's OCR preset and verify representative scans before
+relying on a language code.
+
+The lightweight Tesseract engine retries a successfully processed page once
+with sparse text segmentation (`--psm 11`) only when normal OCR found no text.
+This helps isolated labels without replacing text already found.
+
+Rasterization, every page, and any retry share one
+`SUCHI_TESSERACT_TIMEOUT` deadline; extracted text is bounded by the configured
+output cap. It does not infer rotation from unreliable orientation guesses or
+correct photographed perspective. Configure `OCR_LANGUAGES` for the languages
+on the page; the default is English.
 
 For raster-image inputs, it also preserves the normal result and adds distinct
 lines from one sparse pass rasterized at a 2400-pixel longest edge. Only whole

@@ -128,13 +128,16 @@ environment overrides a file-side secret-file path.
 | `BACKUP_INTERVAL`                 | `24h`                    | `VACUUM INTO` snapshot cadence as a Go duration such as `30m`, `24h`, or `168h`. Writes `$DATA_DIR/backups/suchi-<ts>.db`; `0` disables. |
 | `BACKUP_KEEP`                     | `7`                      | Retention — after each snapshot, prune all-but-the-latest N. `0` keeps everything (documented; not the default).                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `AUDIT_RETENTION_DAYS`            | `20`                     | Sliding window over ordinary `audit_events`. Non-retained rows older than this are pruned on the backup tick; retained identity-security rows are excluded and require deliberate operator deletion. Range `0–100`; `0` disables pruning. Directly bounds the ordinary storage growth path behind `GET /api/events/`. |
-| `OCR_LANGUAGES`                   | `eng`                    | Comma-separated Tesseract language codes handed to every OCR call. The matching packs must be installed separately; see [Adding OCR languages](/formats#additional-ocr-languages). Each enabled pack adds processing work and memory use. Detected document languages are stored on `documents.languages`; they do not change this operator setting. Common Indian scripts include `hin`, `kan`, `tam`, `tel`, `ben`, `mar`, `guj`, `pan`, `mal`, and `urd`. |
+| `OCR_LANGUAGES`                   | `eng`                    | Comma-separated Tesseract-style language codes. Local engines skip packs not installed on this machine; each enabled pack adds processing work and memory use. Common Indian scripts include `hin`, `kan`, `tam`, `tel`, `ben`, `mar`, `guj`, `pan`, `mal`, and `urd`. The HTTP engine receives the configured list unchanged, but each service defines whether and how it uses those values. See [Adding OCR languages](/formats#additional-ocr-languages). Detected document languages do not change this setting. |
 | `DEVICE_OCR_MIN_CONFIDENCE`       | `0.65`                   | Finite `[0,1]` threshold for promoting submitted mobile OCR to provisional searchable content. Confidence/language/receipt-time provenance is retained below the threshold, but the submitted text is discarded. Native PDF text remains authoritative; accepted device text avoids duplicate OCR only for image-only PDFs. |
-| `PDF_MAX_CONTENT_BYTES`           | `8M`                     | Cap on PDF text extracted by `pdftotext` or either OCR engine. Text over the cap is not truncated: the post-ingest job fails, retries, and then shows on the Tasks page. |
-| `ANYDOC_MAX_CONTENT_BYTES`        | `32M`                    | Cap on Markdown extracted from EPUB and office documents.                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `DJVU_MAX_CONTENT_BYTES`          | `32M`                    | Cap on `djvutxt` output length. Same reasoning as EPUB.                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `OCR_ENGINE`                      | `auto`                   | Scanned-PDF OCR engine. `auto` picks `tesseract` when the tessocr binaries (`pdftoppm` + `tesseract`) are on PATH, else `ocrmypdf`. Explicit values force one engine. `tesseract` is ~4× smaller in the image but produces no searchable-PDF archive.                                                                                                                                                                                                                                                                           |
-| `SCAN_BLANK_REMOVAL`              | `auto`                   | `auto` (default) → detect and strip blank pages from the working copy before OCR. `off` → skip. The CAS original is untouched either way.                                                                                                                                                                                                                                                                                                                                                                                       |
+| `PDF_MAX_CONTENT_BYTES`           | `8M`                     | Cap on PDF text and the bounded HTTP OCR response. Output over the cap is not truncated: the post-ingest job fails, retries, and then shows on the Tasks page. |
+| `ANYDOC_MAX_CONTENT_BYTES`        | `32M`                    | Cap on Markdown extracted from EPUB and office documents. |
+| `DJVU_MAX_CONTENT_BYTES`          | `32M`                    | Cap on `djvutxt` output length. Same reasoning as EPUB. |
+| `OCR_ENGINE`                      | `auto`                   | Ordered comma-separated OCR engines: `tesseract`, `ocrmypdf`, and `http`. The first nonblank result wins. `auto` must be alone; it picks `tesseract` when pdftoppm and tesseract are on PATH, otherwise `ocrmypdf`, and never sends documents over the network. Unknown names, duplicates, and empty entries fail startup. |
+| `OCR_HTTP_URL`                    | (unset)                  | Full endpoint for the fixed multipart/Docling-compatible contract, required when `OCR_ENGINE` includes `http`. Only HTTP(S) without userinfo, query, or fragment is accepted. Paths are allowed. Local/private hosts may use HTTP; every other host requires HTTPS. |
+| `OCR_HTTP_API_KEY` or `OCR_HTTP_API_KEY_FILE` | (unset) | Optional `X-Api-Key` value. `_FILE` is recommended for container secrets. It is never placed in the URL or logs. |
+| `EXTRACT_EGRESS_ACK`              | (unset)                  | Must be `true` when `OCR_HTTP_URL` is not loopback, private, link-local, `.local`, or `.localhost`. This acknowledges instance-wide egress of every OCR-eligible working PDF, including sensitive documents. |
+| `SCAN_BLANK_REMOVAL`              | `auto`                   | `auto` (default) → detect and strip blank pages from the working copy before OCR. `off` → skip. The CAS original is untouched either way. |
 | `SCAN_BLANK_WHITENESS_THRESHOLD`  | `0.995`                  | Fraction of mean pixel intensity above which a page is considered blank. Range `(0.0, 1.0]`. Lower it (e.g. `0.98`) if your scanner leaves grey background; raise it (`0.999`) to only strip truly white pages.                                                                                                                                                                                                                                                                                                                 |
 | `SCAN_ASN_MODE`                   | `off`                    | `assign` leaves unlabelled PDFs alone and accepts exactly one valid ASN QR label anywhere in a labelled PDF; `split` leaves unlabelled PDFs alone, but a labelled PDF must start with an ASN and each later ASN-labelled page starts a retained child; `off` ignores ASN labels. Invalid or conflicting plans stop before mutable ingest hooks. See [barcode-assisted physical filing](/formats#barcode-assisted-physical-filing-with-archive-serial-numbers). |
 | `SCAN_ASN_PREFIX`                 | `ASN`                    | Case-sensitive label prefix. Grammar: `[A-Za-z][A-Za-z0-9._:-]*`; the suffix must be a positive base-10 integer no greater than `9007199254740991`. Used only when `SCAN_ASN_MODE` is `assign` or `split`. |
@@ -159,12 +162,12 @@ disposable-separator enablement and token remain boot configuration.
 
 ## Ingest pipeline timeouts
 
-Every ingest stage runs inside `core/sandbox` with a hard per-invocation
-deadline. Defaults are tuned for small home-servers processing typical
-1–20 MB PDFs; larger files (multi-hundred-page reports, big scan sets)
-routinely need higher caps. Each knob accepts any Go duration string —
-`60s`, `2m`, `1h30m`. An invalid value logs a warning and falls back
-to the default so a typo doesn't kill ingest.
+Subprocess ingest stages run inside `core/sandbox` with a hard per-invocation
+deadline. Defaults are tuned for small home servers processing typical
+1–20 MB PDFs; larger files routinely need higher caps. Each knob accepts a Go
+duration such as `60s`, `2m`, or `1h30m`. Invalid subprocess values log a
+warning and use the default. `SUCHI_OCR_HTTP_TIMEOUT` is validated when the
+`http` engine is selected; an invalid or nonpositive value stops startup.
 
 | Env var                      | Default | Stage                                                                                                              |
 | ---------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------ |
@@ -173,6 +176,7 @@ to the default so a typo doesn't kill ingest.
 | `SUCHI_ANYDOC_TIMEOUT`       | `30s`   | Office / image conversion via the `anydoc` binary. Bump for large `.docx` / `.xlsx` / archive-like inputs.         |
 | `SUCHI_OCRMYPDF_TIMEOUT`     | `10m`   | Full-chain `ocrmypdf` OCR. Scales with page count × DPI × language count.                                          |
 | `SUCHI_TESSERACT_TIMEOUT`    | `10m`   | Native `pdftoppm` → `tesseract` OCR chain. Same scaling as `ocrmypdf`.                                             |
+| `SUCHI_OCR_HTTP_TIMEOUT`     | `10m`   | Complete HTTP OCR request and bounded response read. Each durable job retry uploads the working PDF again.                            |
 | `SUCHI_PAGEANALYZE_TIMEOUT`  | `60s`   | `pdftoppm` rasterization for blank-page detection. Bump when `SCAN_BLANK_REMOVAL=auto` runs on very long PDFs.     |
 
 Set these when the job dispatcher parks a doc in `state='dead'` with a
@@ -558,6 +562,7 @@ Confirmed `_FILE` variants today:
 
 - `OIDC_CLIENT_SECRET_FILE`
 - `LLM_API_KEY_FILE`
+- `OCR_HTTP_API_KEY_FILE`
 
 If both variants are set in the same source, `_FILE` wins. Either environment
 variant overrides either config-file variant.
@@ -567,8 +572,8 @@ variant overrides either config-file variant.
 <Note>
   A stock install makes **zero outbound connections** (principle 8). At boot,
   suchi logs `main.egress.surface` listing every effective outbound path — OIDC
-  discovery, database-backed IMAP polling, and cloud LLM
-  endpoints, including the fixed provider destination for Account subscription
+  discovery, database-backed IMAP polling, HTTP OCR, and cloud LLM endpoints,
+  including the fixed provider destination for Account subscription
   (`https://chatgpt.com` for OpenAI ChatGPT). Destinations are redacted to safe origins. `outbound: none` is the
   safe default; `suchi doctor` reads the same inventory from the current database.
 </Note>

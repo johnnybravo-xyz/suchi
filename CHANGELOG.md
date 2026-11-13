@@ -6,6 +6,13 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Added
 
+- OCR engines can be listed in fallback order, including an optional fixed-contract
+  HTTP service compatible with Docling's synchronous response. Stock `auto`
+  remains local; remote endpoints require HTTPS and explicit extraction-egress
+  acknowledgement. Suchi keeps later successful text, preserves retryable job
+  failures when no engine succeeds, and delays OCRmyPDF archive storage until
+  the chain chooses its final result.
+
 - Document Detail shows **No text was extracted** when processing stored no
   text, with the missing or failing tool and its error under **Technical
   details**. Previously such documents matched only by title with no sign why.
