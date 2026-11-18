@@ -34,6 +34,11 @@ Anything it is unsure about waits in the Inbox for you instead of being guessed.
 never modified, and the archive is also rendered as a plain folder tree you can
 browse without the app.
 
+Coming from Paperless-ngx? `suchi import` reads its export, carrying over
+originals, tags, correspondents, custom fields, storage paths (as folder
+layouts) and workflows, and can run beside your existing instance until you switch. See
+[Importing a Paperless-ngx export](docs/guides/importer.mdx).
+
 Suchi began as a personal and household archive. The same principles apply more
 broadly, so the built-in filing trees also include approachable starting points
 for freelancers and smaller teams.
