@@ -100,6 +100,27 @@ func TestListTrashIncludesFixedDeletionDateAndOwnerScope(t *testing.T) {
 	}
 }
 
+func TestListTrashPutsSoonestDeletionFirst(t *testing.T) {
+	server, mux, cas := newTrashAPIServer(t)
+	trashedAt := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC).Unix()
+	newerID := seedTrashAPIDocument(t, server, cas, 1, "Trashed later", true, trashedAt+3600)
+	olderID := seedTrashAPIDocument(t, server, cas, 1, "Trashed earlier", true, trashedAt)
+
+	response := doTrashAPIRequest(t, mux, http.MethodGet, "/api/trash/", memberPrincipal(1))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var envelope struct {
+		Results []TrashRow `json:"results"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope.Results) != 2 || envelope.Results[0].ID != olderID || envelope.Results[1].ID != newerID {
+		t.Fatalf("Trash order=%+v, want the earlier deletion first", envelope.Results)
+	}
+}
+
 func TestDocumentDetailIncludesTrashOwnershipAndDeadline(t *testing.T) {
 	s, mux, cas := newTrashAPIServer(t)
 	trashedAt := time.Now().Unix()

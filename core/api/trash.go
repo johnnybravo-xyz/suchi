@@ -31,7 +31,9 @@ type TrashRow struct {
 }
 
 // ListTrash returns the caller's recoverable documents. Members see their own
-// Trash; administrators see every trashed document in the archive.
+// Trash; administrators see every trashed document in the archive. Retention is
+// fixed, so the oldest trashed document is the next to be deleted and comes
+// first.
 func (s *Server) ListTrash(w http.ResponseWriter, r *http.Request) {
 	p := auth.FromContext(r.Context())
 	if p == nil {
@@ -64,7 +66,7 @@ func (s *Server) ListTrash(w http.ResponseWriter, r *http.Request) {
 	      JOIN jd_systems js ON js.id = d.system_id
 	      LEFT JOIN jd_categories jc ON jc.id = d.jd_category_id AND jc.system_id = d.system_id
 	      WHERE ` + where + `
-	      ORDER BY d.trashed_at DESC, d.id DESC
+	      ORDER BY d.trashed_at ASC, d.id ASC
 	      LIMIT ? OFFSET ?`
 	args = append(args, pp.PageSize, pp.Offset())
 	rows, err := s.DB.Read.QueryContext(r.Context(), query, args...)

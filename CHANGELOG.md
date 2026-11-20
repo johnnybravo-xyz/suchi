@@ -29,6 +29,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Changed
 
+- Trash lists documents by deletion deadline, soonest first, so the next
+  ones to be permanently deleted are at the top. It previously listed the most
+  recently trashed first.
 - Calendar links its month grid and agenda like Approvals: hovering or
   focusing a date tints its partner in the other pane, and the agenda scrolls
   to a hovered chip's entry.

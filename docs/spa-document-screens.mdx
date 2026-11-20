@@ -33,7 +33,8 @@ route state without creating Back-button loops. Verify with:
 
 Trash uses `RuleWorkspace.svelte` inside the same 1,400-pixel content cap as
 Approvals. Its card header owns the retention explanation and disabled-at-zero
-**Empty trash** count action. Each row's document link covers the whole row and
+**Empty trash** count action. Rows are ordered by deletion deadline, soonest
+first. Each row's document link covers the whole row and
 highlights it on hover; the deadline and recovery controls sit above it. Like
 Documents and Search rows, the retained address chip precedes the title;
 the line below combines format, size, trash date, and the retained category
