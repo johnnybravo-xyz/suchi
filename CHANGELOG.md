@@ -9,7 +9,8 @@ Notable user-visible changes to Suchi are recorded here.
 - Document Detail now groups a retained email with its attachment documents
   under a read-only **Email attachments** section in **Linked documents**.
   Opening an attachment shows its parent email and visible siblings without
-  creating or exposing editable custom-field links.
+  creating or exposing editable custom-field links. The public demo's Northstar
+  tour points visitors from the reminder email to this family.
 
 - OCR engines can be listed in fallback order, including an optional fixed-contract
   HTTP service compatible with Docling's synchronous response. Stock `auto`
