@@ -15,7 +15,7 @@
   import OAuthDeviceCodeModal from './OAuthDeviceCodeModal.svelte'
   import ConfirmDialog from './ConfirmDialog.svelte'
 
-  let { mode, account, onClose, notify, viewerRole = 'admin', users = [],
+  let { mode, account, onClose, onStatusChange, notify, viewerRole = 'admin', users = [],
         microsoftOAuth = { ready: false, reason: '' } } = $props()
 
   // Preset table mirrors core/ingest/emailwatch/providers.go.
@@ -250,6 +250,7 @@
     try {
       const r = await testEmailAccount(account.id)
       notify?.(r?.message || (r?.ok ? translate("mailAccountForm.mailboxReachable") : translate("mailAccountForm.testFailed")))
+      await onStatusChange?.()
     } catch (ex) {
       notify?.(ex.data?.message || ex.message || translate("mailAccountForm.testFailed"))
     } finally { busy = false }

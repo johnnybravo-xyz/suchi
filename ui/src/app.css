@@ -176,6 +176,21 @@ input, select, textarea { font: inherit; color: inherit; }
   .research-ribbon { padding-inline: 9px; }
   .research-ribbon-label { display: none; }
 }
+.mailbox-error-ribbon {
+  display: inline-flex; flex: 0 0 auto; align-items: center; gap: 7px;
+  padding: 8px 11px 8px 9px;
+  border: 1px solid color-mix(in srgb, var(--danger) 32%, var(--line)); border-radius: 8px;
+  background: var(--danger-soft); color: var(--danger);
+  font-size: .7rem; font-weight: 700; white-space: nowrap; text-decoration: none;
+}
+.mailbox-error-ribbon:hover { border-color: var(--danger); color: var(--ink); }
+.mailbox-error-ribbon-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--danger); }
+.mailbox-error-ribbon-count { display: none; }
+@media (max-width: 1100px) {
+  .mailbox-error-ribbon-label { display: none; }
+  .mailbox-error-ribbon-count { display: inline; }
+}
+
 .processing-ribbon {
   display: inline-flex; flex: 0 0 auto; align-items: center; gap: 7px;
   padding: 8px 11px 8px 9px;
@@ -230,6 +245,7 @@ input, select, textarea { font: inherit; color: inherit; }
   .topbar-upload { padding: 8px 11px; }
   .topbar-upload span { display: none; }
   .research-ribbon { padding: 8px; }
+  .mailbox-error-ribbon { padding: 8px; }
   .content { padding: 16px 14px 32px; }
   .irow.hoverable .document-row-link > .pill { display: none; }
 }

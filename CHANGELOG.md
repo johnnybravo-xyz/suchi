@@ -57,6 +57,10 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Mailbox failures now remain visible in the top bar outside configuration and
+  show their full provider error in the mailbox list. A successful connection
+  test clears its stale connection or login error immediately without changing
+  the last successful sync or hiding newer polling failures.
 - `suchi doctor` runs beside a live server. When another process holds the
   archive lock, it reads the database read-only instead of failing with
   `archive_in_use`; `--quarantine-corrupt` still requires the server stopped.

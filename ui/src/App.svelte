@@ -51,6 +51,7 @@
   let chatOpen = $state(false)
   let chatParked = $state(false)
   let ChatDrawer = $state(null)
+  let MailboxStatus = $state(null)
   let chatRequest = $state({ id: 0, question: '' })
   let chatReturnFocus = $state(null)
   let chatRibbon = $state(null)
@@ -67,12 +68,14 @@
   let st = $state(null)                 // /api/stats/ snapshot
   let statsError = $state('')
   // Documents whose reading or model step has not finished. The peak is the
-  // size of the current run, so the pill can say how far it has got; it
-  // resets once the queue drains. Stats poll often enough to catch a watched
-  // folder's run, and faster while one is in progress. Hidden tabs do not
-  // poll; returning to the tab refreshes at once.
+  // size of the current run, so the pill can say how far it has got. Hidden
+  // tabs do not poll; returning to the tab refreshes at once.
   const processing = $derived((st?.processing_reading ?? 0) + (st?.processing_classifying ?? 0))
   const processingActive = $derived(processing > 0)
+  const mailboxErrors = $derived(st?.mailbox_errors ?? 0)
+  const mailboxStatusHref = $derived(session.user?.role === 'admin'
+    ? filingHref('#/settings?tab=archive&section=mail')
+    : filingHref('#/settings'))
   let processingPeak = $state(0)
   let statsPolling = $state(false)
   let tabVisible = $state(document.visibilityState === 'visible')
@@ -88,6 +91,14 @@
     if (!statsPolling || !tabVisible) return
     const timer = setInterval(pollStats, processingActive ? 5_000 : 15_000)
     return () => clearInterval(timer)
+  })
+  $effect(() => {
+    if (mailboxErrors <= 0 || MailboxStatus) return
+    let live = true
+    import('./lib/MailboxStatus.svelte')
+      .then((module) => { if (live) MailboxStatus = module.default })
+      .catch(() => {})
+    return () => { live = false }
   })
   // An upload starts processing; poll at once so the faster cadence starts
   // now rather than on the next slow tick.
@@ -681,6 +692,9 @@
               </button>
             {/if}
           </div>
+        {/if}
+        {#if mailboxErrors > 0 && MailboxStatus}
+          <MailboxStatus count={mailboxErrors} href={mailboxStatusHref} />
         {/if}
         {#if chatParked && ChatDrawer}
           <button class="research-ribbon" bind:this={chatRibbon} onclick={resumeArchiveChat}

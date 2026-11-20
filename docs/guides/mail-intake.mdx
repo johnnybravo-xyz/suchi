@@ -145,8 +145,9 @@ watched folder or mbsync in that same system. Another system gets a distinct doc
 message downloads. A successful test clears an earlier connection or login
 failure without changing the last successful sync time. It does not hide a
 folder, fetch or ingestion failure; only a successful polling cycle clears those.
-The amber **never synced** state means no successful cycle has been recorded,
-while a red state reports the last failure.
+The amber **never synced** state means no successful cycle has been recorded.
+A red row shows the full provider error, and a persistent top-bar **mailbox
+needs attention** status links people who can manage that mailbox to the list.
 
 Changing connection or source-folder settings resets that mailbox's UID cursor
 so a cursor from the old source is not reused against the new one.

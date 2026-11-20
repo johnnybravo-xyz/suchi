@@ -2,11 +2,12 @@
 <script>
   import { t as translate } from "./i18n.svelte.js";
   // List of mailboxes. Each row shows liveness at a glance: last sync
-  // recency + a red pill when last_error is set. Add/edit/delete flows
-  // route through MailAccountForm, which owns the wire shape.
+  // recency or the full actionable error. Add/edit/delete flows route
+  // through MailAccountForm, which owns the wire shape.
   import { listEmailAccounts, deleteEmailAccount, testEmailAccount } from './api.js'
   import MailAccountForm from './MailAccountForm.svelte'
   import Icon from './Icon.svelte'
+  import { requestStatusRefresh } from './processing_bus.svelte.js'
   import ConfirmDialog from './ConfirmDialog.svelte'
 
   let { notify, viewerRole = 'admin', users = [] } = $props()
@@ -56,6 +57,11 @@
     }
   }
 
+  async function refreshStatuses() {
+    await load()
+    requestStatusRefresh()
+  }
+
   function relTime(value) {
     if (!value) return translate("emailAccounts.neverSynced")
     const seconds = Number(value)
@@ -75,7 +81,7 @@
     try {
       const r = await testEmailAccount(a.id)
       notify?.(r?.message || (r?.ok ? translate("emailAccounts.mailboxReachable") : translate("emailAccounts.testFailed")))
-      load()
+      await refreshStatuses()
     } catch (ex) {
       notify?.(ex.data?.message || ex.message || translate("emailAccounts.testFailed"))
     } finally { busy = false }
@@ -94,7 +100,7 @@
       await deleteEmailAccount(account.id)
       notify?.(translate("emailAccounts.mailboxDeleted"))
       deleteRequest = null
-      load()
+      refreshStatuses()
     } catch (ex) {
       notify?.(ex.data?.message || ex.message || translate("emailAccounts.couldNotDelete"))
       deleteRequest = null
@@ -103,7 +109,7 @@
 
   function onFormClose(saved) {
     openForm = null
-    if (saved) load()
+    if (saved) refreshStatuses()
   }
 
   load()
@@ -144,7 +150,7 @@
         <span class="chip mailbox-provider">{PROVIDER_LABELS[a.provider] || a.provider}</span>
         <div class="mailbox-status">
           {#if a.last_error}
-            <span class="pill danger" title={a.last_error}>{translate("emailAccounts.error")}</span>
+            <span class="mailbox-status-error" role="alert">{translate("emailAccounts.mailboxError", { "message": a.last_error })}</span>
           {:else}
             <span>{relTime(a.last_sync_at)}</span>
           {/if}
@@ -168,6 +174,7 @@
     {viewerRole}
     {users}
     microsoftOAuth={capabilities.microsoft_oauth}
+    onStatusChange={refreshStatuses}
     onClose={onFormClose} />
 {/if}
 
@@ -200,7 +207,8 @@
   .mailbox-name { display:block;font-weight:600;overflow-wrap:anywhere }
   .mailbox-owner { display:block;color:var(--muted);font-size:.78rem;margin-top:3px;overflow-wrap:anywhere }
   .mailbox-provider { justify-self:start }
-  .mailbox-status { display:flex;align-items:center;gap:8px;color:var(--muted);font-size:.78rem;white-space:nowrap }
+  .mailbox-status { display:flex;align-items:center;gap:8px;max-width:36ch;color:var(--muted);font-size:.78rem;white-space:normal;overflow-wrap:anywhere }
+  .mailbox-status-error { color:var(--danger) }
   .mailbox-actions { display:flex;gap:8px;justify-content:flex-end }
   @media (max-width: 760px) {
     .mbx-row { grid-template-columns:auto minmax(0,1fr) auto;gap:9px 12px }

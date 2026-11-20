@@ -657,6 +657,8 @@ async function mockAPI(page, options = {}) {
   }
   let trashDocuments = [...(options.trashDocuments || [])]
   let renderedLayouts = (options.renderedLayouts || []).map(layout => ({ ...layout }))
+  let mailboxErrors = options.mailboxErrors ?? 0
+  let emailAccounts = options.emailAccounts?.map(account => ({ ...account }))
   const restoredDocuments = new Set()
   await page.route('**/preview/**', async route => {
     await route.fulfill({
@@ -692,6 +694,7 @@ async function mockAPI(page, options = {}) {
     const restoreDocument = path.match(/^\/api\/documents\/(\d+)\/restore$/)
     const savedView = path.match(/^\/api\/saved_views\/(\d+)$/)
     const renderedLayout = path.match(/^\/api\/rendered_layouts\/(\d+)$/)
+    const emailAccountTest = path.match(/^\/api\/email-accounts\/(\d+)\/test$/)
     if (thumb && options.thumbnailFailures) {
       if (options.thumbnailFailures.includes(Number(thumb[1]))) {
         if (options.thumbnailDelay) {
@@ -753,6 +756,7 @@ async function mockAPI(page, options = {}) {
       pending_approvals: options.pendingApprovals ?? 0,
       pending_intelligence: options.pendingIntelligence ?? 0,
       dead_jobs: options.deadJobsCount ?? options.deadJobs?.length ?? 0,
+      mailbox_errors: mailboxErrors,
       processing_reading: options.processingReading ?? 0,
       processing_classifying: options.processingClassifying ?? 0,
       ingested_7d: options.ingested7d ?? 0,
@@ -1076,8 +1080,18 @@ async function mockAPI(page, options = {}) {
       await route.fulfill({ status: 204 })
       return
     }
+    else if (emailAccountTest && request.method() === 'POST' && options.mailboxTestResult) {
+      const accountID = Number(emailAccountTest[1])
+      options.mailboxTestRequests?.push(accountID)
+      if (options.mailboxTestResult.ok) {
+        const account = emailAccounts?.find(item => item.id === accountID)
+        if (account) delete account.last_error
+        mailboxErrors = 0
+      }
+      body = options.mailboxTestResult
+    }
     else if (path === '/api/email-accounts') body = {
-      accounts: [
+      accounts: emailAccounts || [
         {
           id: 1, owner_id: 1, name: 'Personal Outlook archive', provider: 'microsoft',
           username: 'admin@example.test', enabled: true, last_sync_at: Math.floor(Date.now() / 1000) - 240,
@@ -3498,6 +3512,59 @@ test('offers Microsoft sign-in without exposing registration controls', async ({
 
   await page.goto('/#/settings')
   await expect(page.getByTitle('Microsoft sign-in settings')).toHaveCount(0)
+})
+
+test('surfaces mailbox failures globally and clears them after a successful test', async ({ page }) => {
+  const mailboxTestRequests = []
+  const failure = 'Login failed: User is authenticated but not connected.'
+  await mockAPI(page, {
+    filingTreeChosen: true,
+    mailboxErrors: 1,
+    mailboxTestRequests,
+    mailboxTestResult: { ok: true, message: 'Connected — mailbox reachable.' },
+    emailAccounts: [{
+      id: 1,
+      owner_id: 1,
+      name: 'Outlook archive',
+      provider: 'microsoft',
+      host: 'outlook.office365.com',
+      port: 993,
+      use_tls: true,
+      folder: 'INBOX',
+      poll_interval_min: 10,
+      auth_method: 'xoauth2',
+      username: 'user@example.test',
+      enabled: true,
+      last_sync_at: Math.floor(Date.now() / 1000) - 300,
+      last_error: failure,
+      intake_policy: { rules: [{ selection: 'all', content: 'email_and_files' }] },
+    }],
+  })
+
+  await page.goto('/#/dashboard')
+  const mailboxStatus = page.getByRole('link', { name: '1 mailbox needs attention' })
+  await expect(mailboxStatus).toBeVisible()
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect(mailboxStatus).toBeVisible()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  await mailboxStatus.click()
+  await expect(page).toHaveURL(/#\/settings\?tab=archive&section=mail/)
+  await expect(page.getByRole('heading', { name: 'Email intake' })).toBeVisible()
+  await expect(page.getByText(`Mailbox error: ${failure}`, { exact: true })).toBeVisible()
+  await expect(page.locator('.mailbox-dot.danger')).toHaveCount(1)
+
+  await page.getByRole('button', { name: 'Edit', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Edit mailbox', exact: true })
+  await dialog.getByRole('button', { name: 'Test connection', exact: true }).click()
+  await expect.poll(() => mailboxTestRequests).toEqual([1])
+  await expect(page.getByText(`Mailbox error: ${failure}`, { exact: true })).toHaveCount(0)
+  await expect(page.locator('.mailbox-dot.ok')).toHaveCount(1)
+  await expect(mailboxStatus).toHaveCount(0, { timeout: 7_000 })
+
+  await page.reload()
+  await expect(page.getByRole('heading', { name: 'Email intake' })).toBeVisible()
+  await expect(page.locator('.mailbox-dot.ok')).toHaveCount(1)
+  await expect(page.getByRole('link', { name: /mailbox.*needs attention/ })).toHaveCount(0)
 })
 
 test('shows every acquisition place and groups the original file facts', async ({ page }) => {
