@@ -4,7 +4,7 @@
   import { scopedHash as filingHref, captureScope, scopeCurrent } from '../lib/systems.svelte.js'
   import { rememberDocument } from '../lib/recentDocuments.js'
   import { onDestroy, tick, untrack } from 'svelte'
-  import { listIntelligence, getDocument, getDocumentIntrinsic, patchDocument, deleteDocument, restoreDocument, permanentlyDeleteDocument, documentVersions, documentBacklinks, uploadDocumentVersion, setDocumentCustomField, clearDocumentCustomField, createDocumentNote, updateDocumentNote, deleteDocumentNote, createShareLink, listShareLinks, deleteShareLink, previewPath, downloadPath, similarDocs, listGrants, putGrant, deleteGrant, listAllTags, listCorrespondents, listCustomFields, listDocuments, bulkEdit } from '../lib/api.js'
+  import { listIntelligence, getDocument, getDocumentIntrinsic, patchDocument, deleteDocument, restoreDocument, permanentlyDeleteDocument, documentVersions, documentBacklinks, documentEmailAttachments, uploadDocumentVersion, setDocumentCustomField, clearDocumentCustomField, createDocumentNote, updateDocumentNote, deleteDocumentNote, createShareLink, listShareLinks, deleteShareLink, previewPath, downloadPath, similarDocs, listGrants, putGrant, deleteGrant, listAllTags, listCorrespondents, listCustomFields, listDocuments, bulkEdit } from '../lib/api.js'
   import { go } from '../lib/router.svelte.js'
   import { SENSITIVITY_OPTIONS, compareLocalized, customFieldLabel, fmtDate, fmtBytes, formatDaysAway, formatLabel, isHighSensitivity, plural, sensDot, sensitivityLabel } from '../lib/format.js'
   import { originalNames, sourceGroups } from '../lib/documentSources.js'
@@ -44,6 +44,10 @@
   let backlinksLoading = $state(false)
   let backlinksError = $state('')
   let backlinksPage = $state(1)
+  let emailAttachments = $state({ count: 0, parent: null, results: [], next: null, previous: null })
+  let emailAttachmentsLoading = $state(false)
+  let emailAttachmentsError = $state('')
+  let emailAttachmentsPage = $state(1)
   let referenceEditors = $state({})
   let customFieldEditors = $state({})
   let editingCustomFields = $state(false)
@@ -211,7 +215,8 @@
   const outgoingDocumentLinkFields = $derived(documentLinkFields.filter(field => documentLinkValue(field.id)?.value))
   const availableDocumentLinkFields = $derived(documentLinkFields.filter(field => !documentLinkValue(field.id)?.value))
   const selectedNewReferenceField = $derived(documentLinkFields.find(field => Number(field.id) === Number(newReferenceFieldID)))
-  const linkedDocumentCount = $derived(backlinks.count + outgoingDocumentLinkFields.length)
+  const linkedDocumentCount = $derived(backlinks.count + outgoingDocumentLinkFields.length +
+    emailAttachments.count + (emailAttachments.parent ? 1 : 0))
   // Inline-previewable formats: archive_blob is always PDF, browsers render
   // common media natively, and the server turns stored email bodies into a
   // sandboxed HTML preview. Other formats swap the iframe for a download panel.
@@ -311,6 +316,10 @@
     backlinksLoading = false
     backlinksError = ''
     backlinksPage = 1
+    emailAttachments = { count: 0, parent: null, results: [], next: null, previous: null }
+    emailAttachmentsLoading = false
+    emailAttachmentsError = ''
+    emailAttachmentsPage = 1
     referenceEditors = {}
     customFieldEditors = {}
     editingCustomFields = false
@@ -381,6 +390,7 @@
       }
       void loadVersions(documentID, 1, version, scope)
       void loadBacklinks(documentID, 1, version, scope)
+      void loadEmailAttachments(documentID, 1, version, scope)
       void loadCustomFieldDefinitions(version, scope)
       void loadSimilarDocuments(documentID, version, scope)
       void loadAccess(documentID, version, scope)
@@ -452,6 +462,29 @@
       }
     } finally {
       if (!disposed && version === loadVersion && scopeCurrent(scope)) backlinksLoading = false
+    }
+  }
+
+  async function loadEmailAttachments(documentID = id, page = 1, version = loadVersion, scope = captureScope()) {
+    emailAttachmentsLoading = true
+    emailAttachmentsError = ''
+    try {
+      const result = await documentEmailAttachments(documentID, { page, page_size: 50 })
+      if (disposed || version !== loadVersion || !scopeCurrent(scope)) return
+      emailAttachments = {
+        count: result?.count || 0,
+        parent: result?.parent || null,
+        results: result?.results || [],
+        next: result?.next || null,
+        previous: result?.previous || null,
+      }
+      emailAttachmentsPage = page
+    } catch (ex) {
+      if (!disposed && version === loadVersion && scopeCurrent(scope)) {
+        emailAttachmentsError = ex.message || translate("documentDetail.couldNotLoadEmailAttachments")
+      }
+    } finally {
+      if (!disposed && version === loadVersion && scopeCurrent(scope)) emailAttachmentsLoading = false
     }
   }
 
@@ -1992,6 +2025,61 @@
             <div id="related-panel-backlinks" class="related-panel" role="tabpanel"
                  aria-labelledby="related-tab-backlinks" tabindex="0">
               <div class="linked-sections">
+                {#if emailAttachmentsLoading || emailAttachmentsError || emailAttachments.parent || emailAttachments.count}
+                  <section class="linked-section" aria-label={translate("documentDetail.emailAttachments")}>
+                    <div class="linked-section-head">
+                      <div>
+                        <strong>{translate("documentDetail.emailAttachments")}</strong>
+                      </div>
+                      {#if !emailAttachmentsLoading && !emailAttachmentsError}
+                        <span class="pill">{emailAttachments.count + (emailAttachments.parent ? 1 : 0)}</span>
+                      {/if}
+                    </div>
+                    {#if emailAttachmentsLoading}
+                      <p class="sub">{translate("documentDetail.loadingEmailAttachments")}</p>
+                    {:else if emailAttachmentsError}
+                      <div class="inline-state err" role="alert">
+                        <span>{emailAttachmentsError}</span>
+                        <button class="btn sm" onclick={() => loadEmailAttachments(id, emailAttachmentsPage)}>{translate("common.retry")}</button>
+                      </div>
+                    {:else}
+                      <div class="index" style="border:0">
+                        {#if emailAttachments.parent}
+                          <a class="irow" href={filingHref(`#/doc/${emailAttachments.parent.id}`, emailAttachments.parent.system_code)} style="padding:8px 4px">
+                            <span class="dot" class:warn={!emailAttachments.parent.is_latest}></span>
+                            <span class="grow">
+                              <span class="title">{emailAttachments.parent.title || translate("documentDetail.documentValue", { "id": emailAttachments.parent.id })}</span>
+                              <span class="sub" style="display:block">{translate("documentDetail.parentEmail")}</span>
+                            </span>
+                            {#if !emailAttachments.parent.is_latest}<span class="pill warn">{translate("documentDetail.earlierVersion")}</span>{/if}
+                            {#if emailAttachments.parent.jd_address}<span class="sub">{emailAttachments.parent.jd_address}</span>{/if}
+                            {#if emailAttachments.parent.created_at}<span class="sub">{fmtDate(emailAttachments.parent.created_at)}</span>{/if}
+                          </a>
+                        {/if}
+                        {#each emailAttachments.results as attachment (attachment.id)}
+                          <a class="irow" href={filingHref(`#/doc/${attachment.id}`, attachment.system_code)} style="padding:8px 4px">
+                            <span class="dot" class:warn={!attachment.is_latest}></span>
+                            <span class="grow">
+                              <span class="title">{attachment.title || translate("documentDetail.documentValue", { "id": attachment.id })}</span>
+                              <span class="sub" style="display:block">{translate("documentDetail.attachment")}</span>
+                            </span>
+                            {#if !attachment.is_latest}<span class="pill warn">{translate("documentDetail.earlierVersion")}</span>{/if}
+                            {#if attachment.jd_address}<span class="sub">{attachment.jd_address}</span>{/if}
+                            {#if attachment.created_at}<span class="sub">{fmtDate(attachment.created_at)}</span>{/if}
+                          </a>
+                        {/each}
+                      </div>
+                      {#if emailAttachments.previous || emailAttachments.next}
+                        <div class="pager">
+                          <button class="btn sm" disabled={!emailAttachments.previous || emailAttachmentsLoading} onclick={() => loadEmailAttachments(id, emailAttachmentsPage - 1)}>{translate("documentDetail.previous")}</button>
+                          <span class="sub">{translate("documentDetail.pageValue4", { "emailAttachmentsPage": emailAttachmentsPage })}</span>
+                          <button class="btn sm" disabled={!emailAttachments.next || emailAttachmentsLoading} onclick={() => loadEmailAttachments(id, emailAttachmentsPage + 1)}>{translate("documentDetail.next")}</button>
+                        </div>
+                      {/if}
+                    {/if}
+                  </section>
+                {/if}
+
                 <section class="linked-section" aria-label={translate("documentDetail.thisDocumentLinksTo")}>
                   <div class="linked-section-head">
                     <div>

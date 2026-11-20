@@ -179,6 +179,20 @@ check "total docs alive"             "$total_docs" "14"
 # Duplicate Message-Id must yield ONE doc, not two.
 check "dedup: one doc for dup msgID" "$dup_msgid_count" "1"
 
+# The retained three-attachment message exposes its existing lineage through
+# the read-only document relationship API.
+family_parent_id=$(sqlite3 "$DATA_DIR/suchi.db" \
+    "SELECT id FROM documents WHERE email_message_id='<05-multi@fixtures.suchi>' AND trashed_at IS NULL")
+family_child_id=$(sqlite3 "$DATA_DIR/suchi.db" \
+    "SELECT id FROM documents WHERE email_parent_id=$family_parent_id AND trashed_at IS NULL ORDER BY id LIMIT 1")
+parent_family=$(curl -sfS --cookie "$ADMIN_COOKIES" \
+    "http://127.0.0.1:$PORT/api/documents/$family_parent_id/email-attachments/")
+child_family=$(curl -sfS --cookie "$ADMIN_COOKIES" \
+    "http://127.0.0.1:$PORT/api/documents/$family_child_id/email-attachments/")
+check "parent email attachment links" "$(jq -r '.count' <<<"$parent_family")" "3"
+check "child email family parent" "$(jq -r '.parent.id' <<<"$child_family")" "$family_parent_id"
+check "child email sibling links" "$(jq -r '.results | length' <<<"$child_family")" "2"
+
 # Verify the encoded subject decoded correctly.
 enc_title=$(sqlite3 "$DATA_DIR/suchi.db" \
     "SELECT title FROM documents WHERE email_message_id='<04-encoded@fixtures.suchi>'")

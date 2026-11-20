@@ -373,6 +373,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/documents/{id}/versions/", s.ListVersions)
 	mux.HandleFunc("POST /api/documents/{id}/versions/", s.UploadNewVersion)
 	mux.HandleFunc("GET /api/documents/{id}/referenced-by/", s.ListReferencedBy)
+	mux.HandleFunc("GET /api/documents/{id}/email-attachments/", s.ListEmailAttachments)
 
 	// Attributed notes belong to one exact document revision.
 	mux.HandleFunc("POST /api/documents/{id}/notes/", s.CreateDocumentNote)

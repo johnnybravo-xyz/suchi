@@ -49,6 +49,7 @@ async function installDetailAPI(page, handler) {
     else if (path === '/api/custom_fields/') body = { results: [] }
     else if (path === '/api/rendered_layouts/') body = { results: [] }
     else if (/^\/api\/documents\/\d+\/referenced-by\/$/.test(path)) body = { results: [], count: 0 }
+    else if (/^\/api\/documents\/\d+\/email-attachments\/$/.test(path)) body = { results: [], count: 0 }
     else if (/^\/api\/documents\/\d+\/versions\/$/.test(path)) body = { results: [], count: 0, head_id: null, can_upload: false }
     else if (/^\/api\/documents\/\d+$/.test(path)) body = detail(Number(path.split('/').at(-1)))
     return route.fulfill({ json: body })
@@ -272,6 +273,55 @@ test('offers link type setup and counts only other revisions', async ({ page }) 
   const createLinkField = linksFrom.getByRole('button', { name: 'Create Document link field' })
   await expect(createLinkField).toBeVisible()
   await expect(createLinkField).toHaveAttribute('href', /metadata=custom_fields/)
+})
+
+test('shows email attachment family as built-in links', async ({ page }) => {
+  let firstPageAttempts = 0
+  await installDetailAPI(page, async ({ route, url, path }) => {
+    if (path !== '/api/documents/42/email-attachments/') return false
+    const pageNumber = Number(url.searchParams.get('page') || 1)
+    if (pageNumber === 1 && firstPageAttempts++ === 0) {
+      await route.fulfill({ status: 500, json: { code: 'server_error', error: 'server error' } })
+      return true
+    }
+    const parent = {
+      id: 40, title: 'Quarterly statements', system_code: 'S01', jd_address: 'S01.13',
+      created_at: 1780000040, is_latest: true,
+    }
+    const siblings = [
+      { id: 43, title: 'statement.pdf', system_code: 'S01', jd_address: 'S01.14', created_at: 1780000043, is_latest: true },
+      { id: 44, title: 'summary.xlsx', system_code: 'S01', jd_address: 'S01.15', created_at: 1780000044, is_latest: false },
+    ]
+    await route.fulfill({ json: {
+      count: 2,
+      parent,
+      results: [siblings[pageNumber - 1]],
+      previous: pageNumber === 2 ? '/api/documents/42/email-attachments/?page=1&page_size=50' : null,
+      next: pageNumber === 1 ? '/api/documents/42/email-attachments/?page=2&page_size=50' : null,
+    } })
+    return true
+  })
+
+  await page.goto('/#/doc/42')
+  const linkedTab = page.getByRole('tab', { name: /^Linked documents/ })
+  await linkedTab.click()
+  const family = page.getByRole('region', { name: 'Email attachments' })
+  await expect(family.getByRole('alert')).toBeVisible()
+  await family.getByRole('button', { name: 'Retry', exact: true }).click()
+
+  await expect(linkedTab).toContainText('3')
+  await expect(family.getByText('Parent email', { exact: true })).toBeVisible()
+  await expect(family.getByText('Attachment', { exact: true })).toBeVisible()
+  await expect(family.getByRole('link', { name: /Quarterly statements/ })).toHaveAttribute('href', '#/doc/40?system=S01')
+  await expect(family.getByRole('link', { name: /statement\.pdf/ })).toHaveAttribute('href', '#/doc/43?system=S01')
+  await expect(family.getByText('S01.13', { exact: true })).toBeVisible()
+  await expect(family.getByRole('button', { name: /^(Add|Change|Remove)/ })).toHaveCount(0)
+
+  await family.getByRole('button', { name: 'Next', exact: true }).click()
+  await expect(family.getByRole('link', { name: /summary\.xlsx/ })).toHaveAttribute('href', '#/doc/44?system=S01')
+  await expect(family.getByText('Earlier version', { exact: true })).toBeVisible()
+  await expect(family.getByRole('link', { name: /statement\.pdf/ })).toHaveCount(0)
+  await expect(family.getByRole('button', { name: 'Previous', exact: true })).toBeEnabled()
 })
 
 test('keeps outgoing and incoming document links in one compact tab', async ({ page }) => {

@@ -5,11 +5,13 @@ description: "How notes, typed metadata, replacement history, and exact document
 
 {/* SPDX-License-Identifier: AGPL-3.0-or-later */}
 
-Suchi models a replacement version and a link as different facts:
+Suchi stores replacement history, ingestion lineage, named links, and
+acquisition sources as different facts:
 
 | Relationship | Meaning | What happens to the other row |
 | --- | --- | --- |
 | Version | “This file supersedes that earlier file.” | Both exact versions remain available. Normal discovery shows the newest visible live version. |
+| Email attachment | “This file was extracted from this retained email.” | Parent and attachments remain separate documents; the relationship is read-only. |
 | Document link | “This exact document is related to that exact document.” | Both documents remain peers. Neither supersedes the other. |
 | How it was added | “This exact file entered Suchi here.” | Records its origin without creating a version or link. |
 
@@ -94,6 +96,25 @@ This prevents a new file from silently claiming metadata that described only
 the older version while preserving the physical label shared by the paper and
 its current digital revision. Edit exact-version metadata again when it still
 applies.
+
+## Retained email attachments
+
+When Suchi retains an email and extracts its attachments as documents, the
+**Linked documents** tab starts with a built-in **Email attachments** group.
+The email lists its visible attachment children. A child lists the retained
+parent first and its visible siblings after it, without listing itself. This
+relationship comes from ingestion lineage and has no Add, Change, or Remove
+controls.
+
+The group is not a Document link custom field. It does not consume a named link
+type, create custom-field values, copy to replacement versions, or traverse
+recursively. Files-only mail intake does not retain a parent and therefore has
+no built-in family.
+
+ACL and Trash rules apply before counts and pages. A hidden attachment is absent
+from its siblings' family; when the retained parent is hidden or trashed, the
+entire child view is empty. Restoring a row makes its unchanged lineage visible
+again.
 
 ## Exact document links
 

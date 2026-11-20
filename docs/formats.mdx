@@ -243,6 +243,13 @@ automations, render) as if it had arrived directly. `multipart/related`
 inline images (referenced from an HTML body) are NOT ingested as
 separate docs — they're kept inside the parent .eml's CAS blob only.
 
+Retained parents and their visible children appear as a read-only **Email
+attachments** group in Document Detail's **Linked documents** tab. Opening a
+child shows its parent and sibling attachments; this projection uses the
+existing `email_parent_id` lineage and creates no editable Document link values.
+Files-only mail intake deletes its staging parent and deliberately clears that
+lineage, so those independently retained files have no email family to show.
+
 Attachment children inherit the parent's correspondents (so the
 `From:` sender shows up on every child PDF), owner, and JD category.
 They do NOT inherit tags — the pipeline (automations and LLM classifier)

@@ -4,7 +4,9 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -46,6 +48,16 @@ type DocumentBacklink struct {
 	DocumentReferenceSummary
 	FieldID   int64  `json:"field_id"`
 	FieldName string `json:"field_name"`
+}
+
+// EmailAttachmentFamily is the read-only retained-email lineage for one
+// document. Parent is present only when the requested document is an attachment.
+type EmailAttachmentFamily struct {
+	Count    int                        `json:"count"`
+	Next     string                     `json:"next,omitempty"`
+	Previous string                     `json:"previous,omitempty"`
+	Parent   *DocumentReferenceSummary  `json:"parent,omitempty"`
+	Results  []DocumentReferenceSummary `json:"results"`
 }
 
 type storedCustomFieldValue struct {
@@ -348,4 +360,135 @@ func (s *Server) ListReferencedBy(w http.ResponseWriter, r *http.Request) {
 		out[i].DocumentReferenceSummary = summaries[out[i].ID]
 	}
 	s.writeJSON(w, http.StatusOK, BuildEnvelope(r, total, pp, out))
+}
+
+// ListEmailAttachments serves GET /api/documents/{id}/email-attachments/.
+func (s *Server) ListEmailAttachments(w http.ResponseWriter, r *http.Request) {
+	if !auth.RequireScope(w, r, auth.ScopeDocumentsRead) {
+		return
+	}
+	p := auth.FromContext(r.Context())
+	anchorID, err := parseIDPath(r)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_id", "invalid id")
+		return
+	}
+	if !s.authorize(w, r, p, authz.KindDocument, anchorID, authz.PermView) {
+		return
+	}
+
+	var storedParentID sql.NullInt64
+	err = s.DB.Read.QueryRowContext(r.Context(), `
+		SELECT email_parent_id
+		FROM documents
+		WHERE id = ? AND trashed_at IS NULL
+	`, anchorID).Scan(&storedParentID)
+	if errors.Is(err, sql.ErrNoRows) {
+		s.writeError(w, http.StatusNotFound, "not_found", "object not found")
+		return
+	}
+	if err != nil {
+		s.serverErr(w, "email_attachments.anchor", err)
+		return
+	}
+
+	var parent *DocumentReferenceSummary
+	familyID := anchorID
+	if storedParentID.Valid {
+		familyID = storedParentID.Int64
+		summaries, err := s.loadReferenceSummaries(r.Context(), p, []int64{familyID})
+		if err != nil {
+			s.serverErr(w, "email_attachments.parent", err)
+			return
+		}
+		summary, ok := summaries[familyID]
+		if !ok {
+			s.writeEmailAttachmentFamily(w, r, nil, 0, ParsePageParams(r, 50, 200), nil)
+			return
+		}
+		parent = &summary
+	}
+
+	groups, err := s.principalGroups(r.Context(), p.UserID)
+	if err != nil {
+		s.serverErr(w, "email_attachments.groups", err)
+		return
+	}
+	visibility, visibilityArgs := intrinsicDocumentVisibilityWhereAlias(p, groups, "d")
+	whereSQL := `d.email_parent_id = ? AND d.trashed_at IS NULL AND (` + visibility + `)`
+	countArgs := append([]any{familyID}, visibilityArgs...)
+	if storedParentID.Valid {
+		whereSQL += ` AND d.id <> ?`
+		countArgs = append(countArgs, anchorID)
+	}
+	var total int
+	if err := s.DB.Read.QueryRowContext(r.Context(), `
+		SELECT COUNT(*)
+		FROM documents d
+		WHERE `+whereSQL, countArgs...).Scan(&total); err != nil {
+		s.serverErr(w, "email_attachments.count", err)
+		return
+	}
+
+	pp := ParsePageParams(r, 50, 200)
+	rowArgs := append([]any{}, countArgs...)
+	rowArgs = append(rowArgs, pp.PageSize, pp.Offset())
+	rows, err := s.DB.Read.QueryContext(r.Context(), `
+		SELECT d.id, d.title, js.code, COALESCE(d.mime_type, ''),
+		       COALESCE(jc.code, 0), d.created_at
+		FROM documents d
+		JOIN jd_systems js ON js.id = d.system_id
+		LEFT JOIN jd_categories jc ON jc.id = d.jd_category_id
+		WHERE `+whereSQL+`
+		ORDER BY d.id
+		LIMIT ? OFFSET ?
+	`, rowArgs...)
+	if err != nil {
+		s.serverErr(w, "email_attachments.list", err)
+		return
+	}
+	defer rows.Close()
+
+	results := make([]DocumentReferenceSummary, 0, pp.PageSize)
+	summaries := make(map[int64]DocumentReferenceSummary)
+	for rows.Next() {
+		var summary DocumentReferenceSummary
+		if err := rows.Scan(&summary.ID, &summary.Title, &summary.SystemCode, &summary.MIME,
+			&summary.JDCategoryCode, &summary.CreatedAt); err != nil {
+			s.serverErr(w, "email_attachments.scan", err)
+			return
+		}
+		summary.JDAddress = systems.Address(summary.SystemCode, int(summary.JDCategoryCode))
+		summary.IsLatest = true
+		results = append(results, summary)
+		summaries[summary.ID] = summary
+	}
+	if err := rows.Err(); err != nil {
+		s.serverErr(w, "email_attachments.rows", err)
+		return
+	}
+	intrinsicCtx := context.WithValue(r.Context(), systemContextKey{}, int64(0))
+	if err := s.markReferenceLatest(intrinsicCtx, p, summaries); err != nil {
+		s.serverErr(w, "email_attachments.latest", err)
+		return
+	}
+	for i := range results {
+		results[i] = summaries[results[i].ID]
+	}
+	s.writeEmailAttachmentFamily(w, r, parent, total, pp, results)
+}
+
+func (s *Server) writeEmailAttachmentFamily(
+	w http.ResponseWriter,
+	r *http.Request,
+	parent *DocumentReferenceSummary,
+	total int,
+	pp PageParams,
+	results []DocumentReferenceSummary,
+) {
+	envelope := BuildEnvelope(r, total, pp, results)
+	s.writeJSON(w, http.StatusOK, EmailAttachmentFamily{
+		Count: envelope.Count, Next: envelope.Next, Previous: envelope.Previous,
+		Parent: parent, Results: envelope.Results,
+	})
 }

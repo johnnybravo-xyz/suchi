@@ -50,6 +50,129 @@ func seedDocumentReferences(t *testing.T, s *Server) {
 	}
 }
 
+func seedEmailAttachmentFamily(t *testing.T, s *Server) {
+	t.Helper()
+	if _, err := s.DB.Write.Exec(`
+		INSERT INTO documents(id,system_id,owner_id,jd_category_id,title,content,original_blob,original_size,mime_type,sensitivity,created_at,updated_at)
+		SELECT 301,system_id,5,jd_category_id,'Retained email',content,'email-parent',original_size,'message/rfc822',sensitivity,1,1
+		FROM documents WHERE id=101;
+		INSERT INTO documents(id,system_id,owner_id,jd_category_id,title,content,original_blob,original_size,mime_type,sensitivity,email_parent_id,created_at,updated_at)
+		SELECT 302,system_id,5,jd_category_id,'first.pdf',content,'email-child-1',original_size,'application/pdf',sensitivity,301,2,2
+		FROM documents WHERE id=101;
+		INSERT INTO documents(id,system_id,owner_id,jd_category_id,title,content,original_blob,original_size,mime_type,sensitivity,email_parent_id,created_at,updated_at)
+		SELECT 303,system_id,5,jd_category_id,'second.xlsx',content,'email-child-2',original_size,'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',sensitivity,301,3,3
+		FROM documents WHERE id=101;
+		INSERT INTO documents(id,system_id,owner_id,jd_category_id,title,content,original_blob,original_size,mime_type,sensitivity,email_parent_id,created_at,updated_at)
+		SELECT 304,system_id,6,jd_category_id,'hidden.txt',content,'email-child-hidden',original_size,'text/plain',sensitivity,301,4,4
+		FROM documents WHERE id=101;
+	`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEmailAttachmentsProjectsVisibleFamilyBeforePaging(t *testing.T) {
+	s, mux := newSystemsBoundaryServer(t)
+	seedSystemsBoundary(t, s)
+	seedEmailAttachmentFamily(t, s)
+
+	w := systemsBoundaryRequest(mux, http.MethodGet, "/api/documents/301/email-attachments/?page_size=1", "", memberPrincipal(5))
+	if w.Code != http.StatusOK {
+		t.Fatalf("parent family: %d %s", w.Code, w.Body.String())
+	}
+	var page EmailAttachmentFamily
+	if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if page.Count != 2 || page.Parent != nil || len(page.Results) != 1 ||
+		page.Results[0].ID != 302 || page.Next == "" || page.Previous != "" {
+		t.Fatalf("parent first page = %+v body=%s", page, w.Body.String())
+	}
+
+	w = systemsBoundaryRequest(mux, http.MethodGet, "/api/documents/301/email-attachments/?page_size=1&page=2", "", memberPrincipal(5))
+	page = EmailAttachmentFamily{}
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &page) != nil ||
+		page.Count != 2 || len(page.Results) != 1 || page.Results[0].ID != 303 ||
+		page.Next != "" || page.Previous == "" {
+		t.Fatalf("parent second page: %d %s", w.Code, w.Body.String())
+	}
+
+	w = systemsBoundaryRequest(mux, http.MethodGet, "/api/documents/302/email-attachments/", "", memberPrincipal(5))
+	page = EmailAttachmentFamily{}
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &page) != nil ||
+		page.Count != 1 || page.Parent == nil || page.Parent.ID != 301 ||
+		len(page.Results) != 1 || page.Results[0].ID != 303 {
+		t.Fatalf("child family: %d %s", w.Code, w.Body.String())
+	}
+
+	w = systemsBoundaryRequest(mux, http.MethodGet, "/api/documents/101/email-attachments/", "", memberPrincipal(5))
+	page = EmailAttachmentFamily{}
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &page) != nil ||
+		page.Count != 0 || page.Parent != nil || len(page.Results) != 0 {
+		t.Fatalf("unrelated family: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestEmailAttachmentChildFamilyRequiresVisibleLiveParent(t *testing.T) {
+	s, mux := newSystemsBoundaryServer(t)
+	seedSystemsBoundary(t, s)
+	seedEmailAttachmentFamily(t, s)
+
+	assertEmpty := func(label string) {
+		t.Helper()
+		w := systemsBoundaryRequest(mux, http.MethodGet, "/api/documents/302/email-attachments/", "", memberPrincipal(5))
+		var family EmailAttachmentFamily
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &family) != nil ||
+			family.Count != 0 || family.Parent != nil || len(family.Results) != 0 {
+			t.Fatalf("%s: %d %s", label, w.Code, w.Body.String())
+		}
+	}
+
+	if _, err := s.DB.Write.Exec(`UPDATE documents SET owner_id=6 WHERE id=301`); err != nil {
+		t.Fatal(err)
+	}
+	assertEmpty("hidden parent")
+
+	if _, err := s.DB.Write.Exec(`UPDATE documents SET owner_id=5, trashed_at=10 WHERE id=301`); err != nil {
+		t.Fatal(err)
+	}
+	assertEmpty("trashed parent")
+
+	if _, err := s.DB.Write.Exec(`UPDATE documents SET trashed_at=NULL WHERE id=301`); err != nil {
+		t.Fatal(err)
+	}
+	w := systemsBoundaryRequest(mux, http.MethodGet, "/api/documents/302/email-attachments/", "", memberPrincipal(5))
+	var restored EmailAttachmentFamily
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &restored) != nil ||
+		restored.Parent == nil || restored.Parent.ID != 301 || restored.Count != 1 {
+		t.Fatalf("restored parent family: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestEmailAttachmentTrashChangesFamilyCountAndRestoreReturnsIt(t *testing.T) {
+	s, mux := newSystemsBoundaryServer(t)
+	seedSystemsBoundary(t, s)
+	seedEmailAttachmentFamily(t, s)
+
+	if _, err := s.DB.Write.Exec(`UPDATE documents SET trashed_at=10 WHERE id=303`); err != nil {
+		t.Fatal(err)
+	}
+	w := systemsBoundaryRequest(mux, http.MethodGet, "/api/documents/301/email-attachments/", "", memberPrincipal(5))
+	var family EmailAttachmentFamily
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &family) != nil ||
+		family.Count != 1 || len(family.Results) != 1 || family.Results[0].ID != 302 {
+		t.Fatalf("family with trashed child: %d %s", w.Code, w.Body.String())
+	}
+
+	if _, err := s.DB.Write.Exec(`UPDATE documents SET trashed_at=NULL WHERE id=303`); err != nil {
+		t.Fatal(err)
+	}
+	w = systemsBoundaryRequest(mux, http.MethodGet, "/api/documents/301/email-attachments/", "", memberPrincipal(5))
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &family) != nil ||
+		family.Count != 2 || len(family.Results) != 2 {
+		t.Fatalf("family after child restore: %d %s", w.Code, w.Body.String())
+	}
+}
+
 func TestDocumentDetailProjectsTypedCustomFieldsWithoutHiddenTargets(t *testing.T) {
 	s, mux := newSystemsBoundaryServer(t)
 	seedSystemsBoundary(t, s)

@@ -23,7 +23,7 @@ carry it into bug reports. See [Errors](#errors) for the JSON error contract.
 | Auth (browser)          | `/login`, `/bootstrap`, `/setup`, OIDC `GET /oidc/login`, `GET /oidc/callback`, and `POST /oidc/email-change`                                                                            |
 | Auth and account JSON   | `POST /api/login`, `POST /api/logout`, `POST /api/token/`, `GET/POST/DELETE /api/tokens/`, `GET /api/whoami`, `PATCH /api/users/me`, `POST /api/users/me/email`, `/api/account/two-factor…`                         |
 | Documents               | `POST /api/documents/`, `GET/PATCH/DELETE /api/documents/{id}`, `POST /api/documents/{id}/restore`, `GET/DELETE /api/trash/`, `DELETE /api/trash/{id}`                                      |
-| Doc extras              | `/correspondents/`, `/versions/`, `/referenced-by/`, `/notes/`, `/custom_fields/{field}`, `/decrypt`, `/decrypt-batch`, `/pending-decryption`                                          |
+| Doc extras              | `/correspondents/`, `/versions/`, `/email-attachments/`, `/referenced-by/`, `/notes/`, `/custom_fields/{field}`, `/decrypt`, `/decrypt-batch`, `/pending-decryption`                    |
 | Metadata and filing     | `/api/correspondents/`, `/api/rendered_layouts/`, `/api/tags/`, `/api/tags/{id}/parent`, `/api/custom_fields/`, `/api/jd/categories/`                                                  |
 | Search + autocomplete   | `/api/search/`, `/api/autocomplete/`, `/api/languages/`                                                                                                                               |
 | Mail intake | `/api/email-accounts/*` (requires `mailboxes`; within the selected system, admins see all rows and members see their own) |
@@ -1674,6 +1674,46 @@ the sender.
 ### `DELETE /api/documents/{id}/correspondents/{cid}/{role}`
 
 Remove one junction row. `204` on success.
+
+### `GET /api/documents/{id}/email-attachments/`
+
+Return the retained email family for one live document. This route requires a
+browser session and document read access; API tokens cannot call it. Results use
+the standard page envelope (default 50, cap 200) and order attachments by
+ascending document ID, which preserves ingestion order.
+
+For a retained email parent, `results` contains its attachment children and
+`parent` is omitted. For an attachment, `parent` identifies the enclosing email
+and `results` contains sibling attachments, excluding the requested row:
+
+```json
+{
+  "count": 2,
+  "parent": {
+    "id": 40,
+    "title": "Quarterly statements",
+    "is_latest": true
+  },
+  "results": [
+    {
+      "id": 42,
+      "title": "statement.pdf",
+      "is_latest": true
+    },
+    {
+      "id": 43,
+      "title": "summary.xlsx",
+      "is_latest": true
+    }
+  ]
+}
+```
+
+An unrelated document returns count zero and an empty `results` array. A
+document in Trash returns `404`. Child ACL and Trash filtering happens before
+counting and pagination. When the enclosing parent is hidden or trashed, an
+attachment returns an empty family so the endpoint does not disclose sibling
+association through an inaccessible email. `is_latest` remains caller-relative.
 
 ### `GET /api/documents/{id}/referenced-by/`
 

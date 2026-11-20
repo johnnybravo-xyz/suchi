@@ -134,12 +134,22 @@ so in-flight suggestions lose to a later decision.
 
 ## Versions, references, and discovery currentness
 
-Acquisition sources, replacement versions, and document links are separate
-relations. `document_sources` records where one exact row's bytes came from.
-`previous_version_id` and the internal `version_family_key` identify revisions
-that supersede one another. A `documentlink` custom-field value connects two
-exact rows that continue to coexist. None of these relations is inferred from
-shared CAS bytes.
+Acquisition sources, replacement versions, retained-email lineage, and document
+links are separate relations. `document_sources` records where one exact row's
+bytes came from. `previous_version_id` and the internal `version_family_key`
+identify revisions that supersede one another. `email_parent_id` points from an
+extracted attachment to the exact retained email row. A `documentlink`
+custom-field value connects two exact rows that continue to coexist. None of
+these relations is inferred from shared CAS bytes.
+
+Email lineage is written by post-ingest, not by users. The session-only
+`GET /api/documents/{id}/email-attachments/` endpoint projects the parent and
+direct children through intrinsic document ACL and Trash filters before count
+and pagination. A child receives no family when its parent is inaccessible,
+preventing sibling-association disclosure. Files-only mail intake deletes its
+staging parent and clears `email_parent_id`, so it intentionally creates no
+retained family. Permanent parent deletion relies on the existing
+`ON DELETE SET NULL` constraint.
 
 `core/api/versions.go` owns replacement upload and visible family history.
 The upload rechecks predecessor change permission inside the single-writer
