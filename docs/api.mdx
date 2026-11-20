@@ -2034,6 +2034,7 @@ Scope: **`documents:read`**.
   "pending_approvals": 2,
   "pending_intelligence": 4,
   "dead_jobs": 1,
+  "mailbox_errors": 1,
   "ingested_7d": 57,
   "processing_reading": 12,
   "processing_classifying": 3
@@ -2045,7 +2046,9 @@ code in the browser's `#/documents?jd=49&system=S01` route after introduction.
 `pending_intelligence` is its visible extracted-fact review count for callers with
 `archive_intelligence`. `dead_jobs` is system-scoped and admin-only (members see `0`);
 `pending_approvals` is scoped to the member's assignee or all open work in that
-system for admins. `ingested_7d` counts live documents created in the last 7 days —
+system for admins. `mailbox_errors` counts enabled mailboxes with a current error:
+admins see the selected system, capable members see only their own, and other
+members see `0`. `ingested_7d` counts live documents created in the last 7 days —
 useful for a sparkline; not a filing-date metric.
 `processing_reading` counts visible live documents whose extraction or OCR
 (`post-ingest`) is pending or running, including retries; `processing_classifying`
@@ -2996,8 +2999,10 @@ Requires the `mailboxes` capability. Members can test only their own
 rows. Dials the row's host, attempts auth using the stored credential
 (password or refreshed OAuth token), then logs out.
 Never 500s on a connect-refused — that's user data being wrong,
-not a server bug. The result clears or updates `last_error` while preserving
-`last_sync_at`, because a connection test is not a mailbox poll.
+not a server bug. A failure updates `last_error`. Success clears the matching
+connection or login error it observed, but not a newer error or an unrelated
+folder, fetch or ingestion failure. `last_sync_at` is always preserved because a
+connection test is not a mailbox poll.
 
 ```json
 { "ok": true,  "message": "Connected — mailbox reachable." }

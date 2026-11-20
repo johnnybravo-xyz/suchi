@@ -471,25 +471,19 @@ func TestEmailAccounts_TestDial_UsesStoredPlaintextMode(t *testing.T) {
 	}
 	defer listener.Close()
 	serverDone := make(chan error, 1)
-	go func() {
-		conn, err := listener.Accept()
-		if err != nil {
-			serverDone <- err
-			return
-		}
+	serveConnection := func(conn net.Conn) error {
 		defer conn.Close()
 		if _, err := fmt.Fprint(conn, "* OK [CAPABILITY IMAP4rev1] test ready\r\n"); err != nil {
-			serverDone <- err
-			return
+			return err
 		}
 		scanner := bufio.NewScanner(conn)
 		for scanner.Scan() {
 			fields := strings.Fields(scanner.Text())
 			if len(fields) < 2 {
-				serverDone <- fmt.Errorf("invalid IMAP command %q", scanner.Text())
-				return
+				return fmt.Errorf("invalid IMAP command %q", scanner.Text())
 			}
 			tag, command := fields[0], strings.ToUpper(fields[1])
+			var err error
 			switch command {
 			case "CAPABILITY":
 				_, err = fmt.Fprintf(conn, "* CAPABILITY IMAP4rev1\r\n%s OK CAPABILITY completed\r\n", tag)
@@ -497,18 +491,28 @@ func TestEmailAccounts_TestDial_UsesStoredPlaintextMode(t *testing.T) {
 				_, err = fmt.Fprintf(conn, "%s OK LOGIN completed\r\n", tag)
 			case "LOGOUT":
 				_, err = fmt.Fprintf(conn, "* BYE logging out\r\n%s OK LOGOUT completed\r\n", tag)
-				serverDone <- err
-				return
+				return err
 			default:
-				serverDone <- fmt.Errorf("unexpected IMAP command %q", command)
-				return
+				return fmt.Errorf("unexpected IMAP command %q", command)
+			}
+			if err != nil {
+				return err
+			}
+		}
+		return scanner.Err()
+	}
+	go func() {
+		for range 2 {
+			conn, err := listener.Accept()
+			if err == nil {
+				err = serveConnection(conn)
 			}
 			if err != nil {
 				serverDone <- err
 				return
 			}
 		}
-		serverDone <- scanner.Err()
+		serverDone <- nil
 	}()
 
 	host, portText, err := net.SplitHostPort(listener.Addr().String())
@@ -544,7 +548,23 @@ func TestEmailAccounts_TestDial_UsesStoredPlaintextMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	if after.LastSyncAt != 1234 || after.LastError != syncError {
-		t.Fatalf("connection test changed sync health: timestamp=%d error=%q", after.LastSyncAt, after.LastError)
+		t.Fatalf("connection test hid polling health: timestamp=%d error=%q", after.LastSyncAt, after.LastError)
+	}
+
+	const loginError = "Login failed: User is authenticated but not connected."
+	if err := emailaccounts.MarkSync(context.Background(), s.DB, acc.ID, 1234, loginError); err != nil {
+		t.Fatal(err)
+	}
+	rec = call(t, s, "POST", "/api/email-accounts/"+strconv.FormatInt(acc.ID, 10)+"/test", "", adminPrincipal(1))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"ok":true`) {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	after, err = emailaccounts.Get(context.Background(), s.DB, acc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.LastSyncAt != 1234 || after.LastError != "" {
+		t.Fatalf("connection test did not clear login health: timestamp=%d error=%q", after.LastSyncAt, after.LastError)
 	}
 	select {
 	case err := <-serverDone:

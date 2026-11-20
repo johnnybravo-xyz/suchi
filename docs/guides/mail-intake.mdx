@@ -142,11 +142,11 @@ If a message fails, the cursor does not advance past it. Deduplication uses
 watched folder or mbsync in that same system. Another system gets a distinct document.
 
 **Test connection** checks connectivity and authentication, not folder search or
-message downloads. A successful test does not clear a sync failure or update the
-last successful sync time; only a successful polling cycle does that. The amber
-**never synced** state means no successful cycle has been recorded, while a red
-**error** state reports the last failure. Reload the mailbox list to see updated
-polling status.
+message downloads. A successful test clears an earlier connection or login
+failure without changing the last successful sync time. It does not hide a
+folder, fetch or ingestion failure; only a successful polling cycle clears those.
+The amber **never synced** state means no successful cycle has been recorded,
+while a red state reports the last failure.
 
 Changing connection or source-folder settings resets that mailbox's UID cursor
 so a cursor from the old source is not reused against the new one.

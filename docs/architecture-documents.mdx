@@ -92,9 +92,11 @@ retries that file, a custom-field definition change through the API clears
 blocked observations for that filing system, and any other blocked observation
 is retried after an hour. All failure state remains in Suchi-owned storage and
 audit. IMAP checkpoints ascending batches of at most 50 UIDs after
-import/bookkeeping; failure stops the cycle while preserving earlier progress,
-and connection tests do not clear polling failures. [Mail intake](/guides/mail-intake)
-owns history/rules/health.
+import/bookkeeping; failure stops the cycle while preserving earlier progress.
+Connection tests clear only the matching connection or login failure they
+observed; polling remains authoritative for sync timestamps and folder, fetch,
+and ingestion failures. [Mail intake](/guides/mail-intake) owns
+history/rules/health.
 Portable import differs: `core/importer/bundle/` may restore supplied content,
 archive bytes and metadata without scheduling extraction.
 

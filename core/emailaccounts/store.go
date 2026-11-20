@@ -559,6 +559,21 @@ func MarkSync(ctx context.Context, database *db.DB, id int64, syncedAt int64, er
 	})
 }
 
+// ClearErrorIfCurrent clears only a connection-test failure observed before a
+// later test began. A concurrent poll that writes a different error wins, and
+// this path never changes last_sync_at or hides folder, fetch, or ingest errors.
+func ClearErrorIfCurrent(ctx context.Context, database *db.DB, id int64, expectedError string) error {
+	return database.WriteTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			UPDATE email_accounts
+			SET last_error = NULL, updated_at = ?
+			WHERE id = ? AND COALESCE(last_error, '') = ?
+			  AND (last_error LIKE 'Connect failed:%' OR last_error LIKE 'Login failed:%')`,
+			time.Now().Unix(), id, expectedError)
+		return err
+	})
+}
+
 func boolInt(b bool) int {
 	if b {
 		return 1

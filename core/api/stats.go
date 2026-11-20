@@ -20,10 +20,9 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
 )
 
-// StatsResponse is the dashboard's one-round-trip payload. Every count
-// is either owner-scoped (documents) or admin-scoped (jobs). Missing
-// scope silently zeroes the operational counters — no 403 that would
-// break a member's dashboard.
+// StatsResponse is the dashboard's one-round-trip payload. Every count is
+// visibility-, owner-, or admin-scoped. Missing access silently zeroes
+// operational counters rather than breaking a member's dashboard.
 type StatsResponse struct {
 	DocumentsTotal      int64 `json:"documents_total"`
 	TrashCount          int64 `json:"trash_count"`
@@ -32,6 +31,7 @@ type StatsResponse struct {
 	PendingApprovals    int64 `json:"pending_approvals"`
 	PendingIntelligence int64 `json:"pending_intelligence"`
 	DeadJobs            int64 `json:"dead_jobs"`
+	MailboxErrors       int64 `json:"mailbox_errors"`
 	Ingested7d          int64 `json:"ingested_7d"`
 	// Visible live documents with unfinished pipeline work: reading covers
 	// extraction/OCR, classifying covers the optional model step.
@@ -56,14 +56,22 @@ func (s *Server) GetStats(w http.ResponseWriter, r *http.Request) {
 	isAdmin := p.Role == "admin"
 
 	var (
-		groups []int64
-		err    error
+		groups       []int64
+		capabilities authz.Set
+		err          error
 	)
 	if !isAdmin {
 		groups, err = s.principalGroups(ctx, p.UserID)
 		if err != nil {
 			s.serverErr(w, "stats.load_groups", err)
 			return
+		}
+		if p.Kind != PrincipalKindDemoAnon {
+			capabilities, err = s.userCapabilities(ctx, p.UserID)
+			if err != nil {
+				s.serverErr(w, "stats.capabilities", err)
+				return
+			}
 		}
 	}
 
@@ -132,21 +140,30 @@ func (s *Server) GetStats(w http.ResponseWriter, r *http.Request) {
 	}
 	out.PendingApprovals = int64(pendingApprovals)
 
-	canReviewIntelligence := isAdmin
-	if !canReviewIntelligence && p.Kind != PrincipalKindDemoAnon {
-		capabilities, err := s.userCapabilities(ctx, p.UserID)
-		if err != nil {
-			s.serverErr(w, "stats.intelligence_capability", err)
-			return
-		}
-		canReviewIntelligence = capabilities.Has(authz.CapArchiveIntelligence)
-	}
+	canReviewIntelligence := isAdmin || capabilities.Has(authz.CapArchiveIntelligence)
 	if canReviewIntelligence {
 		out.PendingIntelligence, err = intelligenceCountForPrincipal(ctx, s, p, groups, "pending")
 		if err != nil {
 			s.serverErr(w, "stats.intelligence", err)
 			return
 		}
+	}
+
+	if isAdmin {
+		err = scanCount(ctx, s.DB.Read, `
+			SELECT COUNT(*) FROM email_accounts
+			WHERE system_id = ? AND enabled = 1 AND COALESCE(last_error, '') <> ''`,
+			[]any{systemID}, &out.MailboxErrors)
+	} else if capabilities.Has(authz.CapMailboxes) {
+		err = scanCount(ctx, s.DB.Read, `
+			SELECT COUNT(*) FROM email_accounts
+			WHERE system_id = ? AND owner_id = ? AND enabled = 1
+			  AND COALESCE(last_error, '') <> ''`,
+			[]any{systemID, p.UserID}, &out.MailboxErrors)
+	}
+	if err != nil {
+		s.serverErr(w, "stats.mailbox_errors", err)
+		return
 	}
 
 	// Dead jobs — admin only. Members see 0 so the dashboard doesn't

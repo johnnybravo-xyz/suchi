@@ -233,21 +233,45 @@ func TestMarkSync(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := emailaccounts.MarkSync(ctx, d, a.ID, 12345, "boom"); err != nil {
+	const oldLoginError = "Login failed: old credential"
+	if err := emailaccounts.MarkSync(ctx, d, a.ID, 12345, oldLoginError); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := emailaccounts.Get(ctx, d, a.ID)
-	if got.LastSyncAt != 12345 || got.LastError != "boom" {
+	if got.LastSyncAt != 12345 || got.LastError != oldLoginError {
 		t.Fatalf("MarkSync did not persist: sync=%d err=%q", got.LastSyncAt, got.LastError)
 	}
 
-	// Clearing the error passes empty string; column becomes NULL, read as "".
-	if err := emailaccounts.MarkSync(ctx, d, a.ID, 12346, ""); err != nil {
+	if err := emailaccounts.ClearErrorIfCurrent(ctx, d, a.ID, oldLoginError); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = emailaccounts.Get(ctx, d, a.ID)
-	if got.LastError != "" {
-		t.Fatalf("MarkSync clear: want empty last_error, got %q", got.LastError)
+	if got.LastSyncAt != 12345 || got.LastError != "" {
+		t.Fatalf("connection-error clear changed sync health: sync=%d err=%q", got.LastSyncAt, got.LastError)
+	}
+
+	const fetchError = "fetch: Command Error. 10"
+	if err := emailaccounts.MarkSync(ctx, d, a.ID, 12346, fetchError); err != nil {
+		t.Fatal(err)
+	}
+	if err := emailaccounts.ClearErrorIfCurrent(ctx, d, a.ID, fetchError); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = emailaccounts.Get(ctx, d, a.ID)
+	if got.LastSyncAt != 12346 || got.LastError != fetchError {
+		t.Fatalf("connection test hid poll failure: sync=%d err=%q", got.LastSyncAt, got.LastError)
+	}
+
+	const newerLoginError = "Login failed: provider changed state"
+	if err := emailaccounts.MarkSync(ctx, d, a.ID, 12347, newerLoginError); err != nil {
+		t.Fatal(err)
+	}
+	if err := emailaccounts.ClearErrorIfCurrent(ctx, d, a.ID, oldLoginError); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = emailaccounts.Get(ctx, d, a.ID)
+	if got.LastSyncAt != 12347 || got.LastError != newerLoginError {
+		t.Fatalf("conditional clear replaced newer health: sync=%d err=%q", got.LastSyncAt, got.LastError)
 	}
 }
 

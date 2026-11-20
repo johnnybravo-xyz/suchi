@@ -196,7 +196,7 @@ const (
 //
 // TLSCAFile / ProcessedFolder / OAuthAccountID are nullable columns represented
 // as empty string on read.
-// LastSyncAt / LastError are 0 / "" until MarkSync writes them.
+// LastSyncAt / LastError are 0 / "" until polling or a connection test writes them.
 //
 // SyncSince is *int64 (not int64) because 0 is a legitimate unix
 // timestamp — nil means "no SINCE filter" and is visually distinct from an

@@ -740,7 +740,10 @@ func (s *Server) TestEmailAccount(w http.ResponseWriter, r *http.Request) {
 				s.Log.Warn("api.email_accounts.test", "account_id", acc.ID, "err", detail.Error())
 			}
 		}
-		_ = emailaccounts.MarkSync(r.Context(), s.DB, acc.ID, acc.LastSyncAt, message)
+		if err := emailaccounts.MarkSync(r.Context(), s.DB, acc.ID, acc.LastSyncAt, message); err != nil {
+			s.serverErr(w, "email_accounts.mark_test_failure", err)
+			return
+		}
 		s.writeJSON(w, http.StatusOK, map[string]any{"ok": false, "message": message})
 	}
 
@@ -810,8 +813,12 @@ func (s *Server) TestEmailAccount(w http.ResponseWriter, r *http.Request) {
 		fail("Login failed", err, true)
 		return
 	}
-	// Authentication says nothing about fetching mail. Only a successful poll
-	// clears a sync error; testing must not overwrite concurrent poll status.
+	// Clear only the failure this test observed. A poll that records a newer
+	// error while authentication is in flight remains authoritative.
+	if err := emailaccounts.ClearErrorIfCurrent(r.Context(), s.DB, acc.ID, acc.LastError); err != nil {
+		s.serverErr(w, "email_accounts.clear_test_error", err)
+		return
+	}
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "message": "Connected — mailbox reachable.",
 	})

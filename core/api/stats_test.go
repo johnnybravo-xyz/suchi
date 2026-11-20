@@ -8,6 +8,7 @@ package api
 //   - member ACL-scoped: counts drop to only-visible docs
 //   - member sees pending_approvals for their own assignee
 //   - dead_jobs admin-only (member gets 0)
+//   - mailbox errors system-, capability-, owner-, and enabled-scoped
 //   - inbox_category_id emitted; 7d ingested trend correct
 
 import (
@@ -76,12 +77,17 @@ func seedStatsDoc(t *testing.T, d *db.DB, ownerID int64, sha, title string, jdCa
 
 func doStats(t *testing.T, s *Server, principal *pluginapi.Principal) (int, StatsResponse) {
 	t.Helper()
+	return doStatsPath(t, s, "/api/stats/", principal)
+}
+
+func doStatsPath(t *testing.T, s *Server, path string, principal *pluginapi.Principal) (int, StatsResponse) {
+	t.Helper()
 	rec := httptest.NewRecorder()
 	ctx := context.Background()
 	if principal != nil {
 		ctx = auth.WithPrincipal(ctx, principal)
 	}
-	r := httptest.NewRequest("GET", "/api/stats/", nil).WithContext(ctx)
+	r := httptest.NewRequest("GET", path, nil).WithContext(ctx)
 	s.GetStats(rec, r)
 	var body StatsResponse
 	if rec.Code == 200 {
@@ -172,6 +178,48 @@ func TestStats_MemberScopedByOwner(t *testing.T) {
 	// short-circuited by role so 0 is correct.
 	if body.DeadJobs != 0 {
 		t.Errorf("member dead_jobs = %d, want 0", body.DeadJobs)
+	}
+}
+
+func TestStats_MailboxErrorsScopedToManagers(t *testing.T) {
+	s := newStatsServer(t)
+	seedMember(t, s, 2, `["mailboxes"]`)
+	seedMember(t, s, 3, `[]`)
+	if _, err := s.DB.Write.ExecContext(t.Context(), `
+		UPDATE jd_systems SET code = 'S01' WHERE id = 1;
+		INSERT INTO jd_systems(id, code, name, taxonomy, created_at, updated_at)
+		VALUES (2, 'S02', 'Second', 'jd', 0, 0);
+		INSERT OR IGNORE INTO jd_system_members(system_id, user_id, created_at)
+		VALUES (1, 2, 0), (1, 3, 0);
+		INSERT INTO email_accounts(
+			system_id, name, owner_id, provider, host, port, use_tls,
+			auth_method, username, sealed_secret, enabled, last_error, created_at, updated_at
+		) VALUES
+			(1, 'admin-error', 1, 'custom', 'mail', 993, 1, 'password', 'a', x'01', 1, 'Login failed: admin', 0, 0),
+			(1, 'member-error', 2, 'custom', 'mail', 993, 1, 'password', 'b', x'01', 1, 'Connect failed: member', 0, 0),
+			(1, 'hidden-owner-error', 3, 'custom', 'mail', 993, 1, 'password', 'c', x'01', 1, 'fetch failed', 0, 0),
+			(1, 'disabled-error', 1, 'custom', 'mail', 993, 1, 'password', 'd', x'01', 0, 'Login failed: disabled', 0, 0),
+			(1, 'healthy', 1, 'custom', 'mail', 993, 1, 'password', 'e', x'01', 1, NULL, 0, 0),
+			(2, 'other-system-error', 1, 'custom', 'mail', 993, 1, 'password', 'f', x'01', 1, 'Login failed: foreign', 0, 0)
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	code, admin := doStatsPath(t, s, "/api/stats/?system=S01", adminPrincipal(1))
+	if code != 200 || admin.MailboxErrors != 3 {
+		t.Fatalf("admin mailbox errors: status=%d count=%d, want 200/3", code, admin.MailboxErrors)
+	}
+	code, member := doStatsPath(t, s, "/api/stats/?system=S01", memberPrincipal(2))
+	if code != 200 || member.MailboxErrors != 1 {
+		t.Fatalf("capable member mailbox errors: status=%d count=%d, want 200/1", code, member.MailboxErrors)
+	}
+	code, member = doStatsPath(t, s, "/api/stats/?system=S01", memberPrincipal(3))
+	if code != 200 || member.MailboxErrors != 0 {
+		t.Fatalf("member without capability: status=%d count=%d, want 200/0", code, member.MailboxErrors)
+	}
+	code, admin = doStatsPath(t, s, "/api/stats/?system=S02", adminPrincipal(1))
+	if code != 200 || admin.MailboxErrors != 1 {
+		t.Fatalf("other system mailbox errors: status=%d count=%d, want 200/1", code, admin.MailboxErrors)
 	}
 }
 
