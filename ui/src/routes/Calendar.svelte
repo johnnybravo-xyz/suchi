@@ -3,13 +3,14 @@
   import { t as translate } from '../lib/i18n.svelte.js'
   import { formatDate, formatNumber, plural } from '../lib/format.js'
   import { scopedHash as filingHref } from '../lib/systems.svelte.js'
-  import { onDestroy } from 'svelte'
+  import { onDestroy, tick } from 'svelte'
   import { listIntelligence, listSavedViews } from '../lib/api.js'
   import { DATE_ROLES, intelligenceRoleLabel, intelligenceDateValue, formatArchiveDate, formatIntelligenceDate, groupCalendarEvents } from '../lib/intelligence.js'
   import { canExportCalendarDate, downloadCalendarDate } from '../lib/calendarExport.js'
   import { go } from '../lib/router.svelte.js'
   import Icon from '../lib/Icon.svelte'
   import RuleWorkspace from '../lib/RuleWorkspace.svelte'
+  import { REVEAL_DELAY_MS, revealLinked } from '../lib/revealLinked.js'
 
   let { query = new URLSearchParams(), demo = false } = $props()
   let events = $state([])
@@ -23,6 +24,10 @@
   let loadVersion = 0
   let activeController // rapid range changes should release the older read
   let agendaList = $state()
+  // The hovered or focused pane and the date and document its entry shares
+  // with the other pane. The grid shows one chip per document and day.
+  let linked = $state(null)
+  let revealTimer
 
   const calendarPageSize = 500
 
@@ -242,6 +247,23 @@
   }
 
 
+  const linkKey = event => `${intelligenceDateValue(event)}:${event.document_id}`
+
+  function linkHover(side, event, source, immediate = false) {
+    clearTimeout(revealTimer)
+    linked = { side, key: linkKey(event) }
+    // Only the agenda scrolls on its own; the grid stays beside it.
+    if (side !== 'grid') return
+    const reveal = () => revealLinked(agendaList, '.agenda-event.linked', source)
+    if (immediate) tick().then(reveal)
+    else revealTimer = setTimeout(reveal, REVEAL_DELAY_MS)
+  }
+
+  function clearLinkHover() {
+    clearTimeout(revealTimer)
+    linked = null
+  }
+
   function selectCalendarDay(day) {
     if (!day.inRange) return
     focusedDay = day.iso
@@ -265,6 +287,7 @@
   onDestroy(() => {
     loadVersion++
     activeController?.abort()
+    clearTimeout(revealTimer)
   })
   $effect(() => {
     load()
@@ -343,12 +366,17 @@
       <div class="day-grid" class:loading>
         {#each calendarDays as day (day.iso)}
           {@const dayEvents = day.inRange ? eventMap.get(day.iso) || [] : []}
-          <div class="day" class:outside={!day.inRange} class:today={day.iso === todayISO} class:selected={day.iso === focusedDay} class:has-events={dayEvents.length > 0}>
+          <!-- A linked date hidden behind "more" tints its whole day. -->
+          <div class="day" class:outside={!day.inRange} class:today={day.iso === todayISO} class:selected={day.iso === focusedDay} class:has-events={dayEvents.length > 0}
+               class:linked={linked?.side === 'agenda' && dayEvents.slice(3).some(event => linkKey(event) === linked.key)}>
             {#if day.inRange}
               <button class="day-number" onclick={() => selectCalendarDay(day)} aria-pressed={day.iso === focusedDay} aria-label={translate("calendar.showDatesForValue", { "iso": formatArchiveDate(day.iso) })}>{formatDate(day.date, { day: 'numeric' })}</button>
               <div class="day-events">
                 {#each dayEvents.slice(0, 3) as event (event.id)}
-                  <a class:prev={prevAccepted(event)} class:rev={reviewedDate(event)} href={filingHref(`#/doc/${event.document_id}`)} title={translate("calendar.valueValueValue", { "role": intelligenceRoleLabel(event.role), "event": dateOriginLabel(event), "document_title": event.document_title })}>
+                  <a class:prev={prevAccepted(event)} class:rev={reviewedDate(event)} class:linked={linked?.side === 'agenda' && linked.key === linkKey(event)}
+                     onmouseenter={(e) => linkHover('grid', event, e.currentTarget)} onmouseleave={clearLinkHover}
+                     onfocus={(e) => linkHover('grid', event, e.currentTarget, true)} onblur={clearLinkHover}
+                     href={filingHref(`#/doc/${event.document_id}`)} title={translate("calendar.valueValueValue", { "role": intelligenceRoleLabel(event.role), "event": dateOriginLabel(event), "document_title": event.document_title })}>
                     <span class="day-event-title">{event.document_title || translate("calendar.documentValue", { "document_id": event.document_id })}</span>
                   </a>
                 {/each}
@@ -386,7 +414,9 @@
             <section class="feed-group" class:focused={group.precision === 'day' && group.date === focusedDay} data-feed-date={group.precision === 'day' ? group.date : undefined}>
               <div class="feed-day"><b>{groupLabel(group)}</b>{#if group.items.length > 1}<span>{plural("calendar.dateCount", group.items.length)}</span>{/if}</div>
               {#each group.items as event (event.id)}
-                <article class="agenda-event">
+                <article class="agenda-event" class:linked={linked?.side === 'grid' && linked.key === linkKey(event)}
+                         onmouseenter={() => linkHover('agenda', event)} onmouseleave={clearLinkHover}
+                         onfocusin={() => linkHover('agenda', event)} onfocusout={clearLinkHover}>
                   <span class="feed-thumb" aria-hidden="true"></span>
                   <div class="agenda-copy">
                     <a class="agenda-document" href={filingHref(`#/doc/${event.document_id}`)}><b>{event.document_title || translate("calendar.documentValue", { "document_id": event.document_id })}</b><Icon name="chev" size={13} /></a>
@@ -473,6 +503,9 @@
   .day-events .day-more { position: relative; justify-self: start; border: 0; padding: 1px 2px; background: transparent; color: var(--accent); font: inherit; font-size: .64rem; font-weight: 600; cursor: pointer; }
   .day-events a.prev { border-left-color: var(--warn); background: color-mix(in srgb, var(--manila) 45%, var(--surface)); }
   .day-events a.rev { border-left-color: var(--ok); background: var(--ok-soft); }
+  /* Linked chips keep their status colour; the accent border marks them. */
+  .day.linked:not(.selected), .agenda-event.linked { background: color-mix(in srgb, var(--accent) 5%, var(--surface)); }
+  .day-events a.linked { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
   .day-event-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .date-origin { flex: none; padding: 1px 4px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: .55rem; font-style: normal; font-weight: 650; line-height: 1.4; }
   .agenda { display: flex; flex-direction: column; min-height: 0; }
