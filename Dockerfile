@@ -11,7 +11,7 @@ ARG RUST_IMAGE=rust:1.97.1-alpine@sha256:3c38f3f82c2f3d73da3b38e18d279393a04cb43
 ARG ALPINE_IMAGE=alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 ARG GO_IMAGE=golang:1.27.4-alpine@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280
 ARG DEBIAN_IMAGE=debian:bookworm-20260803-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
-ARG BUN_IMAGE=oven/bun:1.4.1-alpine@sha256:2ef545220f7a886f22fcb3f2309bbd6bcf1c0aa04b7d79c31765c7aa4a13aac1
+ARG BUN_IMAGE=oven/bun:1.4.4-alpine@sha256:4cf82f5686b196504fe119db3fcd9185b191f82ece82c40680e597228ec6070a
 
 # Build the browser application from source. Bun and node_modules remain in this
 # stage; only Vite's generated output crosses into the Go builder.
@@ -29,8 +29,8 @@ RUN bun run build
 # Build the pinned anydoc converter once for both runtime images. The readable
 # tag is audited by hack/pin-bumper.sh; the resolved commit controls checkout.
 FROM ${RUST_IMAGE} AS anydoc-build
-ARG ANYDOC_TAG=v0.2.3
-ARG ANYDOC_COMMIT=bf3d33e61731580d1ee1c6a85e56093d715a21a6
+ARG ANYDOC_TAG=v0.2.4
+ARG ANYDOC_COMMIT=42bf1c5ecdde9eb0d96d6bd75a9e6698cf93b14c
 ARG TARGETARCH
 
 RUN apk add --no-cache git musl-dev pkgconfig
