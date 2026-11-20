@@ -243,39 +243,28 @@ do not duplicate them here.
    the exact commit and tag to GitHub:
 
    ```sh
-   export VERSION=v0.4.1
+   export VERSION=v0.5.0
    git tag -s "$VERSION" -m "suchi ${VERSION#v}"
    ./hack/verify-release-tag.sh "$VERSION"
    git push gh main
    git push gh "refs/tags/$VERSION"
    ```
 
-9. Dispatch the manual release workflow:
+9. Dispatch the validation-only release workflow:
 
    ```sh
    make release VERSION="$VERSION"
    ```
 
-   This verifies that the local and GitHub tags resolve to the same commit. Use
-   `PUBLISH=false` to validate the signed tag and release gates without
-   packaging or publishing release artifacts. The checked-in proposal policy
-   remains identical across every published binary and image. Zero thresholds
-   do not cancel existing reminders, and explicit rescans remain available.
-
-The workflow builds standard and full multi-architecture images, cross-platform
-binaries, checksums, SBOMs, signatures, and GitHub release notes derived from
-the changelog. Tag pushes alone do not publish anything.
-
-Release notes travel as a workflow artifact into the collector, rather than a
-multiline job output that GitHub's secret detection may silently suppress.
-
-AnyDoc is compiled once per Linux architecture through the Dockerfile's
-`anydoc` export target. Those binaries and licenses are packaged for standalone
-downloads. The image job downloads only that run's AnyDoc artifacts, verifies
-their checksums, and supplies them as an `anydoc` named build context for both
-runtime variants. Docker selects the matching `amd64` or `arm64` directory;
-missing or damaged artifacts fail the build instead of triggering recompilation.
-Plain local Docker builds omit that context and still compile from pinned source.
+   This verifies that the local and GitHub tags resolve to the same commit and
+   runs the release gates without packaging or publishing artifacts. Do not set
+   `PUBLISH=true` for v0.5.0. The checked-in proposal policy remains identical
+   across every published binary and image. Zero thresholds do not cancel
+   existing reminders, and explicit rescans remain available.
+10. Build the cross-platform binaries, standalone AnyDoc archives, standard and
+    full multi-architecture images, SBOMs and checksum manifests on `devlab`
+    using the commands below. Sign the manifests on the release Mac, publish the
+    GitHub release, then promote the moving image channels.
 
 Release builds inject the version and source revision into the Go binary.
 Settings reads the identity from `/api/whoami`, showing only the version for
@@ -288,7 +277,7 @@ for a tagged release. Local VCS builds without an injected version use the sourc
 version line, not Go's tag-derived module pseudo-version. Missing development
 revisions are labeled unavailable, not guessed.
 
-## Publishing container images without Actions
+## Building release assets without Actions
 
 GHCR images can be built and pushed directly when Actions is unavailable. Build
 from the release tag, never from a different branch with the release version
@@ -304,7 +293,7 @@ the release artifacts to verify and deploy.
 Set the release coordinates on every build machine:
 
 ```sh
-export VERSION=v0.4.1
+export VERSION=v0.5.0
 export IMAGE=ghcr.io/johnnybravo-xyz/suchi
 export CACHE_AMD64="$IMAGE:buildcache-amd64"
 export CACHE_ARM64="$IMAGE:buildcache-arm64"
@@ -327,7 +316,164 @@ printf '%s' "$CR_PAT" |
 unset CR_PAT
 ```
 
-### Build on native architecture hosts
+### Build all release assets on devlab
+
+The v0.5.0 release uses the Debian 13 x86-64 `devlab` host, not GitHub Actions.
+The host needs Go 1.27.4, Bun 1.4.4, Docker Buildx with QEMU support, and Syft
+1.51.0. It holds no release signing key.
+
+From the detached signed tag, bind every output to that exact revision:
+
+```sh
+export REVISION="$(git rev-parse "$VERSION^{commit}")"
+test "$(git rev-parse HEAD)" = "$REVISION"
+./hack/verify-release-tag.sh "$VERSION"
+
+make ui
+go run ./hack/ui-assets verify ui core/ui/spa/dist
+rm -rf dist/release /tmp/suchi-anydoc
+mkdir -p dist/release /tmp/suchi-anydoc/context
+```
+
+Build the static Suchi binary matrix:
+
+```sh
+for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+  goos=${target%/*}
+  goarch=${target#*/}
+  bin="suchi-${VERSION}-${goos}-${goarch}"
+  test "$goos" = windows && bin="${bin}.exe"
+  CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build \
+    -tags=embedded_ui \
+    -trimpath \
+    -ldflags="-s -w -X main.version=${VERSION} -X main.revision=${REVISION}" \
+    -o "dist/release/$bin" ./distro/cmd/suchi
+done
+```
+
+Export and package the pinned AnyDoc binary for both Linux architectures. The
+same verified exports become the named image build context, so the image builds
+do not compile a second copy:
+
+```sh
+ANYDOC_TAG=$(awk -F= '$1 == "ARG ANYDOC_TAG" { print $2; exit }' Dockerfile)
+ANYDOC_COMMIT=$(awk -F= '$1 == "ARG ANYDOC_COMMIT" { print $2; exit }' Dockerfile)
+
+for arch in amd64 arm64; do
+  out="/tmp/suchi-anydoc/export-${arch}"
+  bundle="anydoc-${VERSION}-linux-${arch}"
+  docker buildx build \
+    --platform "linux/$arch" \
+    --target anydoc \
+    --output "type=local,dest=$out" .
+  test -x "$out/$arch/anydoc"
+  test -s "$out/$arch/LICENSE"
+
+  mkdir -p "/tmp/suchi-anydoc/context/$arch" "dist/release/$bundle"
+  cp "$out/$arch/anydoc" "$out/$arch/LICENSE" "/tmp/suchi-anydoc/context/$arch/"
+  cp "$out/$arch/anydoc" "$out/$arch/LICENSE" "dist/release/$bundle/"
+  printf '%s\n%s\n' \
+    "This anydoc build is redistributed from firecrawl/anydoc" \
+    "${ANYDOC_TAG} (${ANYDOC_COMMIT}) under the MIT license. Source: https://github.com/firecrawl/anydoc" \
+    > "dist/release/$bundle/NOTICE"
+  (cd dist/release && tar -czf "${bundle}.tar.gz" "$bundle")
+  rm -rf "dist/release/$bundle"
+done
+```
+
+Build and push only the immutable versioned standard and full image manifests:
+
+```sh
+for target in standard full; do
+  suffix=
+  test "$target" = full && suffix=-full
+  docker buildx build \
+    --file Dockerfile \
+    --target "$target" \
+    --platform linux/amd64,linux/arm64 \
+    --build-context anydoc=/tmp/suchi-anydoc/context \
+    --build-arg VERSION="$VERSION" \
+    --build-arg REVISION="$REVISION" \
+    --tag "$IMAGE:${VERSION}${suffix}" \
+    --label org.opencontainers.image.source=https://github.com/johnnybravo-xyz/suchi \
+    --label org.opencontainers.image.version="$VERSION" \
+    --label org.opencontainers.image.licenses=AGPL-3.0 \
+    --provenance=mode=max \
+    --sbom=true \
+    --push .
+done
+```
+
+Record image digests, generate both SBOM formats, extract the release notes, and
+checksum every downloadable binary, archive and SBOM:
+
+```sh
+: > dist/release/IMAGE_DIGESTS
+for ref in "$IMAGE:$VERSION" "$IMAGE:$VERSION-full"; do
+  docker buildx imagetools inspect "$ref" |
+    awk -v ref="$ref" '$1 == "Digest:" { print $2 "  " ref; exit }' \
+    >> dist/release/IMAGE_DIGESTS
+done
+
+syft "$IMAGE:$VERSION" -o spdx-json --file dist/release/suchi-standard.spdx.json
+syft "$IMAGE:$VERSION" -o cyclonedx-json --file dist/release/suchi-standard.cyclonedx.json
+syft "$IMAGE:$VERSION-full" -o spdx-json --file dist/release/suchi-full.spdx.json
+syft "$IMAGE:$VERSION-full" -o cyclonedx-json --file dist/release/suchi-full.cyclonedx.json
+
+awk -v h="## [${VERSION#v}]" '
+  $0 == h || index($0, h " - ") == 1 { flag=1; next }
+  flag && /^## \[/ { exit }
+  flag { print }
+' CHANGELOG.md > dist/release/notes.md
+
+(cd dist/release && sha256sum suchi-* anydoc-*.tar.gz | sort > SHA256SUMS)
+(cd dist/release && sha256sum -c SHA256SUMS)
+```
+
+Transfer `dist/release` to the release Mac without adding signing material to
+`devlab`. Sign both manifests with the same release key whose public half ships
+at `.github/release-signing-key.asc`:
+
+```sh
+cd dist/release
+export RELEASE_KEY=D0B0F9E868440860B543E2A7D8C255808C9A0D9C # gitleaks:allow
+gpg --local-user "$RELEASE_KEY" --armor --detach-sign \
+  --output SHA256SUMS.asc SHA256SUMS
+gpg --local-user "$RELEASE_KEY" --armor --detach-sign \
+  --output IMAGE_DIGESTS.asc IMAGE_DIGESTS
+
+gpg --verify SHA256SUMS.asc SHA256SUMS
+gpg --verify IMAGE_DIGESTS.asc IMAGE_DIGESTS
+shasum -a 256 -c SHA256SUMS
+```
+
+Publish those exact files, then promote channels only after the release exists:
+
+```sh
+gh release create "$VERSION" \
+  suchi-* anydoc-*.tar.gz \
+  SHA256SUMS SHA256SUMS.asc IMAGE_DIGESTS IMAGE_DIGESTS.asc \
+  --verify-tag \
+  --title "suchi $VERSION" \
+  --notes-file notes.md
+
+docker buildx imagetools create --tag "$IMAGE:latest" "$IMAGE:$VERSION"
+docker buildx imagetools create --tag "$IMAGE:latest-full" "$IMAGE:$VERSION-full"
+```
+
+Downloaded assets verify against the checked-in public key and the signed
+checksum manifest:
+
+```sh
+gpg --import .github/release-signing-key.asc
+gpg --verify SHA256SUMS.asc SHA256SUMS
+sha256sum -c SHA256SUMS
+```
+
+The signed `IMAGE_DIGESTS` file is the trust anchor for the devlab-built image
+manifests; GitHub Actions OIDC identities do not apply to these images.
+
+### Alternative: build on native architecture hosts
 
 Rust compilation for `anydoc` is very slow through QEMU. A cancelled
 `cargo build` step is not cached because its Docker layer never completes. For
@@ -424,11 +570,10 @@ The `full` image uses `--target full` and temporary tags ending in
 `-full-amd64` and `-full-arm64`.
 
 The first command-line push creates a private, unlinked GHCR package by
-default. In the package settings, make it public, connect it to the Suchi
-repository, and grant that repository Actions access so later workflow pushes
-can update it. Direct local publication does not reproduce the workflow's
-keyless Cosign signatures or GitHub release artifacts; handle those separately
-before calling the release complete.
+default. In the package settings, make it public and connect it to the Suchi
+repository. The devlab procedure above replaces Actions OIDC signatures with
+GPG-signed checksum and image-digest manifests under Suchi's existing release
+key.
 
 ## Automation
 
@@ -441,23 +586,18 @@ before calling the release complete.
   Rust base to catch accidental recompilation; binary and license bytes must
   match the export before the usual ingestion checks run.
 - `restore-drill.yml` validates backup restoration when called by it.
-- `release.yml` publishes only when manually dispatched from an existing signed
-  annotated tag. Its preflight repeats the complete reusable validation graph,
-  race tests, security scans, local smoke and benchmark gates, Docker checks and
-  documentation validation. Only jobs that publish releases, packages or
-  keyless signatures receive the corresponding write permissions.
+- `release.yml` defaults to validation-only when manually dispatched from an
+  existing signed annotated tag. Its preflight repeats the complete reusable
+  validation graph, race tests, security scans, local smoke and benchmark
+  gates, Docker checks and documentation validation. `publish=true` retains
+  the legacy Actions publication graph but is not used for v0.5.0.
 
 The release workflow verifies the tag with the public key pinned at
 `.github/release-signing-key.asc` and the expected full fingerprint in
 `hack/verify-release-tag.sh`. It rejects missing, lightweight, unsigned,
-wrong-key, locally divergent and remotely divergent tags.
-
-Images wait for both binary matrices before publication and reuse the AnyDoc
-matrix's verified binaries rather than rebuilding them. Release runs are
-serialized because moving image channels are shared mutable state.
-Validation-only tag runs execute the reusable checks and release preflight, then
-skip release notes, binary and image packaging, the artifact collector, GitHub
-Release creation, and channel promotion. Reusable checks may carry their
+wrong-key, locally divergent and remotely divergent tags. Validation-only runs
+skip release notes, binary and image packaging, artifact collection, GitHub
+Release creation and channel promotion. Reusable checks may carry their
 short-lived SPA build between jobs; it is not a release artifact.
 
 For a security hotfix, branch from the affected tag, land the fix and changelog

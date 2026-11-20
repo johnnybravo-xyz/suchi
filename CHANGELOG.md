@@ -4,6 +4,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-20
+
 ### Added
 
 - Document Detail now groups a retained email with its attachment documents
@@ -39,12 +41,19 @@ Notable user-visible changes to Suchi are recorded here.
   logs `post-ingest.ocr.languages_missing`, instead of failing the whole run.
   `OCR_LANGUAGES=fra,eng` without the French pack previously left scanned
   documents with no text at all.
+- Content and OCR processing revisions advance to 3 for ordered extraction
+  fallback and missing-language recovery. Existing documents are selected by
+  `suchi rescan --stale content` or `--stale ocr`, but Suchi does not show a
+  blanket reminder because successfully processed archives need no rescan.
 - The Solo and Household filing trees add **Travel** (17) under their
   administration lane for tickets, boarding passes, itineraries, bookings and
   trip receipts. Existing archives get it when an administrator applies the
   tree again.
-- Manual release runs with `publish=false` now validate the signed tag and
-  release gates without packaging or publishing release artifacts.
+- Manual release runs now default to validating the signed tag without
+  publishing. v0.5.0 assets are built on `devlab` and their checksums and image
+  digests are signed locally with Suchi's existing release key.
+- Reviewed release dependency pins advance to Bun 1.4.4, AnyDoc 0.2.4,
+  Playwright 1.65.0, Svelte 5.57.3, and Vite 8.3.7.
 - Document Detail keeps the first three dates of a longer schedule on the card
   and lists the rest under **Later dates** in **More**, whose label counts them.
 - Startup and `suchi doctor` warn when accounts other than `DATA_DIR`'s owner
@@ -993,7 +1002,8 @@ version. Installations keep using the v0.2.0 artifacts.
   and saved document passwords are sealed at rest.
 - Setup, demo isolation, error responses, and capability removal fail closed.
 
-[Unreleased]: https://github.com/johnnybravo-xyz/suchi/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/johnnybravo-xyz/suchi/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/johnnybravo-xyz/suchi/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/johnnybravo-xyz/suchi/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/johnnybravo-xyz/suchi/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/johnnybravo-xyz/suchi/compare/v0.2.1...v0.3.0

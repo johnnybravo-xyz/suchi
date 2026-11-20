@@ -98,8 +98,8 @@ const Kind = "post-ingest"
 // Zero (the schema default on ADD COLUMN) means "never processed by
 // this pipeline" — a fresh row before its first post-ingest tick.
 const (
-	PipelineVersionContent = 2
-	PipelineVersionOCR     = 2
+	PipelineVersionContent = 3
+	PipelineVersionOCR     = 3
 )
 
 // ContentLimits carries the per-format byte caps applied when writing

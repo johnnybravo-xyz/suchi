@@ -15,9 +15,9 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: 'Publish release artifacts (true) or validate the signed tag only (false)'
+        description: 'Validate the signed tag (false); legacy Actions publication requires explicit true'
         required: false
-        default: 'true'
+        default: 'false'
 
 # Image-channel aliases are shared mutable state. Serialize the entire workflow
 # so an older run cannot finish promotion after a newer release.

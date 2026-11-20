@@ -165,15 +165,13 @@ run: build
 clean:
 	rm -rf dist
 
-# Manually trigger the release workflow. Requires `gh` and an existing signed
+# Manually trigger release validation. Requires `gh` and an existing signed
 # annotated tag on the GitHub remote (create with
 # `git tag -s v0.1.0 && git push gh v0.1.0`).
-# `make release VERSION=v0.1.0` builds + publishes; `PUBLISH=false` validates
-# the signed tag and release gates without packaging or publishing release
-# artifacts. Pipeline proposal policy is committed in
-# distro/cmd/suchi/pipeline_proposals.go before the release tag is created.
+# Validation-only is the default; `PUBLISH=true` explicitly enables the legacy
+# Actions publication graph. v0.5.0 artifacts are built on devlab.
 release:
-	@test -n "$(VERSION)" || (echo "usage: make release VERSION=v0.1.0 [PUBLISH=false]"; exit 1)
+	@test -n "$(VERSION)" || (echo "usage: make release VERSION=v0.1.0 [PUBLISH=true]"; exit 1)
 	@command -v gh >/dev/null || (echo "gh CLI is required (https://cli.github.com)"; exit 1)
 	@./hack/verify-release-tag.sh "$(VERSION)"
 	@set -eu; \
@@ -193,8 +191,8 @@ release:
 	  test "$$remote_commit" = "$$local_commit" || { \
 	    echo "GitHub tag $(VERSION) resolves to $$remote_commit, local tag resolves to $$local_commit"; exit 1; \
 	  }
-	gh workflow run release.yml --repo "$(GITHUB_REPO)" --ref "$(VERSION)" -f "publish=$(or $(PUBLISH),true)"
-	@echo "dispatched release.yml at $(VERSION) (publish=$(or $(PUBLISH),true))"
+	gh workflow run release.yml --repo "$(GITHUB_REPO)" --ref "$(VERSION)" -f "publish=$(or $(PUBLISH),false)"
+	@echo "dispatched release.yml at $(VERSION) (publish=$(or $(PUBLISH),false))"
 	@echo "watch: gh run watch --repo $(GITHUB_REPO)"
 
 # Build the Svelte SPA into an ignored tree consumed by production Go builds.
