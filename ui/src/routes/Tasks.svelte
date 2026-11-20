@@ -11,6 +11,7 @@
   import { DATE_ROLES, formatIntelligenceValue, canReviewDate, reviewFailure } from '../lib/intelligence.js'
   import Icon from '../lib/Icon.svelte'
   import RuleWorkspace from '../lib/RuleWorkspace.svelte'
+  import { REVEAL_DELAY_MS, revealLinked } from '../lib/revealLinked.js'
 
   const REVIEW_ENTRY_LIMIT = 100
   let { notify, onCount, canReviewIntelligence = false, canManageJobs = false } = $props()
@@ -403,12 +404,6 @@
     }[task.vars?.field] || translate("tasks.unsupportedActionReadOnly")
   }
 
-  // A pointer crossing one pane on its way elsewhere would otherwise scroll
-  // the other pane at every entry it passes. The tint follows at once; the
-  // other pane scrolls only once the pointer rests. Focus is deliberate, so it
-  // reveals at once.
-  const REVEAL_DELAY_MS = 300
-
   function linkHover(side, groupTasks, source, immediate = false) {
     const version = ++linkHoverVersion
     linkedHover = { side, taskIDs: new Set(groupTasks.map(task => task.id)) }
@@ -427,29 +422,6 @@
     linkHoverVersion++
     clearTimeout(revealTimer)
     linkedHover = null
-  }
-
-  // Side by side, each pane scrolls on its own, so a linked entry can sit
-  // outside the other pane's view. Stacked panes share the page scroll and are
-  // skipped: scrolling there would move the hovered entry away.
-  function revealLinked(scroller, selector, source) {
-    if (!scroller || !source || getComputedStyle(scroller).overflowY !== 'auto') return
-    const linked = [...scroller.querySelectorAll(selector)]
-    if (!linked.length) return
-    const view = scroller.getBoundingClientRect()
-    if (linked.some(entry => {
-      const box = entry.getBoundingClientRect()
-      return box.top >= view.top && box.bottom <= view.bottom
-    })) return
-    // Level the entry with the hovered one, so moving straight across lands on
-    // it, while keeping it inside the pane; a tall entry keeps its top in view.
-    const box = linked[0].getBoundingClientRect()
-    const from = source.getBoundingClientRect()
-    const margin = 8
-    const levelTop = from.top + from.height / 2 - box.height / 2
-    const top = Math.max(view.top + margin, Math.min(levelTop, view.bottom - margin - box.height))
-    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    scroller.scrollBy({ top: box.top - top, behavior: reduceMotion ? 'auto' : 'smooth' })
   }
 
   function toggleSuggestionGroup(key) {
