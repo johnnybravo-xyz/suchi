@@ -257,10 +257,13 @@ do not duplicate them here.
    ```
 
    This verifies that the local and GitHub tags resolve to the same commit and
-   runs the release gates without packaging or publishing artifacts. Do not set
-   `PUBLISH=true` for v0.5.0. The checked-in proposal policy remains identical
-   across every published binary and image. Zero thresholds do not cancel
-   existing reminders, and explicit rescans remain available.
+   runs the release gates without packaging or publishing artifacts. The release
+   race suite starts alongside the reusable quality jobs. Publication waits for
+   both it and preflight; preflight runs the tag, security, binary smoke,
+   benchmark, container, and documentation checks after the reusable jobs pass.
+   Do not set `PUBLISH=true` for v0.5.0. The checked-in proposal policy remains
+   identical across every published binary and image. Zero thresholds do not
+   cancel existing reminders, and explicit rescans remain available.
 10. Build the cross-platform binaries, standalone AnyDoc archives, standard and
     full multi-architecture images, SBOMs and checksum manifests on `devlab`
     using the commands below. Sign the manifests on the release Mac, publish the
