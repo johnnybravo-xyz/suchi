@@ -7281,6 +7281,7 @@ test('shows scoped calendar loading and retry before its empty state', async ({ 
 
 test('clears live document dates before showing a trashed document', async ({ page }) => {
   const now = Math.floor(Date.now() / 1000)
+  const renewalDate = new Date((now + 7 * 86400) * 1000).toISOString().slice(0, 10)
   const intelligenceQueries = []
   await mockAPI(page, {
     filingTreeChosen: true,
@@ -7306,8 +7307,8 @@ test('clears live document dates before showing a trashed document', async ({ pa
             role: 'renewal',
             status: 'accepted',
             reviewed_at: now,
-            value: { date: '2026-11-20', precision: 'day' },
-            sort_value: '2026-11-20',
+            value: { date: renewalDate, precision: 'day' },
+            sort_value: renewalDate,
           }]
         : [],
     }),

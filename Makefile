@@ -1,10 +1,12 @@
-.PHONY: help build test vet lint fmt fmt-check license-check tidy check security-check run clean smoke smoke-ingest smoke-asn smoke-mail install-hooks ui ui-dev ui-check ui-verify ui-tracked-check ui-e2e ui-clean docs-dev docs-metadata-check docs-check bench-check release
+.PHONY: help build test release-test vet lint fmt fmt-check license-check tidy check security-check run clean smoke smoke-ingest smoke-asn smoke-mail install-hooks ui ui-dev ui-check ui-verify ui-tracked-check ui-e2e ui-clean docs-dev docs-metadata-check docs-check bench-check release
 
 .DEFAULT_GOAL := help
 
 BIN := $(CURDIR)/dist/suchi
 MODULES := . plugin-api hack/emlfixtures hack/bench/tools/sampler hack/bench/tools/gen-pdf hack/bench/tools/report
 TEST_FLAGS ?= -timeout 180s
+RELEASE_TEST_FLAGS ?= -race -count=1 -timeout 1200s
+RELEASE_API_TEST_FLAGS ?= -race -count=1 -timeout 2400s
 GO_FILES = find . \( -name .git -o -name node_modules -o -name vendor \) -prune -o -type f -name '*.go' -print0
 UI_SRC_FILES = find ui/src -type f \( -name '*.js' -o -name '*.svelte' -o -name '*.css' \) -print0
 STATICCHECK_VERSION := v0.8.2
@@ -21,6 +23,7 @@ help:
 	  '  help            Show this target list.' \
 	  '  build           Build the production suchi binary.' \
 	  '  test            Run tests in every Go module.' \
+	  '  release-test    Run release race tests with core/api isolated.' \
 	  '  vet             Run go vet in every Go module.' \
 	  '  lint            Run the pinned staticcheck across Go modules.' \
 	  '  fmt             Format every Go source file.' \
@@ -55,6 +58,16 @@ build: ui
 
 test: ui-verify
 	@for m in $(MODULES); do echo "=== test $$m ==="; ( cd "$$m" && GOWORK=off go test $(TEST_FLAGS) ./... ) || exit 1; done
+
+release-test: ui-verify
+	@echo "=== release test core/api ==="
+	@GOWORK=off go test $(RELEASE_API_TEST_FLAGS) ./core/api
+	@packages="$$(GOWORK=off go list ./... | grep -v '/core/api$$')"; \
+	  echo "=== release test . except core/api ==="; \
+	  GOWORK=off go test $(RELEASE_TEST_FLAGS) $$packages
+	@for m in $(filter-out .,$(MODULES)); do echo "=== release test $$m ==="; \
+	  ( cd "$$m" && GOWORK=off go test $(RELEASE_TEST_FLAGS) ./... ) || exit 1; \
+	  done
 
 vet:
 	@for m in $(MODULES); do echo "=== vet $$m ==="; ( cd "$$m" && GOWORK=off go vet ./... ) || exit 1; done

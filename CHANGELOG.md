@@ -321,9 +321,10 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Security
 
-- Build with Go 1.27.3 to include the standard-library `crypto/x509` fix that
-  distrusts compromised intermediate certificates (GO-2026-6809), which mailbox
-  TLS connections rely on.
+- Build with Go 1.27.4 to include the standard-library `net/http` fix for a
+  `MaxBytesReader` header race that could crash an HTTP/1 server
+  (GO-2026-6859), and retain the `crypto/x509` fix that distrusts compromised
+  intermediate certificates (GO-2026-6809), which mailbox TLS relies on.
 
 ## [0.3.0] - 2026-10-14
 
