@@ -17,6 +17,11 @@ Notable user-visible changes to Suchi are recorded here.
   `accepted` and `accepted_samples` replace `matched` and `samples`, while
   `excluded` and `excluded_samples` report messages rejected by **Never
   import**.
+### Fixed
+
+- High-resolution ASN feeder scans now give the optional QR fallback 30 seconds
+  per page instead of 5, avoid its unused D-Bus connection, and report
+  privacy-safe timeout or exit diagnostics instead of an opaque decoder error.
 
 ## [0.5.0] - 2026-11-20
 

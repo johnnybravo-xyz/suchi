@@ -404,10 +404,12 @@ Every image upload runs QR / DataMatrix / Aztec decoding via gozxing
 include it (`zbar` on Alpine, `zbar-tools` on Debian); bare-metal installations
 without it retain the Go readers. This handles some photographed QR codes that
 fail the Go reader's checksum verification, without relaxing either decoder's
-checksum checks. The fallback has a five-second timeout and a 64-KiB XML output
-limit; failures never discard successfully decoded Go results. Image dimensions
-above 64 megapixels skip barcode decoding before pixel allocation; the separate
-OCR conversion path remains available. Decoded links are indexed, never opened,
+checksum checks. The fallback has a 30-second per-page timeout, configurable
+with `SUCHI_ZBAR_TIMEOUT`, and a 64-KiB XML output limit. Failures never discard
+successfully decoded Go results; timeout and exit diagnostics omit native output
+because it can contain document or barcode content. Image dimensions above 64
+megapixels skip barcode decoding before pixel allocation; the separate OCR
+conversion path remains available. Decoded links are indexed, never opened,
 and native output is not logged. Any decoded barcode value
 lands in `documents.content` as `barcode:<value>` tokens so the FTS5
 index picks them up — search for `barcode:INV-2026-0042` and the doc

@@ -177,6 +177,7 @@ warning and use the default. `SUCHI_OCR_HTTP_TIMEOUT` is validated when the
 | `SUCHI_OCRMYPDF_TIMEOUT`     | `10m`   | Full-chain `ocrmypdf` OCR. Scales with page count × DPI × language count.                                          |
 | `SUCHI_TESSERACT_TIMEOUT`    | `10m`   | Native `pdftoppm` → `tesseract` OCR chain. Same scaling as `ocrmypdf`.                                             |
 | `SUCHI_OCR_HTTP_TIMEOUT`     | `10m`   | Complete HTTP OCR request and bounded response read. Each durable job retry uploads the working PDF again.                            |
+| `SUCHI_ZBAR_TIMEOUT`         | `30s`   | Per-page QR fallback after the in-process decoder finds no QR. Bump for dense or high-resolution scan pages.       |
 | `SUCHI_PAGEANALYZE_TIMEOUT`  | `60s`   | `pdftoppm` rasterization for blank-page detection. Bump when `SCAN_BLANK_REMOVAL=auto` runs on very long PDFs.     |
 
 Set these when the job dispatcher parks a doc in `state='dead'` with a
