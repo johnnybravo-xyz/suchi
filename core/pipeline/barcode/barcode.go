@@ -33,6 +33,7 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/pipeconfig"
 	"github.com/johnnybravo-xyz/suchi/core/sandbox"
 	"github.com/makiuchi-d/gozxing"
 	"github.com/makiuchi-d/gozxing/aztec"
@@ -190,6 +191,13 @@ func DecodeAllBytes(ctx context.Context, b []byte) ([]Barcode, error) {
 	}
 	return DecodeAll(ctx, bytes.NewReader(b))
 }
+
+const zbarDefaultTimeout = 30 * time.Second
+
+func zbarTimeout() time.Duration {
+	return pipeconfig.Duration("SUCHI_ZBAR_TIMEOUT", zbarDefaultTimeout)
+}
+
 func decodeZBarQR(ctx context.Context, img image.Image) ([]Barcode, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -202,19 +210,29 @@ func decodeZBarQR(ctx context.Context, img image.Image) ([]Barcode, error) {
 	if err := png.Encode(&encoded, img); err != nil {
 		return nil, errors.New("barcode: could not encode fallback image")
 	}
+	timeout := zbarTimeout()
 	res, err := sandbox.Run(ctx, sandbox.Opts{
-		Args:  []string{binary, "--quiet", "--xml", "--set", "disable", "--set", "qrcode.enable", "png:-"},
-		Stdin: &encoded, Timeout: 5 * time.Second, MaxStdout: 64 << 10, MaxStderr: 4 << 10,
+		Args:  []string{binary, "--quiet", "--nodbus", "--xml", "--set", "disable", "--set", "qrcode.enable", "png:-"},
+		Stdin: &encoded, Timeout: timeout, MaxStdout: 64 << 10, MaxStderr: 4 << 10,
 	})
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		if res != nil && res.ExitCode == 4 && !res.StdoutTruncated {
-			return nil, nil // zbarimg's documented "no symbols found" exit.
+		if res != nil && res.StdoutTruncated {
+			return nil, errors.New("barcode: QR decoder output exceeded 64 KiB")
 		}
-		// Native decoder output can contain document or barcode content.
-		return nil, errors.New("barcode: optional QR decoder failed")
+		if errors.Is(err, sandbox.ErrTimeout) || res != nil && res.TimedOut {
+			return nil, fmt.Errorf("barcode: optional QR decoder timed out after %s", timeout)
+		}
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && res != nil {
+			if res.ExitCode == 4 {
+				return nil, nil // zbarimg's documented "no symbols found" exit.
+			}
+			return nil, fmt.Errorf("barcode: optional QR decoder failed with exit code %d", res.ExitCode)
+		}
+		return nil, errors.New("barcode: optional QR decoder could not start")
 	}
 	if res.StdoutTruncated {
 		return nil, errors.New("barcode: QR decoder output exceeded 64 KiB")

@@ -35,7 +35,7 @@ func TestMain(m *testing.M) {
 	}
 	// Reuse the already-built test executable. Fresh shell scripts have large,
 	// variable launch costs on macOS when many package tests spawn together.
-	if strings.Join(os.Args[1:], " ") != "--quiet --xml --set disable --set qrcode.enable png:-" {
+	if strings.Join(os.Args[1:], " ") != "--quiet --nodbus --xml --set disable --set qrcode.enable png:-" {
 		os.Exit(7)
 	}
 	if _, err := png.Decode(os.Stdin); err != nil {
@@ -189,6 +189,35 @@ func TestQRDecodeFallbackHonorsCancellation(t *testing.T) {
 	got, err := barcode.DecodeBytes(ctx, blankBarcodeImage(t))
 	if err != context.DeadlineExceeded || len(got) != 0 || time.Since(start) > 2*time.Second {
 		t.Fatalf("cancellation result=%v err=%v elapsed=%s", got, err, time.Since(start))
+	}
+}
+
+func TestQRDecodeFallbackReportsOwnTimeoutWithoutPrivateOutput(t *testing.T) {
+	t.Setenv("SUCHI_ZBAR_TIMEOUT", "50ms")
+	fakeZBar(t, zbarFixture{Stderr: "PRIVATE_BARCODE_PAYLOAD", Wait: true})
+
+	start := time.Now()
+	got, err := barcode.DecodeBytes(context.Background(), blankBarcodeImage(t))
+	if len(got) != 0 || err == nil || err.Error() != "barcode: optional QR decoder timed out after 50ms" {
+		t.Fatalf("result=%v err=%v", got, err)
+	}
+	if strings.Contains(err.Error(), "PRIVATE_BARCODE_PAYLOAD") {
+		t.Fatal("decoder timeout exposed payload")
+	}
+	if time.Since(start) > 2*time.Second {
+		t.Fatalf("fallback timeout took %s", time.Since(start))
+	}
+}
+
+func TestQRDecodeFallbackReportsExitCodeWithoutPrivateOutput(t *testing.T) {
+	fakeZBar(t, zbarFixture{Stderr: "PRIVATE_BARCODE_PAYLOAD", ExitCode: 2})
+
+	got, err := barcode.DecodeBytes(t.Context(), blankBarcodeImage(t))
+	if len(got) != 0 || err == nil || err.Error() != "barcode: optional QR decoder failed with exit code 2" {
+		t.Fatalf("result=%v err=%v", got, err)
+	}
+	if strings.Contains(err.Error(), "PRIVATE_BARCODE_PAYLOAD") {
+		t.Fatal("decoder process failure exposed payload")
 	}
 }
 
