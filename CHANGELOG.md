@@ -4,6 +4,20 @@ Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
 
+### Added
+
+- Mailboxes can now leave unwanted messages untouched with one optional
+  **Never import** gate over sender, recipient, subject, or attachment name.
+  Exclusions always win over import rules, and **Preview** reports accepted,
+  excluded, and unmatched messages separately before saving.
+
+### Changed
+
+- The pre-v1 mailbox preview response now names import decisions explicitly:
+  `accepted` and `accepted_samples` replace `matched` and `samples`, while
+  `excluded` and `excluded_samples` report messages rejected by **Never
+  import**.
+
 ## [0.5.0] - 2026-11-20
 
 ### Added

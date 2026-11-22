@@ -2955,10 +2955,15 @@ rows owned by themselves. Body:
 | `password`                               | App password for Gmail, Fastmail, iCloud, or Zoho; Bridge password for Proton; password or app password for custom IMAP. Sealed on write. Microsoft mailboxes reject this field.                                                                     |
 | `sealed_secret_b64` | Authenticated server-sealed actor/system-bound creation handoff from `/oauth/complete`, required for new Microsoft mailboxes. Never arbitrary at-rest MSAL ciphertext. |
 | `oauth_account_id`                       | Address returned by `/oauth/complete`. Stored alongside the sealed cache.                                                                                                                                                                             |
-| `intake_policy`                          | Typed selection and content policy described below. Rejected messages never enter CAS, SQLite, or Automations.                                                                                                                                         |
+| `intake_policy`                          | Optional exclusion plus typed selection and content rules described below. Excluded or rejected messages never enter CAS, SQLite, or Automations.                                                                                                      |
 | `sync_since`                             | Unix seconds — initial-sync horizon. Omit to default to `now()` at create (only new mail is pulled). Send `0` to remove the date floor. On `PATCH`, `0` clears the cutoff. The UID cursor still prevents re-import. Watcher maps non-zero values onto IMAP `SEARCH SINCE`. |
 | `enabled`                                | Whether the supervisor should poll this row.                                                                                                                                                                                                          |
 | `mark_seen`                              | Opt in to marking completed messages `\Seen` when no processed folder is configured. Default false.                                                                                                                                                  |
+
+`intake_policy.exclude` is optional and accepts `from`, `recipients`,
+`subject_terms`, and `attachment_names`. Its populated fields are ORed, an empty
+object is dropped during normalization, and any exclusion match beats every
+accept rule.
 
 `intake_policy.rules` contains 1 to 20 rules. Each rule has a `selection` of
 `all`, `files`, or `matching` and a `content` of `email_and_files` or
@@ -2971,7 +2976,8 @@ A `matching` rule accepts `from`, `recipients` (To or Cc), case-insensitive
 criteria inside that rule are ANDed; comma- or newline-separated values inside
 one criterion are ORed. A matching rule requires at least one criterion. `all`
 and `files` rules do not accept matching criteria. The API accepts only the
-`rules` shape; the former flat policy shape is not supported.
+nested `exclude`/`rules` policy shape; the former flat policy shape is not
+supported.
 
 Returns `201 {"id": <int>}` on success.
 
@@ -3013,13 +3019,19 @@ connection test is not a mailbox poll.
 ### `POST /api/email-accounts/{id}/preview`
 
 Requires the `mailboxes` capability. Evaluates the supplied `intake_policy`
-against at most 25 recent messages above the mailbox cursor and returns up to
-five matching envelope samples. Suchi fetches IMAP envelope metadata and
-BODYSTRUCTURE only; message bodies are not downloaded, stored, or logged.
+against at most 25 recent messages above the mailbox cursor and returns separate
+accepted and excluded counts with up to five envelope samples for each outcome.
+Messages selected by neither the exclusion nor an accept rule contribute only
+to `inspected`. Suchi fetches IMAP envelope metadata and BODYSTRUCTURE only;
+message bodies are not downloaded, stored, or logged.
 
 ```json
 {
   "intake_policy": {
+    "exclude": {
+      "subject_terms": "rejected",
+      "attachment_names": "*.tmp"
+    },
     "rules": [
       {
         "selection": "files",
@@ -3038,12 +3050,19 @@ BODYSTRUCTURE only; message bodies are not downloaded, stored, or logged.
 ```json
 {
   "inspected": 18,
-  "matched": 4,
-  "samples": [
+  "accepted": 4,
+  "excluded": 3,
+  "accepted_samples": [
     {
       "from": "billing@example.com",
       "subject": "August invoice",
       "attachments": ["invoice-august.pdf"]
+    }
+  ],
+  "excluded_samples": [
+    {
+      "from": "noreply@example.com",
+      "subject": "Application rejected"
     }
   ]
 }

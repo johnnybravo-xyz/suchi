@@ -91,12 +91,15 @@ fingerprint, while transient failures retry after a delay. A sidecar change
 retries that file, a custom-field definition change through the API clears
 blocked observations for that filing system, and any other blocked observation
 is retried after an hour. All failure state remains in Suchi-owned storage and
-audit. IMAP checkpoints ascending batches of at most 50 UIDs after
-import/bookkeeping; failure stops the cycle while preserving earlier progress.
-Connection tests clear only the matching connection or login failure they
-observed; polling remains authoritative for sync timestamps and folder, fetch,
-and ingestion failures. [Mail intake](/guides/mail-intake) owns
-history/rules/health.
+audit. IMAP applies envelope exclusions before MIME parsing, attachment-name
+exclusions after one filename parse, and accept rules only when neither
+exclusion matched. An ignored message is never written to CAS or enqueued, but
+still advances the mailbox cursor. IMAP checkpoints ascending batches of at
+most 50 UIDs after import/bookkeeping; failure stops the cycle while preserving
+earlier progress. Connection tests clear only the matching connection or login
+failure they observed; polling remains authoritative for sync timestamps and
+folder, fetch, and ingestion failures. [Mail intake](/guides/mail-intake) owns
+history, exclusions, rules, and health.
 Portable import differs: `core/importer/bundle/` may restore supplied content,
 archive bytes and metadata without scheduling extraction.
 

@@ -84,9 +84,12 @@ steps from the real document, Inbox, review, and processing counts; no separate
 onboarding state is stored.
 
 `ConfigurationSection.svelte` owns the remaining direct Archive Configuration
-forms and their required-load/retry gates. Mailbox editing delegates to
-`EmailAccounts.svelte`; both automation entry points link to the existing
-`Automations.svelte` editor.
+forms and their required-load/retry gates. Mailbox editing delegates through
+`EmailAccounts.svelte` to `MailAccountForm.svelte`. The form keeps one
+progressively disclosed **Never import** draft ahead of its ordered accept-rule
+list, clears stale preview results after any policy edit, and renders accepted,
+excluded, and unmatched preview outcomes without duplicating server matching.
+Both automation entry points link to the existing `Automations.svelte` editor.
 
 `ConfigurationSection.svelte` owns the model dialog and separate drafts for
 Local model, Hosted model, and Account subscription. The subscription panel
