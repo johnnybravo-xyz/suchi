@@ -77,6 +77,7 @@
   const seedSyncSince = isEdit
     ? unixToLocalInput(seed.sync_since)
     : unixToLocalInput(Math.floor(Date.now() / 1000))
+  const intakeCriteriaFields = ['from', 'recipients', 'subject_terms', 'attachment_names']
   let nextRuleID = 1
   function makeIntakeRule(source = {}) {
     return {
@@ -92,6 +93,8 @@
   const seedRules = seed.intake_policy?.rules?.length
     ? seed.intake_policy.rules.map((rule) => makeIntakeRule(rule))
     : [makeIntakeRule()]
+  const seedExclusion = seed.intake_policy?.exclude || {}
+  const hasSeedExclusion = intakeCriteriaFields.some((field) => seedExclusion[field]?.trim())
 
   // Members can't pick an owner — server forces owner_id to their own
   // user id. Seed the form so the save-button guard passes without
@@ -125,22 +128,37 @@
   let preview = $state(null)
   let previewError = $state('')
   let intakeRules = $state(seedRules)
+  let intakeExclusion = $state({
+    from: seedExclusion.from || '',
+    recipients: seedExclusion.recipients || '',
+    subject_terms: seedExclusion.subject_terms || '',
+    attachment_names: seedExclusion.attachment_names || '',
+  })
   let confirmAction = $state('')
   const scope = captureScope()
   let disposed = false
   onDestroy(() => { disposed = true; oauthOpen = false; confirmAction = ''; form.sealed_secret_b64 = ''; form.password = '' })
 
   function intakePolicy() {
-    return { rules: intakeRules.map((rule) => {
-      const wireRule = { selection: rule.selection, content: rule.content }
-      if (rule.selection === 'matching') {
-        for (const field of ['from', 'recipients', 'subject_terms', 'attachment_names']) {
-          const value = rule[field].trim()
-          if (value) wireRule[field] = value
+    const policy = {
+      rules: intakeRules.map((rule) => {
+        const wireRule = { selection: rule.selection, content: rule.content }
+        if (rule.selection === 'matching') {
+          for (const field of intakeCriteriaFields) {
+            const value = rule[field].trim()
+            if (value) wireRule[field] = value
+          }
         }
-      }
-      return wireRule
-    }) }
+        return wireRule
+      }),
+    }
+    const exclude = {}
+    for (const field of intakeCriteriaFields) {
+      const value = intakeExclusion[field].trim()
+      if (value) exclude[field] = value
+    }
+    if (Object.keys(exclude).length) policy.exclude = exclude
+    return policy
   }
 
   function validateIntakePolicy(policy) {
@@ -152,18 +170,26 @@
     if (invalidRule >= 0) throw new Error(translate("mailAccountForm.ruleValueAddAtLeastOneMatchingCondition", { "invalidRule": invalidRule + 1 }))
   }
 
+  function clearPreview() {
+    preview = null
+    previewError = ''
+  }
+
+  function setRuleValue(rule, field, value) {
+    rule[field] = value
+    clearPreview()
+  }
+
   function addIntakeRule() {
     if (intakeRules.length >= 20) return
     intakeRules.push(makeIntakeRule({ selection: 'matching' }))
-    preview = null
-    previewError = ''
+    clearPreview()
   }
 
   function removeIntakeRule(id) {
     if (intakeRules.length === 1) return
     intakeRules = intakeRules.filter((rule) => rule.id !== id)
-    preview = null
-    previewError = ''
+    clearPreview()
   }
 
   function applyPreset() {
@@ -325,6 +351,9 @@
   const intakeSummary = $derived(
     plural("mailAccountForm.ruleCountSummary", intakeRules.length)
   )
+  const previewUnmatched = $derived(
+    preview ? preview.inspected - preview.accepted - preview.excluded : 0
+  )
 </script>
 
 <svelte:window onkeydown={onKey} />
@@ -435,13 +464,43 @@
       </div>
     {/if}
 
-    <section class="intake-panel" aria-labelledby="intake-heading">
+    <section class="intake-panel" aria-labelledby="intake-heading" oninput={clearPreview}>
       <div class="intake-heading">
         <div>
           <h4 id="intake-heading">{translate("mailAccountForm.mailToArchive")}</h4>
           <span>{intakeSummary}</span>
         </div>
       </div>
+
+      <details class="exclusion-settings" open={hasSeedExclusion}
+               aria-label={translate("mailAccountForm.neverImportOptional")}>
+        <summary>{translate("mailAccountForm.neverImportOptional")}</summary>
+        <div class="exclusion-body">
+          <p>{translate("mailAccountForm.neverImportHelp")}</p>
+          <div class="condition-grid">
+            <div class="field">
+              <label for="ma-exclude-from">{translate("mailAccountForm.from")}</label>
+              <textarea id="ma-exclude-from" class="input" rows="1" bind:value={intakeExclusion.from}
+                        placeholder={translate("mailAccountForm.billingExampleComTrustedOrg")}></textarea>
+            </div>
+            <div class="field">
+              <label for="ma-exclude-recipients">{translate("mailAccountForm.toOrCc")}</label>
+              <textarea id="ma-exclude-recipients" class="input" rows="1" bind:value={intakeExclusion.recipients}
+                        placeholder={translate("mailAccountForm.receiptsExampleCom")}></textarea>
+            </div>
+            <div class="field">
+              <label for="ma-exclude-subject">{translate("mailAccountForm.subjectContains")}</label>
+              <textarea id="ma-exclude-subject" class="input" rows="1" bind:value={intakeExclusion.subject_terms}
+                        placeholder={translate("mailAccountForm.invoiceStatement")}></textarea>
+            </div>
+            <div class="field">
+              <label for="ma-exclude-filename">{translate("mailAccountForm.fileName")}</label>
+              <textarea id="ma-exclude-filename" class="input mono" rows="1" bind:value={intakeExclusion.attachment_names}
+                        placeholder={translate("mailAccountForm.pdfInvoice")}></textarea>
+            </div>
+          </div>
+        </div>
+      </details>
 
       <div class="rule-list">
         {#each intakeRules as rule, index (rule.id)}
@@ -459,13 +518,13 @@
               <span class="seg choice-row accept-choice" aria-label={translate("mailAccountForm.ruleValueMessagesToAccept", { "index": index + 1 })}>
                 <button type="button" class:on={rule.selection === 'all'}
                         aria-pressed={rule.selection === 'all'}
-                        onclick={() => (rule.selection = 'all')}>{translate("mailAccountForm.everyMessage")}</button>
+                        onclick={() => setRuleValue(rule, 'selection', 'all')}>{translate("mailAccountForm.everyMessage")}</button>
                 <button type="button" class:on={rule.selection === 'files'}
                         aria-pressed={rule.selection === 'files'}
-                        onclick={() => (rule.selection = 'files')}>{translate("mailAccountForm.withFiles")}</button>
+                        onclick={() => setRuleValue(rule, 'selection', 'files')}>{translate("mailAccountForm.withFiles")}</button>
                 <button type="button" class:on={rule.selection === 'matching'}
                         aria-pressed={rule.selection === 'matching'}
-                        onclick={() => (rule.selection = 'matching')}>{translate("mailAccountForm.matching")}</button>
+                        onclick={() => setRuleValue(rule, 'selection', 'matching')}>{translate("mailAccountForm.matching")}</button>
               </span>
             </div>
 
@@ -499,10 +558,10 @@
               <span class="seg choice-row keep-choice" aria-label={translate("mailAccountForm.ruleValueContentToArchive", { "index": index + 1 })}>
                 <button type="button" class:on={rule.content === 'email_and_files'}
                         aria-pressed={rule.content === 'email_and_files'}
-                        onclick={() => (rule.content = 'email_and_files')}>{translate("mailAccountForm.emailAndFiles")}</button>
+                        onclick={() => setRuleValue(rule, 'content', 'email_and_files')}>{translate("mailAccountForm.emailAndFiles")}</button>
                 <button type="button" class:on={rule.content === 'files_only'}
                         aria-pressed={rule.content === 'files_only'}
-                        onclick={() => (rule.content = 'files_only')}>{translate("mailAccountForm.filesOnly")}</button>
+                        onclick={() => setRuleValue(rule, 'content', 'files_only')}>{translate("mailAccountForm.filesOnly")}</button>
               </span>
             </div>
           </fieldset>
@@ -522,21 +581,46 @@
 
       {#if isEdit}
         <div class="preview-row">
-          <button class="btn sm" disabled={busy} onclick={previewPolicy}>{translate("mailAccountForm.previewMatches")}</button>
-          {#if preview}
-            <b>{translate("mailAccountForm.valueOfValueNewMessagesMatch", { "matched": preview.matched, "inspected": preview.inspected })}</b>
-          {/if}
+          <button class="btn sm" disabled={busy} onclick={previewPolicy}>{translate("mailAccountForm.preview")}</button>
+          <div class="preview-summary" role="status" aria-live="polite">
+            {#if preview}
+              <b>{translate("mailAccountForm.previewWillImport", { "accepted": preview.accepted, "inspected": preview.inspected })}</b>
+              {#if preview.excluded}
+                <span>{plural("mailAccountForm.previewExcludedCount", preview.excluded)}</span>
+              {/if}
+              {#if previewUnmatched}
+                <span>{plural("mailAccountForm.previewUnmatchedCount", previewUnmatched)}</span>
+              {/if}
+            {/if}
+          </div>
         </div>
         {#if previewError}<div class="err compact-error">{previewError}</div>{/if}
-        {#if preview?.samples?.length}
-          <div class="preview-list">
-            {#each preview.samples as sample}
-              <div>
-                <b>{sample.subject || translate("mailAccountForm.noSubject")}</b>
-                <span>{sample.from || translate("mailAccountForm.unknownSender")}</span>
-                {#if sample.attachments?.length}<small>{sample.attachments.join(', ')}</small>{/if}
-              </div>
-            {/each}
+        {#if preview?.accepted_samples?.length || preview?.excluded_samples?.length}
+          <div class="preview-groups">
+            {#if preview.accepted_samples?.length}
+              <section class="preview-list accepted">
+                <h5>{translate("mailAccountForm.willImport")}</h5>
+                {#each preview.accepted_samples as sample}
+                  <div>
+                    <b>{sample.subject || translate("mailAccountForm.noSubject")}</b>
+                    <span>{sample.from || translate("mailAccountForm.unknownSender")}</span>
+                    {#if sample.attachments?.length}<small>{sample.attachments.join(', ')}</small>{/if}
+                  </div>
+                {/each}
+              </section>
+            {/if}
+            {#if preview.excluded_samples?.length}
+              <section class="preview-list excluded">
+                <h5>{translate("mailAccountForm.excluded")}</h5>
+                {#each preview.excluded_samples as sample}
+                  <div>
+                    <b>{sample.subject || translate("mailAccountForm.noSubject")}</b>
+                    <span>{sample.from || translate("mailAccountForm.unknownSender")}</span>
+                    {#if sample.attachments?.length}<small>{sample.attachments.join(', ')}</small>{/if}
+                  </div>
+                {/each}
+              </section>
+            {/if}
           </div>
         {/if}
       {/if}
@@ -673,6 +757,24 @@
   .intake-heading { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
   .intake-heading h4 { margin: 0 0 3px; font-size: .95rem; }
   .intake-heading span { color: var(--muted); font-size: .78rem; }
+  .exclusion-settings {
+    min-width: 0;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+  }
+  .exclusion-settings summary {
+    padding: 11px 12px;
+    cursor: pointer;
+    font-size: .82rem;
+    font-weight: 700;
+  }
+  .exclusion-body { display: grid; gap: 10px; padding: 0 12px 12px; }
+  .exclusion-body p {
+    margin: 0;
+    color: var(--muted);
+    font-size: .76rem;
+    line-height: 1.45;
+  }
   .choice-row { width: max-content; max-width: 100%; }
   .rule-list { display: grid; }
   .rule-block {
@@ -695,9 +797,14 @@
   .overlap-note { margin: -5px 0 0; color: var(--muted); font-size: .76rem; }
   .condition-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
   .condition-grid textarea { min-height: 2.5rem; font-family: inherit; font-size: .9rem; line-height: 1.4; resize: vertical; }
-  .preview-row { display: flex; align-items: center; gap: 10px; font-size: .78rem; }
+  .preview-row { display: flex; align-items: start; gap: 10px; font-size: .78rem; }
+  .preview-summary { display: flex; flex-wrap: wrap; gap: 4px 10px; padding-top: 5px; }
+  .preview-summary span { color: var(--muted); }
   .compact-error { margin: 0; }
+  .preview-groups { display: grid; gap: 10px; }
   .preview-list { border-left: 2px solid var(--accent); padding-left: 12px; }
+  .preview-list.excluded { border-left-color: var(--line); }
+  .preview-list h5 { margin: 0 0 3px; color: var(--muted); font-size: .72rem; }
   .preview-list > div { display: grid; gap: 2px; padding: 5px 0; }
   .preview-list b { font-size: .8rem; }
   .preview-list span, .preview-list small { color: var(--muted); font-size: .74rem; }

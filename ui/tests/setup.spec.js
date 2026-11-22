@@ -1104,15 +1104,17 @@ async function mockAPI(page, options = {}) {
           id: 3, owner_id: 1, name: 'Receipts and statements from Gmail', provider: 'gmail',
           host: 'imap.gmail.com', port: 993, use_tls: true, folder: 'INBOX',
           username: 'admin.archive@gmail.com', enabled: true, last_sync_at: Math.floor(Date.now() / 1000) - 60,
-          intake_policy: { rules: [{ selection: 'all', content: 'email_and_files' }] },
+          intake_policy: options.mailboxIntakePolicy || { rules: [{ selection: 'all', content: 'email_and_files' }] },
         },
       ],
       capabilities: { microsoft_oauth: { ready: true, reason: '' } },
     }
     else if (path === '/api/email-accounts/3/preview') body = {
       inspected: 10,
-      matched: 2,
-      samples: [{ from: 'billing@example.com', subject: 'August invoice', attachments: ['invoice-august.pdf'] }],
+      accepted: 2,
+      excluded: 3,
+      accepted_samples: [{ from: 'billing@example.com', subject: 'August invoice', attachments: ['invoice-august.pdf'] }],
+      excluded_samples: [{ from: 'noreply@example.com', subject: 'Application rejected', attachments: [] }],
     }
     else if (path === '/api/decryption-passwords/') body = {
       results: [
@@ -6160,6 +6162,10 @@ test('edits mailbox intake on a narrow screen', async ({ page }) => {
   await mockAPI(page, {
 
     filingTreeChosen: true,
+    mailboxIntakePolicy: {
+      exclude: { subject_terms: 'rejected' },
+      rules: [{ selection: 'all', content: 'email_and_files' }],
+    },
   })
 
   await page.setViewportSize({ width: 390, height: 844 })
@@ -6170,6 +6176,15 @@ test('edits mailbox intake on a narrow screen', async ({ page }) => {
   const mailboxSwitch = page.getByRole('switch', { name: 'Poll this mailbox' })
   await expect(mailboxSwitch).toHaveAttribute('aria-checked', 'true')
   await mailboxSwitch.click()
+  const exclusionDetails = mailboxDialog.getByRole('group', { name: 'Never import (optional)' })
+  await expect(exclusionDetails).toHaveAttribute('open', '')
+  const excludedSubject = exclusionDetails.getByLabel('Subject contains')
+  await expect(excludedSubject).toHaveValue('rejected')
+  await mailboxDialog.getByRole('button', { name: 'Preview', exact: true }).click()
+  await expect(mailboxDialog.getByText('2 of 10 will import')).toBeVisible()
+  await excludedSubject.fill('rejected, declined')
+  await expect(mailboxDialog.getByText('2 of 10 will import')).toHaveCount(0)
+  await expect(mailboxDialog.getByText('August invoice')).toHaveCount(0)
   const firstRule = page.getByRole('group', { name: 'Rule 1' })
   await expect(firstRule.getByRole('button', { name: 'Remove rule 1' })).toBeDisabled()
   await firstRule.getByRole('button', { name: 'With files' }).click()
@@ -6179,21 +6194,27 @@ test('edits mailbox intake on a narrow screen', async ({ page }) => {
   await expect(page.getByText('If rules overlap, Email and files wins.')).toBeVisible()
   const secondRule = page.getByRole('group', { name: 'Rule 2' })
   await expect(secondRule.getByRole('button', { name: 'Matching', exact: true })).toHaveAttribute('aria-pressed', 'true')
-  await page.getByRole('button', { name: 'Preview matches' }).click()
+  await page.getByRole('button', { name: 'Preview', exact: true }).click()
   await expect(page.getByText('Rule 2: add at least one matching condition.')).toBeVisible()
   await secondRule.getByLabel('Subject contains').fill('distribution advice')
   await secondRule.getByRole('button', { name: 'Email and files' }).click()
   const previewRequest = page.waitForRequest(request =>
     request.method() === 'POST' && new URL(request.url()).pathname === '/api/email-accounts/3/preview')
-  await page.getByRole('button', { name: 'Preview matches' }).click()
+  await page.getByRole('button', { name: 'Preview', exact: true }).click()
   expect((await previewRequest).postDataJSON().intake_policy).toEqual({
+    exclude: { subject_terms: 'rejected, declined' },
     rules: [
       { selection: 'files', content: 'files_only' },
       { selection: 'matching', content: 'email_and_files', subject_terms: 'distribution advice' },
     ],
   })
-  await expect(page.getByText('2 of 10 new messages match')).toBeVisible()
+  await expect(page.getByText('2 of 10 will import')).toBeVisible()
+  await expect(page.getByText('3 excluded', { exact: true })).toBeVisible()
+  await expect(page.getByText('5 not selected by import rules', { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Will import', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Excluded', exact: true })).toBeVisible()
   await expect(page.getByText('August invoice')).toBeVisible()
+  await expect(page.getByText('Application rejected')).toBeVisible()
   await mailboxDialog.getByText('Advanced', { exact: true }).click()
   await expect(mailboxDialog.getByLabel('Host')).toHaveValue('imap.gmail.com')
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
@@ -6203,6 +6224,7 @@ test('edits mailbox intake on a narrow screen', async ({ page }) => {
   const mailboxBody = (await mailboxPatch).postDataJSON()
   expect(mailboxBody.enabled).toBe(false)
   expect(mailboxBody.intake_policy).toEqual({
+    exclude: { subject_terms: 'rejected, declined' },
     rules: [
       { selection: 'files', content: 'files_only' },
       { selection: 'matching', content: 'email_and_files', subject_terms: 'distribution advice' },
