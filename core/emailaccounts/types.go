@@ -66,10 +66,21 @@ type IntakeRule struct {
 	AttachmentNames string          `json:"attachment_names,omitempty"`
 }
 
-// IntakePolicy accepts a message when any rule matches. The evaluator resolves
-// multiple matches by preferring email_and_files over files_only.
+// IntakeExclusion rejects a message when any populated field matches. Comma-
+// or newline-separated values within a field are alternatives.
+type IntakeExclusion struct {
+	From            string `json:"from,omitempty"`
+	Recipients      string `json:"recipients,omitempty"`
+	SubjectTerms    string `json:"subject_terms,omitempty"`
+	AttachmentNames string `json:"attachment_names,omitempty"`
+}
+
+// IntakePolicy rejects a message when its exclusion matches, otherwise it
+// accepts a message when any rule matches. The evaluator resolves multiple rule
+// matches by preferring email_and_files over files_only.
 type IntakePolicy struct {
-	Rules []IntakeRule `json:"rules"`
+	Exclude *IntakeExclusion `json:"exclude,omitempty"`
+	Rules   []IntakeRule     `json:"rules"`
 }
 
 func DefaultIntakePolicy() IntakePolicy {
@@ -81,7 +92,7 @@ func DefaultIntakePolicy() IntakePolicy {
 
 func NormalizeIntakePolicy(p IntakePolicy) (IntakePolicy, error) {
 	if p.Rules == nil {
-		return DefaultIntakePolicy(), nil
+		p.Rules = DefaultIntakePolicy().Rules
 	}
 	if len(p.Rules) == 0 || len(p.Rules) > 20 {
 		return IntakePolicy{}, errors.New("emailaccounts: intake_policy must contain between 1 and 20 rules")
@@ -94,6 +105,11 @@ func NormalizeIntakePolicy(p IntakePolicy) (IntakePolicy, error) {
 		}
 		p.Rules[i] = rule
 	}
+	exclusion, err := normalizeIntakeExclusion(p.Exclude)
+	if err != nil {
+		return IntakePolicy{}, fmt.Errorf("emailaccounts: intake_policy.exclude: %w", err)
+	}
+	p.Exclude = exclusion
 	return p, nil
 }
 
@@ -104,10 +120,14 @@ func normalizeIntakeRule(rule IntakeRule) (IntakeRule, error) {
 	if rule.Content == "" {
 		rule.Content = IntakeEmailAndFiles
 	}
-	rule.From = strings.TrimSpace(rule.From)
-	rule.Recipients = strings.TrimSpace(rule.Recipients)
-	rule.SubjectTerms = strings.TrimSpace(rule.SubjectTerms)
-	rule.AttachmentNames = strings.TrimSpace(rule.AttachmentNames)
+	if err := normalizeIntakeCriteria(
+		&rule.From,
+		&rule.Recipients,
+		&rule.SubjectTerms,
+		&rule.AttachmentNames,
+	); err != nil {
+		return IntakeRule{}, err
+	}
 
 	switch rule.Selection {
 	case IntakeEveryMessage, IntakeMessagesWithFiles:
@@ -124,20 +144,53 @@ func normalizeIntakeRule(rule IntakeRule) (IntakeRule, error) {
 	if rule.Content != IntakeEmailAndFiles && rule.Content != IntakeFilesOnly {
 		return IntakeRule{}, fmt.Errorf("unsupported intake content %q", rule.Content)
 	}
-	for name, value := range map[string]string{
-		"from": rule.From, "recipients": rule.Recipients,
-		"subject_terms": rule.SubjectTerms, "attachment_names": rule.AttachmentNames,
-	} {
-		if len(value) > 8192 {
-			return IntakeRule{}, fmt.Errorf("%s must be at most 8192 bytes", name)
-		}
-	}
-	for _, pattern := range SplitPolicyValues(rule.AttachmentNames) {
-		if _, err := path.Match(strings.ToLower(pattern), "sample.pdf"); err != nil {
-			return IntakeRule{}, fmt.Errorf("invalid attachment filename pattern %q", pattern)
-		}
-	}
 	return rule, nil
+}
+
+func normalizeIntakeExclusion(exclusion *IntakeExclusion) (*IntakeExclusion, error) {
+	if exclusion == nil {
+		return nil, nil
+	}
+	normalized := *exclusion
+	if err := normalizeIntakeCriteria(
+		&normalized.From,
+		&normalized.Recipients,
+		&normalized.SubjectTerms,
+		&normalized.AttachmentNames,
+	); err != nil {
+		return nil, err
+	}
+	if normalized.From == "" &&
+		normalized.Recipients == "" &&
+		normalized.SubjectTerms == "" &&
+		normalized.AttachmentNames == "" {
+		return nil, nil
+	}
+	return &normalized, nil
+}
+
+func normalizeIntakeCriteria(from, recipients, subjectTerms, attachmentNames *string) error {
+	fields := []struct {
+		name  string
+		value *string
+	}{
+		{name: "from", value: from},
+		{name: "recipients", value: recipients},
+		{name: "subject_terms", value: subjectTerms},
+		{name: "attachment_names", value: attachmentNames},
+	}
+	for _, field := range fields {
+		*field.value = strings.TrimSpace(*field.value)
+		if len(*field.value) > 8192 {
+			return fmt.Errorf("%s must be at most 8192 bytes", field.name)
+		}
+	}
+	for _, pattern := range SplitPolicyValues(*attachmentNames) {
+		if _, err := path.Match(strings.ToLower(pattern), "sample.pdf"); err != nil {
+			return fmt.Errorf("invalid attachment filename pattern %q", pattern)
+		}
+	}
+	return nil
 }
 
 func ParseIntakePolicy(raw string) (IntakePolicy, error) {

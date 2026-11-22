@@ -47,6 +47,42 @@ func TestNormalizeIntakePolicy(t *testing.T) {
 	}
 }
 
+func TestNormalizeIntakePolicyExclusion(t *testing.T) {
+	original := &IntakeExclusion{
+		From:            "  blocked@example.com ",
+		Recipients:      " ignored@example.com  ",
+		SubjectTerms:    " rejected ",
+		AttachmentNames: " *.tmp ",
+	}
+	got, err := NormalizeIntakePolicy(IntakePolicy{Exclude: original})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Rules) != 1 {
+		t.Fatalf("rules=%d, want default rule", len(got.Rules))
+	}
+	want := IntakeExclusion{
+		From:            "blocked@example.com",
+		Recipients:      "ignored@example.com",
+		SubjectTerms:    "rejected",
+		AttachmentNames: "*.tmp",
+	}
+	if got.Exclude == nil || *got.Exclude != want {
+		t.Fatalf("exclude=%+v, want %+v", got.Exclude, want)
+	}
+	if original.From != "  blocked@example.com " {
+		t.Fatal("normalization mutated the caller's exclusion")
+	}
+
+	empty, err := NormalizeIntakePolicy(IntakePolicy{Exclude: &IntakeExclusion{SubjectTerms: "  "}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if empty.Exclude != nil {
+		t.Fatalf("empty exclusion=%+v, want nil", empty.Exclude)
+	}
+}
+
 func TestNormalizeIntakePolicyRuleCount(t *testing.T) {
 	if _, err := NormalizeIntakePolicy(IntakePolicy{Rules: []IntakeRule{}}); err == nil {
 		t.Fatal("explicitly empty rules should fail")
@@ -108,11 +144,39 @@ func TestNormalizeIntakePolicyFieldLimits(t *testing.T) {
 	}
 }
 
+func TestNormalizeIntakePolicyExclusionValidation(t *testing.T) {
+	tooLong := strings.Repeat("x", 8193)
+	tests := []struct {
+		name      string
+		exclusion IntakeExclusion
+	}{
+		{name: "from too long", exclusion: IntakeExclusion{From: tooLong}},
+		{name: "recipients too long", exclusion: IntakeExclusion{Recipients: tooLong}},
+		{name: "subject terms too long", exclusion: IntakeExclusion{SubjectTerms: tooLong}},
+		{name: "attachment names too long", exclusion: IntakeExclusion{AttachmentNames: tooLong}},
+		{name: "invalid filename glob", exclusion: IntakeExclusion{AttachmentNames: "[bad"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NormalizeIntakePolicy(IntakePolicy{Exclude: &tt.exclusion})
+			if err == nil || !strings.Contains(err.Error(), "intake_policy.exclude") {
+				t.Fatalf("error=%v, want exclusion validation error", err)
+			}
+		})
+	}
+}
+
 func TestIntakePolicyJSON(t *testing.T) {
-	policy := IntakePolicy{Rules: []IntakeRule{
-		{Selection: IntakeMessagesWithFiles, Content: IntakeFilesOnly},
-		{Selection: IntakeMatchingMessages, Content: IntakeEmailAndFiles, SubjectTerms: "distribution advice"},
-	}}
+	policy := IntakePolicy{
+		Exclude: &IntakeExclusion{
+			From:            "blocked@example.com",
+			AttachmentNames: "*.tmp",
+		},
+		Rules: []IntakeRule{
+			{Selection: IntakeMessagesWithFiles, Content: IntakeFilesOnly},
+			{Selection: IntakeMatchingMessages, Content: IntakeEmailAndFiles, SubjectTerms: "distribution advice"},
+		},
+	}
 	raw, err := MarshalIntakePolicy(policy)
 	if err != nil {
 		t.Fatal(err)
@@ -123,6 +187,19 @@ func TestIntakePolicyJSON(t *testing.T) {
 	}
 	if len(parsed.Rules) != 2 || parsed.Rules[1].SubjectTerms != "distribution advice" {
 		t.Fatalf("round-trip policy=%+v", parsed)
+	}
+	if parsed.Exclude == nil ||
+		parsed.Exclude.From != "blocked@example.com" ||
+		parsed.Exclude.AttachmentNames != "*.tmp" {
+		t.Fatalf("round-trip exclusion=%+v", parsed.Exclude)
+	}
+
+	emptyRaw, err := MarshalIntakePolicy(IntakePolicy{Exclude: &IntakeExclusion{From: "  "}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(emptyRaw, `"exclude"`) {
+		t.Fatalf("empty exclusion should be omitted: %s", emptyRaw)
 	}
 
 	legacy := `{"selection":"matching","content":"files_only","subject_terms":"distribution advice"}`

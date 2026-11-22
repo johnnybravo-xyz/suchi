@@ -75,6 +75,11 @@ const (
 	outcomeIgnored
 )
 
+type policyDecision struct {
+	content  emailaccounts.IntakeContent
+	excluded bool
+}
+
 func (o importOutcome) updatesMailbox() bool {
 	return o == outcomeImported || o == outcomeDeduplicated
 }
@@ -86,13 +91,52 @@ func DefaultMaxAttach() int64 {
 }
 
 // shouldImport applies the provider-neutral policy before the message enters
-// CAS. The attachment flag and matched content are reused by post-ingest.
-func shouldImport(account *emailaccounts.Account, envelope *imap.Envelope, raw []byte) (hasAttachment bool, content emailaccounts.IntakeContent) {
+// CAS. Envelope exclusions avoid MIME parsing; otherwise attachment names are
+// parsed once and reused by the policy and post-ingest payload.
+func shouldImport(account *emailaccounts.Account, envelope *imap.Envelope, raw []byte) (hasAttachment bool, decision policyDecision) {
+	if matchesEnvelopeExclusion(account.IntakePolicy.Exclude, envelope) {
+		return false, policyDecision{excluded: true}
+	}
 	attachmentNames := AttachmentNames(raw)
-	return len(attachmentNames) > 0, evaluatePolicy(account.IntakePolicy, envelope, attachmentNames)
+	hasAttachment = len(attachmentNames) > 0
+	if matchesAttachmentExclusion(account.IntakePolicy.Exclude, attachmentNames) {
+		return hasAttachment, policyDecision{excluded: true}
+	}
+	return hasAttachment, policyDecision{
+		content: evaluateAcceptedPolicy(account.IntakePolicy, envelope, attachmentNames),
+	}
 }
 
-func evaluatePolicy(policy emailaccounts.IntakePolicy, envelope *imap.Envelope, attachmentNames []string) emailaccounts.IntakeContent {
+func evaluatePolicy(policy emailaccounts.IntakePolicy, envelope *imap.Envelope, attachmentNames []string) policyDecision {
+	if matchesEnvelopeExclusion(policy.Exclude, envelope) ||
+		matchesAttachmentExclusion(policy.Exclude, attachmentNames) {
+		return policyDecision{excluded: true}
+	}
+	return policyDecision{
+		content: evaluateAcceptedPolicy(policy, envelope, attachmentNames),
+	}
+}
+
+func matchesEnvelopeExclusion(exclusion *emailaccounts.IntakeExclusion, envelope *imap.Envelope) bool {
+	if exclusion == nil {
+		return false
+	}
+	if exclusion.From != "" && MatchAddressCriteria(envelopeSender(envelope), exclusion.From) {
+		return true
+	}
+	if exclusion.Recipients != "" && matchAnyAddress(envelopeRecipients(envelope), exclusion.Recipients) {
+		return true
+	}
+	return exclusion.SubjectTerms != "" && containsAny(envelopeSubject(envelope), exclusion.SubjectTerms)
+}
+
+func matchesAttachmentExclusion(exclusion *emailaccounts.IntakeExclusion, attachmentNames []string) bool {
+	return exclusion != nil &&
+		exclusion.AttachmentNames != "" &&
+		matchAnyFilename(attachmentNames, exclusion.AttachmentNames)
+}
+
+func evaluateAcceptedPolicy(policy emailaccounts.IntakePolicy, envelope *imap.Envelope, attachmentNames []string) emailaccounts.IntakeContent {
 	hasAttachment := len(attachmentNames) > 0
 	if policy.Rules == nil {
 		policy = emailaccounts.DefaultIntakePolicy()
@@ -851,11 +895,14 @@ func (w *Watcher) importOne(ctx context.Context, raw []byte, msgID string, m *im
 	}
 
 	// Apply the mailbox intake policy before CAS or database writes. Extracted
-	// so unit tests can exercise the drop paths without a CAS + DB
-	// fixture; whatever `shouldImport` returns is the authoritative
-	// decision.
-	hasAttachment, content := shouldImport(w.account, m.Envelope, raw)
-	if content == "" {
+	// so unit tests can exercise the drop paths without a CAS + DB fixture;
+	// whatever shouldImport returns is the authoritative decision.
+	hasAttachment, decision := shouldImport(w.account, m.Envelope, raw)
+	if decision.excluded {
+		w.log.Debug("emailwatch.gate_drop", "reason", "excluded")
+		return outcomeIgnored, nil
+	}
+	if decision.content == "" {
 		w.log.Debug("emailwatch.gate_drop", "reason", "no_matching_rule")
 		return outcomeIgnored, nil
 	}
@@ -884,7 +931,7 @@ func (w *Watcher) importOne(ctx context.Context, raw []byte, msgID string, m *im
 		return outcomeSkipped, fmt.Errorf("inbox category: %w", err)
 	}
 
-	filesOnly := content == emailaccounts.IntakeFilesOnly
+	filesOnly := decision.content == emailaccounts.IntakeFilesOnly
 	payload, err := BuildPostIngestPayload(ref.SHA256, ref.Size, mimeutil.MessageRFC822, title, w.account.Folder, m.Envelope, hasAttachment, filesOnly)
 	if err != nil {
 		return outcomeSkipped, fmt.Errorf("marshal post-ingest payload: %w", err)

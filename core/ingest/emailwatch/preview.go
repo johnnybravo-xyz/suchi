@@ -25,9 +25,27 @@ type PreviewSample struct {
 }
 
 type PreviewResult struct {
-	Inspected int             `json:"inspected"`
-	Matched   int             `json:"matched"`
-	Samples   []PreviewSample `json:"samples"`
+	Inspected       int             `json:"inspected"`
+	Accepted        int             `json:"accepted"`
+	Excluded        int             `json:"excluded"`
+	AcceptedSamples []PreviewSample `json:"accepted_samples"`
+	ExcludedSamples []PreviewSample `json:"excluded_samples"`
+}
+
+func (r *PreviewResult) record(decision policyDecision, sample PreviewSample) {
+	r.Inspected++
+	switch {
+	case decision.excluded:
+		r.Excluded++
+		if len(r.ExcludedSamples) < previewSampleLimit {
+			r.ExcludedSamples = append(r.ExcludedSamples, sample)
+		}
+	case decision.content != "":
+		r.Accepted++
+		if len(r.AcceptedSamples) < previewSampleLimit {
+			r.AcceptedSamples = append(r.AcceptedSamples, sample)
+		}
+	}
 }
 
 // PreviewPolicy evaluates at most 25 recent, unchecked messages using envelope
@@ -60,7 +78,10 @@ func (w *Watcher) PreviewPolicy(ctx context.Context, policy emailaccounts.Intake
 	if len(uids) > previewMessageLimit {
 		uids = uids[len(uids)-previewMessageLimit:]
 	}
-	result := &PreviewResult{Samples: []PreviewSample{}}
+	result := &PreviewResult{
+		AcceptedSamples: []PreviewSample{},
+		ExcludedSamples: []PreviewSample{},
+	}
 	if len(uids) == 0 {
 		return result, nil
 	}
@@ -80,18 +101,14 @@ func (w *Watcher) PreviewPolicy(ctx context.Context, policy emailaccounts.Intake
 			continue
 		}
 		names := bodyStructureAttachmentNames(message.BodyStructure)
-		result.Inspected++
-		if evaluatePolicy(policy, message.Envelope, names) == "" {
-			continue
-		}
-		result.Matched++
-		if len(result.Samples) < previewSampleLimit {
-			result.Samples = append(result.Samples, PreviewSample{
+		result.record(
+			evaluatePolicy(policy, message.Envelope, names),
+			PreviewSample{
 				From:        envelopeSender(message.Envelope),
 				Subject:     envelopeSubject(message.Envelope),
 				Attachments: names,
-			})
-		}
+			},
+		)
 	}
 	if err := <-done; err != nil {
 		return nil, fmt.Errorf("fetch preview: %w", err)

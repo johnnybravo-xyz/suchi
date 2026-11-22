@@ -142,10 +142,13 @@ func TestEmailAccounts_Create_HappyPath(t *testing.T) {
 		"provider":"fastmail",
 		"username":"a@example.com",
 		"password":"hunter2",
-		"intake_policy":{"rules":[
-			{"selection":"files","content":"files_only"},
-			{"selection":"matching","content":"email_and_files","from":"@example.com","subject_terms":"distribution advice"}
-		]},
+		"intake_policy":{
+			"exclude":{"subject_terms":" rejected ","attachment_names":"*.tmp"},
+			"rules":[
+				{"selection":"files","content":"files_only"},
+				{"selection":"matching","content":"email_and_files","from":"@example.com","subject_terms":"distribution advice"}
+			]
+		},
 		"mark_seen":true,
 		"enabled":true
 	}`
@@ -173,6 +176,10 @@ func TestEmailAccounts_Create_HappyPath(t *testing.T) {
 		rules[1].From != "@example.com" || rules[1].SubjectTerms != "distribution advice" {
 		t.Fatalf("intake policy was not persisted in rules shape: %+v", rules)
 	}
+	exclusion := out.IntakePolicy.Exclude
+	if exclusion == nil || exclusion.SubjectTerms != "rejected" || exclusion.AttachmentNames != "*.tmp" {
+		t.Fatalf("intake exclusion was not normalized: %+v", exclusion)
+	}
 	// SyncSince defaults to ~time.Now() when the caller omits it —
 	// keeps "add mailbox" zero-config safe. Non-nil is the contract.
 	if out.SyncSince == nil {
@@ -188,6 +195,9 @@ func TestEmailAccounts_Create_HappyPath(t *testing.T) {
 	}
 	if len(row.SealedSecret) == 0 {
 		t.Fatal("sealed_secret should be set after create")
+	}
+	if row.IntakePolicy.Exclude == nil || row.IntakePolicy.Exclude.SubjectTerms != "rejected" {
+		t.Fatalf("intake exclusion was not persisted: %+v", row.IntakePolicy.Exclude)
 	}
 	// Reload was called.
 	if reloads.Load() != 1 {
@@ -343,6 +353,37 @@ func TestEmailAccounts_Patch_PasswordSealsAndAudits(t *testing.T) {
 	}
 	if strings.Contains(afterJSON, "new-hunter") {
 		t.Fatalf("audit row leaked plaintext password: %s", afterJSON)
+	}
+}
+
+func TestEmailAccounts_Patch_IntakeExclusion(t *testing.T) {
+	s, _ := newEmailAccountsServer(t)
+	seedUser(t, s.DB, 1)
+	sealed, _ := emailaccounts.SealPassword(s.EmailwatchAEAD, "old")
+	acc, err := createOriginalEmailAccount(context.Background(), s.DB, emailaccounts.Account{
+		Name: "a", OwnerID: 1, Provider: emailaccounts.ProviderCustom,
+		Host: "h", Port: 993, UseTLS: true,
+		AuthMethod: emailaccounts.AuthPassword, Username: "u", SealedSecret: sealed,
+		Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := call(t, s, "PATCH",
+		"/api/email-accounts/"+strconv.FormatInt(acc.ID, 10),
+		`{"intake_policy":{"exclude":{"recipients":" invoices@example.com "},"rules":[{"selection":"all","content":"email_and_files"}]}}`,
+		adminPrincipal(1))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	updated, err := emailaccounts.Get(context.Background(), s.DB, acc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.IntakePolicy.Exclude == nil ||
+		updated.IntakePolicy.Exclude.Recipients != "invoices@example.com" {
+		t.Fatalf("intake exclusion was not persisted: %+v", updated.IntakePolicy.Exclude)
 	}
 }
 
