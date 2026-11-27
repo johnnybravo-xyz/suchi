@@ -27,11 +27,6 @@ const (
 	stableLineage    = "stable-v1"
 	finalBetaLineage = "final-beta-schema-3"
 
-	stableV1Fingerprint             = "9d2a6320eae1582b0f294caa6ed518b5a73ab3dbe6597c9ca1a36cc563e03240"
-	stableV2Fingerprint             = "645e7798d663fff83d120182f661e7148fbd68d263517de9d44783d80aaebae3"
-	stableV3Fingerprint             = "cfbdda9e3e80f35be33f763ad14c1c0d83a22ead62e91d04f6dc900331742a82"
-	stableV4Fingerprint             = "360611dcca51a4ce23d0114e58c82b5208ce72e7575afa25e0c350be7d3100b4"
-	stableV5Fingerprint             = "8f13f6a89fc56a04e027b0cdb19156a405445b8ee6bf6a80629f32e54c1e3d04"
 	stableFingerprint               = "22fd1d01a3725950eff0dd4f33317d21588c241dd2722e577506a94992fadb9b"
 	preIdentityStableFingerprint    = "5d6ac98308eb644b030092178792a46f36e6f8f5041411f020ed2dcf216f46c2"
 	betaOneFingerprint              = "68089660de648a4fcc136bcefc105edc5d29dc4de59dad482124914ea626fb2b"
@@ -39,6 +34,17 @@ const (
 	canonicalBetaThreeFingerprint   = "de0f8f20cfd5b2858051236a045cf67177ad4f32652d3bd646fe177ba462687b"
 	legacyAgentBetaThreeFingerprint = "8cbc483c04442b2995eb0a8a76ca30430b15a63b01cdd0395b76031b690b20b1"
 )
+
+// Index is the stable schema version. The current fingerprint stays separate
+// so advancing the catalog requires preserving only the newly prior version.
+var priorStableFingerprints = [...]string{
+	"",
+	"9d2a6320eae1582b0f294caa6ed518b5a73ab3dbe6597c9ca1a36cc563e03240",
+	"645e7798d663fff83d120182f661e7148fbd68d263517de9d44783d80aaebae3",
+	"cfbdda9e3e80f35be33f763ad14c1c0d83a22ead62e91d04f6dc900331742a82",
+	"360611dcca51a4ce23d0114e58c82b5208ce72e7575afa25e0c350be7d3100b4",
+	"8f13f6a89fc56a04e027b0cdb19156a405445b8ee6bf6a80629f32e54c1e3d04",
+}
 
 type schemaState struct {
 	version        int
@@ -82,60 +88,17 @@ func PrepareStable(ctx context.Context, d *DB, stable, compatibility []Migration
 	if state.version == StableSchemaVersion && state.lineageValid && state.lineage == stableLineage && state.fingerprint == stableFingerprint {
 		return nil
 	}
-	if state.version == 1 && state.lineageValid && state.lineage == stableLineage && state.fingerprint == stableV1Fingerprint {
+	if state.version > 0 &&
+		state.version < StableSchemaVersion &&
+		state.version < len(priorStableFingerprints) &&
+		state.lineageValid &&
+		state.lineage == stableLineage &&
+		state.fingerprint == priorStableFingerprints[state.version] {
 		if err := checkIntegrity(ctx, d.Write); err != nil {
-			return fmt.Errorf("validate stable schema 1 before upgrade: %w", err)
+			return fmt.Errorf("validate stable schema %d before upgrade: %w", state.version, err)
 		}
 		if err := checkForeignKeys(ctx, d.Write); err != nil {
-			return fmt.Errorf("validate stable schema 1 before upgrade: %w", err)
-		}
-		if err := Migrate(ctx, d, stable, log); err != nil {
-			return err
-		}
-		return verifyStableSchema(ctx, d.Write)
-	}
-	if state.version == 2 && state.lineageValid && state.lineage == stableLineage && state.fingerprint == stableV2Fingerprint {
-		if err := checkIntegrity(ctx, d.Write); err != nil {
-			return fmt.Errorf("validate stable schema 2 before upgrade: %w", err)
-		}
-		if err := checkForeignKeys(ctx, d.Write); err != nil {
-			return fmt.Errorf("validate stable schema 2 before upgrade: %w", err)
-		}
-		if err := Migrate(ctx, d, stable, log); err != nil {
-			return err
-		}
-		return verifyStableSchema(ctx, d.Write)
-	}
-	if state.version == 3 && state.lineageValid && state.lineage == stableLineage && state.fingerprint == stableV3Fingerprint {
-		if err := checkIntegrity(ctx, d.Write); err != nil {
-			return fmt.Errorf("validate stable schema 3 before upgrade: %w", err)
-		}
-		if err := checkForeignKeys(ctx, d.Write); err != nil {
-			return fmt.Errorf("validate stable schema 3 before upgrade: %w", err)
-		}
-		if err := Migrate(ctx, d, stable, log); err != nil {
-			return err
-		}
-		return verifyStableSchema(ctx, d.Write)
-	}
-	if state.version == 4 && state.lineageValid && state.lineage == stableLineage && state.fingerprint == stableV4Fingerprint {
-		if err := checkIntegrity(ctx, d.Write); err != nil {
-			return fmt.Errorf("validate stable schema 4 before upgrade: %w", err)
-		}
-		if err := checkForeignKeys(ctx, d.Write); err != nil {
-			return fmt.Errorf("validate stable schema 4 before upgrade: %w", err)
-		}
-		if err := Migrate(ctx, d, stable, log); err != nil {
-			return err
-		}
-		return verifyStableSchema(ctx, d.Write)
-	}
-	if state.version == 5 && state.lineageValid && state.lineage == stableLineage && state.fingerprint == stableV5Fingerprint {
-		if err := checkIntegrity(ctx, d.Write); err != nil {
-			return fmt.Errorf("validate stable schema 5 before upgrade: %w", err)
-		}
-		if err := checkForeignKeys(ctx, d.Write); err != nil {
-			return fmt.Errorf("validate stable schema 5 before upgrade: %w", err)
+			return fmt.Errorf("validate stable schema %d before upgrade: %w", state.version, err)
 		}
 		if err := Migrate(ctx, d, stable, log); err != nil {
 			return err

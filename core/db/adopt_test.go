@@ -48,7 +48,7 @@ func TestStableCatalogAndBetaAdoption(t *testing.T) {
 		}
 	})
 
-	for sourceVersion := 2; sourceVersion <= 4; sourceVersion++ {
+	for sourceVersion := 1; sourceVersion < db.StableSchemaVersion; sourceVersion++ {
 		t.Run(fmt.Sprintf("stable schema %d upgrades in place", sourceVersion), func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "suchi.db")
 			d := openAdoptionDB(t, path)
