@@ -532,8 +532,8 @@ package; make it public and connect it to this repository.
 
 ## Automation
 
-- `checks.yml` runs the complete repository validation graph on pushes to
-  `main`, pull requests and manual dispatch.
+- `checks.yml` runs the complete repository validation graph when a maintainer
+  manually dispatches it against a branch, tag or pull-request head.
 - `ci.yml` runs formatting, tests, vet, lint, documentation release-metadata
   checks, UI checks and browser tests when called by it.
 - `smoke.yml` tests the built images and ingest paths when called by it.
