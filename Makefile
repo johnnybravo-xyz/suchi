@@ -60,8 +60,7 @@ test: ui-verify
 	@for m in $(MODULES); do echo "=== test $$m ==="; ( cd "$$m" && GOWORK=off go test $(TEST_FLAGS) ./... ) || exit 1; done
 
 release-test: ui-verify
-	@echo "=== release test core/api ==="
-	@GOWORK=off go test $(RELEASE_API_TEST_FLAGS) ./core/api
+	@GOWORK=off python3 ./hack/run-api-race-shards.py $(RELEASE_API_TEST_FLAGS)
 	@packages="$$(GOWORK=off go list ./... | grep -v '/core/api$$')"; \
 	  echo "=== release test . except core/api ==="; \
 	  GOWORK=off go test $(RELEASE_TEST_FLAGS) $$packages
