@@ -4,6 +4,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-27
+
 ### Added
 
 - Mailboxes can now leave unwanted messages untouched with one optional
@@ -17,11 +19,15 @@ Notable user-visible changes to Suchi are recorded here.
   `accepted` and `accepted_samples` replace `matched` and `samples`, while
   `excluded` and `excluded_samples` report messages rejected by **Never
   import**.
+
 ### Fixed
+
+- Mailbox policy previews now choose the 25 highest unchecked UIDs even when an
+  IMAP server returns search results out of order.
 
 - High-resolution ASN feeder scans now give the optional QR fallback 30 seconds
   per page instead of 5, avoid its unused D-Bus connection, and report
-  privacy-safe timeout or exit diagnostics instead of an opaque decoder error.
+  privacy-safe timeout or exit diagnostics.
 
 ## [0.5.0] - 2026-11-20
 
@@ -1021,7 +1027,8 @@ version. Installations keep using the v0.2.0 artifacts.
   and saved document passwords are sealed at rest.
 - Setup, demo isolation, error responses, and capability removal fail closed.
 
-[Unreleased]: https://github.com/johnnybravo-xyz/suchi/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/johnnybravo-xyz/suchi/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/johnnybravo-xyz/suchi/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/johnnybravo-xyz/suchi/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/johnnybravo-xyz/suchi/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/johnnybravo-xyz/suchi/compare/v0.3.0...v0.4.0

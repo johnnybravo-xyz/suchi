@@ -190,21 +190,20 @@ whole-directory snapshot; a database-only copy is incomplete.
 
 ## Schema migrations
 
-The active catalog in `core/db/migrations/` starts from an immutable baseline
-for stable schema 1 (v0.1.0) and adds each release's migrations in order; the
-current checkout reaches schema version 5. The v0.2.0 migrations convert
-document types to namespaced tags, add version-family currentness, and add
-classifier-backed automation questions. The v0.3.0 migration adds title
-ownership, conservatively marks existing curated and imported titles as
-human-owned, and extends title revision tracking to owner changes. The v0.4.0
-migration adds two-factor sign-in, source file names and client labels, and
-stops rewriting the search indexes when a write leaves text unchanged. The one-row
-`schema_lineage = 'stable-v1'` identity is unchanged. Frozen pre-v0.1.0 SQL and
-the final account-identity rebuild live separately as compatibility migrations;
-the active catalog cannot discover them by path. Migration file names and
-grouping are implementation detail; the [release process compatibility
-table](/release-process#stable-v1-database-compatibility) records which schemas
-each release accepts.
+The active catalog in `core/db/migrations/` starts from the immutable stable
+schema 1 baseline (v0.1.0) and reaches schema 6. v0.2.0 added namespaced type
+tags, version-family currentness and classifier-backed automation questions;
+v0.3.0 added title ownership and revision tracking; v0.4.0 added two-factor
+sign-in, source labels and no-op search-index guards. v0.5.0 added durable
+watched-folder failure state, filesystem-equivalent rendered-path claims and
+extraction diagnostics. v0.6.0 adds no core migration. The one-row
+`schema_lineage = 'stable-v1'` identity is unchanged.
+
+Frozen pre-v0.1.0 SQL and the final account-identity rebuild live separately as
+compatibility migrations; the active catalog cannot discover them by path.
+Migration filenames are implementation detail. The [release compatibility
+table](/release-process#stable-v1-database-compatibility) is authoritative for
+accepted schemas.
 
 The v0.2.0 document-type migration removes the duplicate vocabulary after
 mapping each row and every live document, ACL, saved-view, automation, and
@@ -212,19 +211,18 @@ template reference to a `type:<name>` tag. Unrepresentable tag-and-type
 automation conjunctions suspend rather than broadening. Source-archive types
 are translated at the importer boundary; no native type schema or API remains.
 
-`migrations.Prepare` delegates core admission to `db.PrepareStable`, which
-classifies the database before writing. Empty databases receive all active
-migrations. An exact current schema-5 database is a no-op. Exact stable schemas
-1, 2, 3, and 4 first pass integrity and foreign-key checks, then apply only their
-remaining active migrations and must match the current manifest. Every accepted
-pre-stable state must match its complete canonical `sqlite_schema` fingerprint
-and lineage, not merely a `user_version`. Unknown, partial, spoofed, corrupt and
-future states fail without mutation. The exact pre-identity schema-4 fingerprint
-is a separate explicit compatibility boundary; a schema claiming stable lineage
-with an unrecognized fingerprint is deliberately rejected. The [release process
-compatibility table](/release-process#stable-v1-database-compatibility) is the
-sole authority for supported incoming states, frozen steps and the required
-release test matrix.
+`migrations.Prepare` delegates admission to `db.PrepareStable`, which classifies
+the database before writing. Empty databases receive all active migrations. An
+exact current schema-6 database is a no-op. Exact stable schemas 1–5 first pass
+integrity and foreign-key checks, then apply their remaining active migrations
+and must match the current manifest. Every accepted pre-stable state must match
+its complete canonical `sqlite_schema` fingerprint and lineage, not merely a
+`user_version`. Unknown, partial, spoofed, corrupt and future states fail
+without mutation. The exact pre-identity schema-4 fingerprint remains a
+separate compatibility boundary; a schema claiming stable lineage with an
+unrecognized fingerprint is rejected. The [release compatibility
+table](/release-process#stable-v1-database-compatibility) owns the incoming
+states, frozen steps and release test matrix.
 
 Every admitted pre-stable archive passes integrity and foreign-key checks and
 gets an exclusive mode-0600 SQLite snapshot before adoption. Remaining
@@ -237,7 +235,7 @@ metadata; moves the singular correspondent into the role-bearing junction; and
 preserves primary keys, revision values and dependent references. It also
 resolves watched-folder ownership to a numeric user ID, drops the empty obsolete
 `plugin_kv` table and redundant ACL index, and removes successful jobs older
-than seven days. The final integrity, foreign keys and canonical schema-5
+than seven days. Final integrity, foreign keys and the canonical schema-6
 fingerprint must match a fresh archive; failures roll back while retaining the
 snapshot and restoring foreign-key enforcement.
 Extension objects created after `_suchi_extension_migrations` are outside the

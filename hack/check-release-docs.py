@@ -24,6 +24,17 @@ def main() -> int:
         return 1
     version = match.group(1)
 
+    schema_source = read("core/db/adopt.go")
+    schema_match = re.search(r"StableSchemaVersion\s*=\s*(\d+)", schema_source)
+    fingerprint_match = re.search(
+        r'stableFingerprint\s*=\s*"([0-9a-f]{64})"', schema_source
+    )
+    if schema_match is None or fingerprint_match is None:
+        print("cannot derive the current schema identity", file=sys.stderr)
+        return 1
+    schema_version = schema_match.group(1)
+    schema_fingerprint = fingerprint_match.group(1)
+
     required = {
         "README.md": (
             f"ghcr.io/johnnybravo-xyz/suchi:{version}",
@@ -33,9 +44,18 @@ def main() -> int:
             f"ghcr.io/johnnybravo-xyz/suchi:{version}",
             f"{version}-full",
         ),
-        "docs/release-process.mdx": (f"export VERSION={version}",),
+        "docs/release-process.mdx": (
+            f"export VERSION={version}",
+            f"(current schema) | `{schema_fingerprint}` |",
+            f"| Stable schema {schema_version} | Exact current fingerprint above with `stable-v1` | No-op |",
+        ),
         "compose.yaml": ("ghcr.io/johnnybravo-xyz/suchi:latest",),
         "deploy/k8s/suchi.yaml": ("ghcr.io/johnnybravo-xyz/suchi:latest",),
+        "docs/architecture-storage.mdx": (
+            f"reaches schema {schema_version}",
+            f"current schema-{schema_version} database",
+            f"canonical schema-{schema_version}",
+        ),
     }
 
     errors: list[str] = []
@@ -44,6 +64,7 @@ def main() -> int:
         for value in values:
             if value not in text:
                 errors.append(f"{relative}: missing current release reference {value!r}")
+
 
     active_docs = [ROOT / "README.md", *sorted((ROOT / "docs").rglob("*.mdx"))]
     stale_image = re.compile(

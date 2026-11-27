@@ -169,7 +169,7 @@ clean:
 # annotated tag on the GitHub remote (create with
 # `git tag -s v0.1.0 && git push gh v0.1.0`).
 # Validation-only is the default; `PUBLISH=true` explicitly enables the legacy
-# Actions publication graph. v0.5.0 artifacts are built on devlab.
+# Actions publication graph. v0.6.0 artifacts are built on devlab.
 release:
 	@test -n "$(VERSION)" || (echo "usage: make release VERSION=v0.1.0 [PUBLISH=true]"; exit 1)
 	@command -v gh >/dev/null || (echo "gh CLI is required (https://cli.github.com)"; exit 1)

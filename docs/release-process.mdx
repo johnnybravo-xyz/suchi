@@ -55,39 +55,38 @@ This section is the release authority for accepted core database states. The
 signed pre-v0.1.0 SQL, tags and release artifacts remain byte-identical.
 v0.1.0 embeds frozen compatibility SQL in
 `core/db/compatibility/0002`–`0005`; its declarative baseline is active migration
-`0001_baseline.sql`, `user_version = 1`, lineage `stable-v1`. v0.2.0 adds active
-`0002_metadata_cleanup.sql` and `0003_automation_asks.sql` and targets
-`user_version = 3`. v0.3.0 adds `0004_product_foundations.sql` and targets
-`user_version = 4`. v0.4.0 adds `0005_product_refinements.sql` and targets
-`user_version = 5` without changing that lineage.
+`0001_baseline.sql`, `user_version = 1`, lineage `stable-v1`. v0.2.0 added
+active migrations 0002–0003 and targets schema 3; v0.3.0 added 0004 and targets
+schema 4; v0.4.0 added 0005 and targets schema 5; v0.5.0 added 0006 and targets
+schema 6. v0.6.0 adds no core migration.
 
-The exact stable schema-1 fingerprint is
-`9d2a6320eae1582b0f294caa6ed518b5a73ab3dbe6597c9ca1a36cc563e03240`.
-The development schema-2 fingerprint is
-`645e7798d663fff83d120182f661e7148fbd68d263517de9d44783d80aaebae3`.
-The v0.2.0 schema-3 fingerprint is
-`cfbdda9e3e80f35be33f763ad14c1c0d83a22ead62e91d04f6dc900331742a82`.
-The v0.3.0 schema-4 fingerprint is
-`360611dcca51a4ce23d0114e58c82b5208ce72e7575afa25e0c350be7d3100b4`.
-The current schema-5 fingerprint is
-`8f13f6a89fc56a04e027b0cdb19156a405445b8ee6bf6a80629f32e54c1e3d04`.
-The one admitted pre-identity schema-4 boundary remains
+| Schema | First release | Exact fingerprint |
+| ---: | --- | --- |
+| 1 | v0.1.0 | `9d2a6320eae1582b0f294caa6ed518b5a73ab3dbe6597c9ca1a36cc563e03240` |
+| 2 | Development boundary | `645e7798d663fff83d120182f661e7148fbd68d263517de9d44783d80aaebae3` |
+| 3 | v0.2.0 | `cfbdda9e3e80f35be33f763ad14c1c0d83a22ead62e91d04f6dc900331742a82` |
+| 4 | v0.3.0 | `360611dcca51a4ce23d0114e58c82b5208ce72e7575afa25e0c350be7d3100b4` |
+| 5 | v0.4.0 | `8f13f6a89fc56a04e027b0cdb19156a405445b8ee6bf6a80629f32e54c1e3d04` |
+| 6 | v0.5.0 (current schema) | `22fd1d01a3725950eff0dd4f33317d21588c241dd2722e577506a94992fadb9b` |
+
+The separately admitted pre-identity schema-4 fingerprint is
 `5d6ac98308eb644b030092178792a46f36e6f8f5041411f020ed2dcf216f46c2`.
 Startup admits only these exact states:
 
 | Source database | Required identity | Current startup action |
 | --- | --- | --- |
-| Empty | `user_version = 0`, no core objects or lineage | Apply active migrations 0001–0005 |
-| v0.1.0-beta.1 | Canonical beta.1 schema 1, no lineage table | Snapshot, apply frozen 0002–0005 plus active 0002–0005, adopt stable lineage/schema 5 |
-| v0.1.0-beta.2 | Canonical beta.2 schema 2, no lineage table | Snapshot, apply frozen 0003–0005 plus active 0002–0005, adopt stable lineage/schema 5 |
-| v0.1.0-beta.3 | Canonical schema 3 with `final-beta-schema-3` | Snapshot, apply frozen 0004–0005 plus active 0002–0005, adopt stable lineage/schema 5 |
-| Historical schema 3 | Known pre-beta mutable-baseline fingerprint with `final-beta-schema-3`; obsolete `agent_webhooks` table must be empty | Snapshot, remove the empty obsolete table, apply frozen 0004–0005 plus active 0002–0005, adopt stable lineage/schema 5 |
-| Pre-identity schema 4 | Exact pre-identity fingerprint above with `final-beta-schema-3` | Snapshot, apply frozen 0005 plus active 0002–0005, adopt stable lineage/schema 5 |
-| Stable schema 1 | Exact stable schema-1 fingerprint above with `stable-v1` | Check integrity/foreign keys, apply active 0002–0005, require schema-5 manifest |
-| Stable schema 2 | Exact development schema-2 fingerprint above with `stable-v1` | Check integrity/foreign keys, apply active 0003–0005, require schema-5 manifest |
-| Stable schema 3 | Exact v0.2.0 schema-3 fingerprint above with `stable-v1` | Check integrity/foreign keys, apply active 0004–0005, require schema-5 manifest |
-| Stable schema 4 | Exact v0.3.0 schema-4 fingerprint above with `stable-v1` | Check integrity/foreign keys, apply active 0005, require schema-5 manifest |
-| Stable schema 5 | Exact current fingerprint above with `stable-v1` | No-op |
+| Empty | `user_version = 0`, no core objects or lineage | Apply active migrations 0001–0006 |
+| v0.1.0-beta.1 | Canonical beta.1 schema 1, no lineage table | Snapshot, apply frozen 0002–0005 plus active 0002–0006, adopt stable lineage/schema 6 |
+| v0.1.0-beta.2 | Canonical beta.2 schema 2, no lineage table | Snapshot, apply frozen 0003–0005 plus active 0002–0006, adopt stable lineage/schema 6 |
+| v0.1.0-beta.3 | Canonical schema 3 with `final-beta-schema-3` | Snapshot, apply frozen 0004–0005 plus active 0002–0006, adopt stable lineage/schema 6 |
+| Historical schema 3 | Known pre-beta mutable-baseline fingerprint with `final-beta-schema-3`; obsolete `agent_webhooks` table must be empty | Snapshot, remove the empty obsolete table, apply frozen 0004–0005 plus active 0002–0006, adopt stable lineage/schema 6 |
+| Pre-identity schema 4 | Exact pre-identity fingerprint above with `final-beta-schema-3` | Snapshot, apply frozen 0005 plus active 0002–0006, adopt stable lineage/schema 6 |
+| Stable schema 1 | Exact schema-1 fingerprint above with `stable-v1` | Check integrity/foreign keys, apply active 0002–0006, require schema-6 manifest |
+| Stable schema 2 | Exact schema-2 fingerprint above with `stable-v1` | Check integrity/foreign keys, apply active 0003–0006, require schema-6 manifest |
+| Stable schema 3 | Exact schema-3 fingerprint above with `stable-v1` | Check integrity/foreign keys, apply active 0004–0006, require schema-6 manifest |
+| Stable schema 4 | Exact schema-4 fingerprint above with `stable-v1` | Check integrity/foreign keys, apply active 0005–0006, require schema-6 manifest |
+| Stable schema 5 | Exact schema-5 fingerprint above with `stable-v1` | Check integrity/foreign keys, apply active 0006, require schema-6 manifest |
+| Stable schema 6 | Exact current fingerprint above with `stable-v1` | No-op |
 
 “Canonical” means the complete normalized core `sqlite_schema` fingerprint, not
 only the integer version or a claimed lineage row. Intermediate, partial,
@@ -97,36 +96,32 @@ an adoption snapshot. Extension objects created after
 rebuilt during adoption remain part of it regardless of their replacement
 rowids.
 
-Frozen compatibility migration 0005 rebuilds `users` with nullable
-issuer/subject and rebuilds `audit_events` with retained-event metadata. It
-copies numeric user and audit IDs exactly, so foreign-key and logical owner
-references stay stable. Active migration 0002 adds version-family storage and
-indexes, validates the predecessor graph, assigns deterministic family keys only
-to existing multi-row histories, and leaves standalone documents without a
-family key. Active migration 0004 adds title ownership and its revision guard.
-Active migration 0005 adds sealed local-auth TOTP seeds and digested recovery
-codes. All accepted paths reach the same fresh schema-5 fingerprint.
+Frozen compatibility migration 0005 rebuilds `users` and `audit_events` while
+preserving numeric IDs and logical owner references. Active migration 0002 adds
+version-family storage and validates predecessor graphs; 0004 adds title
+ownership and its revision guard; 0005 adds sealed local-auth TOTP seeds and
+digested recovery codes; 0006 adds watched-folder blocked state, rendered-path
+claim keys and extraction diagnostics. All accepted paths reach the fresh
+schema-6 fingerprint.
 
-Every admitted pre-stable database passes integrity and foreign-key checks, gets
-an exclusive mode-0600 SQLite snapshot beside the live database, and applies
-the remaining compatibility steps, active migrations 0002–0005, stable lineage
-and schema version 5 in one immediate writer transaction. Startup then checks
-integrity, foreign keys and equality with the fresh schema-5 manifest. Failure
-rolls back the transaction and retains the snapshot. Fresh and already-current
-databases do not create adoption snapshots. Stable-lineage forward upgrades also
-do not create an adoption snapshot; keep the operator's complete backup before
-upgrading.
+Every admitted pre-stable database passes integrity and foreign-key checks,
+gets an exclusive mode-0600 SQLite snapshot beside the live database, and
+applies the remaining compatibility steps, active migrations 0002–0006, stable
+lineage and schema version 6 in one immediate writer transaction. Startup then
+requires the fresh schema-6 manifest. Failure rolls back the transaction and
+retains the snapshot. Fresh and already-current databases do not create
+adoption snapshots. Stable-lineage forward upgrades also do not create one;
+keep the operator's complete backup before upgrading.
 
 Before release, verify fresh initialization and restart, all five pre-stable
-paths, stable schema-1/2/3 forward upgrades, data/ID/family/title-ownership
-preservation, snapshot creation and failure, fault-injected rollback,
-foreign-key restoration, cycle rejection without a version bump, invalid-state
-rejection without writes, and final manifest equality. Keep the operator's
-complete backup containing SQLite, blobs, the credential key and configuration;
-an adoption snapshot is database-only. See
-[Storage and transaction invariants](/architecture-storage)
-for runtime invariants and [Backup and restore](/backup-restore#upgrade-and-rollback)
-for operator procedure.
+paths, stable schema 1–5 forward upgrades, data and ID preservation, snapshot
+creation and failure, fault-injected rollback, foreign-key restoration, cycle
+rejection without a version bump, invalid-state rejection without writes, and
+final manifest equality. Keep the operator's complete backup containing
+SQLite, blobs, the credential key and configuration; an adoption snapshot is
+database-only. See [Storage and transaction
+invariants](/architecture-storage) and [Backup and
+restore](/backup-restore#upgrade-and-rollback).
 
 ### Major-version schema epochs
 
@@ -173,7 +168,7 @@ Use only the reviewed manual path:
    fingerprint, integrity, foreign keys, stable user IDs, and expected counts
    before starting any writer.
 5. Start the current binary. It admits that exact schema-1 state, applies active
-   migrations 0002–0005, and requires the schema-5 manifest. From the preserved
+   migrations 0002–0006, and requires the schema-6 manifest. From the preserved
    session, use **Sync from identity provider** and verify the same user ID gains
    issuer/subject, a retained `user.oidc_bound` row, a replacement cookie, and
    unchanged ownership.
@@ -243,7 +238,7 @@ do not duplicate them here.
    the exact commit and tag to GitHub:
 
    ```sh
-   export VERSION=v0.5.0
+   export VERSION=v0.6.0
    git tag -s "$VERSION" -m "suchi ${VERSION#v}"
    ./hack/verify-release-tag.sh "$VERSION"
    git push gh main
@@ -261,9 +256,9 @@ do not duplicate them here.
    race suite starts alongside the reusable quality jobs. Publication waits for
    both it and preflight; preflight runs the tag, security, binary smoke,
    benchmark, container, and documentation checks after the reusable jobs pass.
-   Do not set `PUBLISH=true` for v0.5.0. The checked-in proposal policy remains
-   identical across every published binary and image. Zero thresholds do not
-   cancel existing reminders, and explicit rescans remain available.
+   Do not set `PUBLISH=true` for v0.6.0. The checked-in proposal policy is
+   identical across every published binary and image; zero thresholds preserve
+   existing reminders, and explicit rescans remain available.
 10. Build the cross-platform binaries, standalone AnyDoc archives, standard and
     full multi-architecture images, SBOMs and checksum manifests on `devlab`
     using the commands below. Sign the manifests on the release Mac, publish the
@@ -296,7 +291,7 @@ the release artifacts to verify and deploy.
 Set the release coordinates on every build machine:
 
 ```sh
-export VERSION=v0.5.0
+export VERSION=v0.6.0
 export IMAGE=ghcr.io/johnnybravo-xyz/suchi
 export CACHE_AMD64="$IMAGE:buildcache-amd64"
 export CACHE_ARM64="$IMAGE:buildcache-arm64"
@@ -321,7 +316,7 @@ unset CR_PAT
 
 ### Build all release assets on devlab
 
-The v0.5.0 release uses the Debian 13 x86-64 `devlab` host, not GitHub Actions.
+The v0.6.0 release uses the Debian 13 x86-64 `devlab` host, not GitHub Actions.
 The host needs Go 1.27.4, Bun 1.4.4, Docker Buildx with QEMU support, and Syft
 1.51.0. It holds no release signing key.
 
@@ -478,105 +473,62 @@ manifests; GitHub Actions OIDC identities do not apply to these images.
 
 ### Alternative: build on native architecture hosts
 
-Rust compilation for `anydoc` is very slow through QEMU. A cancelled
-`cargo build` step is not cached because its Docker layer never completes. For
-a faster multi-architecture release, build AMD64 on an x86-64 Linux host and
-ARM64 on an Apple Silicon or Linux ARM64 host, push temporary architecture
-tags, and combine them into the public manifest.
-
-On the x86-64 Linux host:
+When QEMU makes the AnyDoc build impractical, build each architecture on a
+native host. Check out the same signed tag and authenticate to GHCR on both.
+Set these host-specific values:
 
 ```sh
-docker buildx build \
-  --file Dockerfile \
-  --target standard \
-  --platform linux/amd64 \
-  --build-arg VERSION="$VERSION" \
-  --build-arg REVISION="$(git rev-parse HEAD)" \
-  --tag "$IMAGE:$VERSION-amd64" \
-  --label org.opencontainers.image.source=https://github.com/johnnybravo-xyz/suchi \
-  --label org.opencontainers.image.version="$VERSION" \
-  --label org.opencontainers.image.licenses=AGPL-3.0 \
-  --cache-from type=registry,ref="$CACHE_AMD64" \
-  --cache-to type=registry,ref="$CACHE_AMD64",mode=max \
-  --provenance=mode=max \
-  --sbom=true \
-  --push .
+# x86-64 Linux host
+export PLATFORM=linux/amd64 ARCH=amd64 CACHE="$CACHE_AMD64"
+
+# Apple Silicon or Linux ARM64 host
+export PLATFORM=linux/arm64 ARCH=arm64 CACHE="$CACHE_ARM64"
 ```
 
-On the native ARM64 host, after checking out the same tag and logging into
-GHCR:
+On each host, publish both architecture-specific images:
 
 ```sh
-docker buildx build \
-  --file Dockerfile \
-  --target standard \
-  --platform linux/arm64 \
-  --build-arg VERSION="$VERSION" \
-  --build-arg REVISION="$(git rev-parse HEAD)" \
-  --tag "$IMAGE:$VERSION-arm64" \
-  --label org.opencontainers.image.source=https://github.com/johnnybravo-xyz/suchi \
-  --label org.opencontainers.image.version="$VERSION" \
-  --label org.opencontainers.image.licenses=AGPL-3.0 \
-  --cache-from type=registry,ref="$CACHE_ARM64" \
-  --cache-to type=registry,ref="$CACHE_ARM64",mode=max \
-  --provenance=mode=max \
-  --sbom=true \
-  --push .
+for target in standard full; do
+  suffix=
+  test "$target" = full && suffix=-full
+  docker buildx build \
+    --file Dockerfile \
+    --target "$target" \
+    --platform "$PLATFORM" \
+    --build-arg VERSION="$VERSION" \
+    --build-arg REVISION="$(git rev-parse HEAD)" \
+    --tag "$IMAGE:$VERSION$suffix-$ARCH" \
+    --label org.opencontainers.image.source=https://github.com/johnnybravo-xyz/suchi \
+    --label org.opencontainers.image.version="$VERSION" \
+    --label org.opencontainers.image.licenses=AGPL-3.0 \
+    --cache-from type=registry,ref="$CACHE" \
+    --cache-to type=registry,ref="$CACHE",mode=max \
+    --provenance=mode=max \
+    --sbom=true \
+    --push .
+done
 ```
 
-After both builds are present in GHCR, create only the versioned manifest:
+After both hosts finish, create and verify only the immutable version manifests:
 
 ```sh
-docker buildx imagetools create \
-  --tag "$IMAGE:$VERSION" \
-  "$IMAGE:$VERSION-amd64" \
-  "$IMAGE:$VERSION-arm64"
+for target in standard full; do
+  suffix=
+  test "$target" = full && suffix=-full
+  docker buildx imagetools create \
+    --tag "$IMAGE:$VERSION$suffix" \
+    "$IMAGE:$VERSION$suffix-amd64" \
+    "$IMAGE:$VERSION$suffix-arm64"
+  docker buildx imagetools inspect "$IMAGE:$VERSION$suffix"
+  docker pull --platform linux/amd64 "$IMAGE:$VERSION$suffix"
+  docker pull --platform linux/arm64 "$IMAGE:$VERSION$suffix"
+done
 ```
 
-Confirm that both platform manifests are available:
-
-```sh
-docker buildx imagetools inspect "$IMAGE:$VERSION"
-docker pull --platform linux/amd64 "$IMAGE:$VERSION"
-docker pull --platform linux/arm64 "$IMAGE:$VERSION"
-```
-
-Build and verify the full image the same way under `$IMAGE:$VERSION-full`.
-Complete image signing, checksums, SBOMs, release artifacts, and the GitHub
-Release before changing a moving channel. Only then promote the stable versioned
-manifests:
-
-```sh
-docker buildx imagetools create \
-  --tag "$IMAGE:latest" \
-  "$IMAGE:$VERSION"
-docker buildx imagetools create \
-  --tag "$IMAGE:latest-full" \
-  "$IMAGE:$VERSION-full"
-```
-
-Release candidates promote `rc` / `rc-full`. Never create a moving alias in the same command
-that first publishes the version manifest.
-
-The first successful native build seeds its architecture's registry cache.
-Later local releases import those caches, while the release workflow imports
-both native caches for runtime layers and maintains its own GitHub Actions cache.
-Release images obtain AnyDoc from the standalone artifacts described above.
-For local source builds, the `anydoc` source commit and build instructions are
-pinned independently of the Suchi version, so the completed Rust layer is reused
-until that pin or recipe changes. Cargo registry and target cache mounts also
-retain incremental work in the local BuildKit builder when a compile is
-interrupted before its image layer can be exported.
-
-The `full` image uses `--target full` and temporary tags ending in
-`-full-amd64` and `-full-arm64`.
-
-The first command-line push creates a private, unlinked GHCR package by
-default. In the package settings, make it public and connect it to the Suchi
-repository. The devlab procedure above replaces Actions OIDC signatures with
-GPG-signed checksum and image-digest manifests under Suchi's existing release
-key.
+Then resume the signing, GitHub Release and channel-promotion steps above.
+Never promote a moving alias in the command that first publishes a version
+manifest. The first command-line push may create a private, unlinked GHCR
+package; make it public and connect it to this repository.
 
 ## Automation
 
@@ -593,7 +545,7 @@ key.
   existing signed annotated tag. Its preflight repeats the complete reusable
   validation graph, race tests, security scans, local smoke and benchmark
   gates, Docker checks and documentation validation. `publish=true` retains
-  the legacy Actions publication graph but is not used for v0.5.0.
+  the legacy Actions publication graph but is not used for v0.6.0.
 
 The release workflow verifies the tag with the public key pinned at
 `.github/release-signing-key.asc` and the expected full fingerprint in
