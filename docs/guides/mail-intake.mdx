@@ -184,21 +184,20 @@ inside one matching rule are combined with AND. Comma- or newline-separated
 values inside one condition are alternatives. Address and filename matching use
 the same semantics as the exclusion.
 
-Matching fields are stacked at full width and start at the same single-line
-height. Drag the bottom-right corner of any field to resize it vertically when
-editing longer comma-separated lists.
+Matching fields start one line high; drag a field's bottom-right corner to
+resize longer lists.
 
 Each rule can retain both the email and its files or files only. When a message
 matches multiple rules with different choices, Suchi retains the email and its
 files. For example, use one files-only rule for messages with attachments and a
 second email-and-files rule for subjects containing `distribution advice`.
 
-A message matched by **Never import** or rejected by every rule never enters the
-archive, Automations, or document history and is left untouched on the mail
-server. Preview reads only envelope metadata and attachment filenames for at
-most 25 recent messages and returns separate accepted and excluded counts with
-up to five samples for each outcome. Messages selected by neither gate appear
-only in the remaining count.
+A message excluded or accepted by no rule never enters the archive,
+Automations, or document history and remains untouched on the mail server.
+Preview reads only envelope metadata and attachment filenames for at most 25
+recent unchecked messages. It reports accepted and excluded counts with up to
+five samples each; messages selected by neither gate appear only in the
+remaining count.
 
 Consumption automations can filter on sender, subject, source folder, and
 attachment presence. Use them to assign correspondents, tags, filing

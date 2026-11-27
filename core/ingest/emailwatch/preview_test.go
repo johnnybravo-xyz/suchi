@@ -5,8 +5,25 @@ package emailwatch
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"testing"
 )
+
+func TestRecentUIDsSortsAndCaps(t *testing.T) {
+	uids := make([]uint32, previewMessageLimit+3)
+	for i := range uids {
+		uids[i] = uint32(len(uids) - i)
+	}
+
+	got := recentUIDs(uids)
+	want := make([]uint32, previewMessageLimit)
+	for i := range want {
+		want[i] = uint32(i + 4)
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("recent UIDs = %v, want %v", got, want)
+	}
+}
 
 func TestPreviewResultRecordsDecisions(t *testing.T) {
 	result := PreviewResult{}

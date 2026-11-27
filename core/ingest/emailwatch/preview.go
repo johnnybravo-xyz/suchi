@@ -5,6 +5,7 @@ package emailwatch
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -75,9 +76,7 @@ func (w *Watcher) PreviewPolicy(ctx context.Context, policy emailaccounts.Intake
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
 	}
-	if len(uids) > previewMessageLimit {
-		uids = uids[len(uids)-previewMessageLimit:]
-	}
+	uids = recentUIDs(uids)
 	result := &PreviewResult{
 		AcceptedSamples: []PreviewSample{},
 		ExcludedSamples: []PreviewSample{},
@@ -114,6 +113,14 @@ func (w *Watcher) PreviewPolicy(ctx context.Context, policy emailaccounts.Intake
 		return nil, fmt.Errorf("fetch preview: %w", err)
 	}
 	return result, nil
+}
+
+func recentUIDs(uids []uint32) []uint32 {
+	slices.Sort(uids)
+	if len(uids) > previewMessageLimit {
+		return uids[len(uids)-previewMessageLimit:]
+	}
+	return uids
 }
 
 func bodyStructureAttachmentNames(structure *imap.BodyStructure) []string {
