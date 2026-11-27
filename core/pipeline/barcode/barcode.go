@@ -194,6 +194,8 @@ func DecodeAllBytes(ctx context.Context, b []byte) ([]Barcode, error) {
 
 const zbarDefaultTimeout = 30 * time.Second
 
+var zbarPNGEncoder = png.Encoder{CompressionLevel: png.BestSpeed}
+
 func zbarTimeout() time.Duration {
 	return pipeconfig.Duration("SUCHI_ZBAR_TIMEOUT", zbarDefaultTimeout)
 }
@@ -207,7 +209,7 @@ func decodeZBarQR(ctx context.Context, img image.Image) ([]Barcode, error) {
 		return nil, nil
 	}
 	var encoded bytes.Buffer
-	if err := png.Encode(&encoded, img); err != nil {
+	if err := zbarPNGEncoder.Encode(&encoded, img); err != nil {
 		return nil, errors.New("barcode: could not encode fallback image")
 	}
 	timeout := zbarTimeout()
