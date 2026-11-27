@@ -4,8 +4,8 @@
 // compatibility names; custom fields live separately because they have typed
 // values and JSON extras.
 //
-// Every list endpoint wears the DRF pagination envelope. Create and update are
-// admin-only; list and get are open to any authenticated user.
+// Every list endpoint wears the DRF pagination envelope. Create is admin-only;
+// update and delete require the corresponding object permission.
 
 package api
 

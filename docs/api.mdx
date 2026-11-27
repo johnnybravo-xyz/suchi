@@ -21,9 +21,9 @@ carry it into bug reports. See [Errors](#errors) for the JSON error contract.
 | Client compatibility     | `GET /api/handshake` (public; no credentials)                                                                                                                                         |
 | Mobile pairing           | `POST/DELETE /api/mobile/pairing` (session), `POST /api/mobile/pairing/exchange` (one-time code)                                                                                         |
 | Auth (browser)          | `/login`, `/bootstrap`, `/setup`, OIDC `GET /oidc/login`, `GET /oidc/callback`, and `POST /oidc/email-change`                                                                            |
-| Auth and account JSON   | `POST /api/login`, `POST /api/logout`, `POST /api/token/`, `GET/POST/DELETE /api/tokens/`, `GET /api/whoami`, `PATCH /api/users/me`, `POST /api/users/me/email`, `/api/account/two-factor…`                         |
+| Auth and account JSON   | `POST /api/login`, `POST /api/logout`, `POST /api/token/`, `GET/POST/DELETE /api/tokens/`, `GET /api/whoami`, `PATCH /api/users/me`, `POST /api/users/me/email`, `/api/account/two-factor…`, `/api/decryption-passwords/` |
 | Documents               | `POST /api/documents/`, `GET/PATCH/DELETE /api/documents/{id}`, `POST /api/documents/{id}/restore`, `GET/DELETE /api/trash/`, `DELETE /api/trash/{id}`                                      |
-| Doc extras              | `/correspondents/`, `/versions/`, `/email-attachments/`, `/referenced-by/`, `/notes/`, `/custom_fields/{field}`, `/decrypt`, `/decrypt-batch`, `/pending-decryption`                    |
+| Doc extras              | `/correspondents/`, `/versions/`, `/email-attachments/`, `/referenced-by/`, `/notes/`, `/custom_fields/{field}`, `/decrypt`, `/decrypt-batch`, `/pending-decryption` |
 | Metadata and filing     | `/api/correspondents/`, `/api/rendered_layouts/`, `/api/tags/`, `/api/tags/{id}/parent`, `/api/custom_fields/`, `/api/jd/categories/`                                                  |
 | Search + autocomplete   | `/api/search/`, `/api/autocomplete/`, `/api/languages/`                                                                                                                               |
 | Mail intake | `/api/email-accounts/*` (requires `mailboxes`; within the selected system, admins see all rows and members see their own) |
@@ -1357,6 +1357,24 @@ With `remember=true`, a successful batch stores the password once for the
 calling user in the selected system. It stores nothing if no document succeeds.
 The label defaults to the first successfully decrypted document's title.
 
+### `/api/decryption-passwords/` — saved password metadata
+
+These routes require `documents:write` for API tokens. They expose only IDs,
+labels, timestamps, owners, and the last visible document; neither plaintext nor
+sealed password bytes leave the server.
+
+| Method | Path | Behavior |
+| ------ | ---- | -------- |
+| GET | `/api/decryption-passwords/` | List the caller's entries in the selected system, newest use first. An admin may pass `?all=1` to include every owner. |
+| PATCH | `/api/decryption-passwords/{id}` | Rename an owned entry with `{"label":"..."}`; an empty label clears it. Admins may rename any entry in the selected system. |
+| DELETE | `/api/decryption-passwords/{id}` | Delete an owned entry; admins may delete any entry in the selected system. |
+
+GET returns `{"results":[...]}`. Each row contains `id`, `owner_id`,
+`created_at`, and optional `label`, `last_used_at`, `last_used_doc_id`, and
+`last_used_doc_title`. The document fields are omitted when the last-used
+document is trashed or not currently visible to the caller. PATCH and DELETE
+return `204 No Content`, or `404 not_found` when the entry is unavailable.
+
 ### `DELETE /api/documents/{id}`
 
 Moves a live document to Trash by setting `trashed_at`. The document remains
@@ -1834,6 +1852,19 @@ removing an in-use select/multi choice returns `409 choice_in_use`. Adding choic
 and renaming remain allowed. DELETE removes an ordinary definition and its values.
 Extraction-managed definitions reject PATCH/DELETE with `409 managed_field`; POST
 and rename reject their reserved names with `409 managed_field_name`.
+
+### `/api/correspondents/` — correspondent definitions
+
+| Method | Path | Behavior |
+| ------ | ---- | -------- |
+| GET | `/api/correspondents/` | Paged authenticated list for the selected system; supports `page`, `page_size`, and `ordering=[-]name\|created_at`. |
+| POST | `/api/correspondents/` | Admin create. `name` is required; `slug`, `matching_algorithm`, `match`, and `is_insensitive` are optional. Returns `201 {"id":...}`. |
+| PATCH | `/api/correspondents/{id}` | Sparse update by an admin or caller with change permission. Returns `200 {"id":...}`. |
+| DELETE | `/api/correspondents/{id}` | Delete by an admin or caller with delete permission. Returns `204 No Content`. |
+
+Names and slugs are unique within a system; collisions return `409 conflict`.
+The list uses the standard pagination envelope. Renaming or deleting a
+correspondent queues any affected rendered files to move.
 
 ### `/api/rendered_layouts/` — folder-layout templates
 
